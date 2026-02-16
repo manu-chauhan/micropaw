@@ -92,8 +92,8 @@ class TelegramChannel(Channel):
                                 chat_id=chat.id, message_id=placeholder.message_id,
                                 text=accumulated[:MAX_MSG_LEN - 4] + " ...",
                             )
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug("Telegram stream edit failed: %s", e)
 
                 await send_typing()
                 response = await self._stream_handler(text, user_id, "telegram", channel_id, on_chunk)

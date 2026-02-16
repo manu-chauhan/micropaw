@@ -37,6 +37,12 @@ class Agent:
             compaction_threshold=config.context.compaction_threshold,
         )
         self.max_tool_iterations = config.context.max_tool_iterations
+        self.last_usage: dict[str, int] = {"input": 0, "output": 0}
+
+    def _accumulate_usage(self, usage: dict) -> None:
+        """Accumulate token usage from the latest response."""
+        self.last_usage["input"] += usage.get("input", 0)
+        self.last_usage["output"] += usage.get("output", 0)
 
     def _build_tool_context(self, conv_id: str, user_id: str, platform: str) -> ToolContext:
         return ToolContext(
@@ -146,6 +152,8 @@ class Agent:
                 await self.conversations.save_message(conv_id, Message(role="assistant", content=error_msg))
                 return error_msg
 
+            self._accumulate_usage(response.usage)
+
             if not response.tool_calls:
                 reply = response.content or "I'm not sure how to respond to that."
                 await self.conversations.save_message(conv_id, Message(role="assistant", content=reply))
@@ -200,6 +208,8 @@ class Agent:
                 if on_chunk:
                     await on_chunk(error_msg)
                 return error_msg
+
+            self._accumulate_usage(response.usage)
 
             if not response.tool_calls:
                 reply = response.content or "I'm not sure how to respond to that."

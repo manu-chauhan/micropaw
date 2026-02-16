@@ -87,45 +87,55 @@ class Gateway:
         # Init agent
         self.agent = Agent(self.config, self.provider, self.registry, self.store)
 
-        # Start channels
-        channel_tasks = []
+        # Wire handler callbacks to all channels
+        terminal_coro = None
+        other_coros: list[tuple[Channel, Any]] = []
+
         for channel in self.channels:
-            try:
-                # Wire handler callbacks
-                channel.set_handler(self._handle_message)
-                channel.set_stream_handler(self._handle_message_stream)
-                # Give terminal channel extra context for slash commands
-                if channel.name == "terminal":
-                    channel._registry = self.registry
-                    channel._config = self.config
-                    channel._on_new_conversation = self._reset_terminal_conversation
-                channel_tasks.append(channel.start())
-                logger.info("Channel [%s] starting", channel.name)
-            except Exception as e:
-                logger.error("Failed to start channel [%s]: %s", channel.name, e)
-
-        # Start channels concurrently for non-blocking channels
-        # Terminal channel blocks, so it should be started last or separately
-        terminal = None
-        others = []
-        for i, ch in enumerate(self.channels):
-            if ch.name == "terminal":
-                terminal = (ch, channel_tasks[i])
+            channel.set_handler(self._handle_message)
+            channel.set_stream_handler(self._handle_message_stream)
+            if channel.name == "terminal":
+                channel._registry = self.registry
+                channel._config = self.config
+                channel._on_new_conversation = self._reset_terminal_conversation
+                terminal_coro = (channel, channel.start())
             else:
-                others.append(channel_tasks[i])
+                other_coros.append((channel, channel.start()))
 
-        # Start non-blocking channels first
-        if others:
-            await asyncio.gather(*others, return_exceptions=True)
+        # Start non-blocking channels first and report failures
+        started_channels: list[str] = []
+        failed_channels: list[str] = []
+
+        if other_coros:
+            results = await asyncio.gather(
+                *[coro for _, coro in other_coros], return_exceptions=True,
+            )
+            for (ch, _), result in zip(other_coros, results):
+                if isinstance(result, BaseException):
+                    logger.error("Channel [%s] failed to start: %s", ch.name, result)
+                    failed_channels.append(f"{ch.name} ({result})")
+                else:
+                    started_channels.append(ch.name)
+
+        if terminal_coro:
+            started_channels.append("terminal")
+
+        if failed_channels and not started_channels:
+            logger.error("All channels failed to start: %s", ", ".join(failed_channels))
+            await self.stop()
+            raise RuntimeError(f"All channels failed to start: {', '.join(failed_channels)}")
+
+        if failed_channels:
+            logger.warning("Some channels failed: %s", ", ".join(failed_channels))
 
         logger.info(
             "Gateway running with %d channel(s) using %s provider",
-            len(self.channels), self.provider.name,
+            len(started_channels), self.provider.name,
         )
 
-        if terminal:
+        if terminal_coro:
             # Terminal blocks — run it as the main loop
-            await terminal[1]
+            await terminal_coro[1]
             await self.stop()
         else:
             # No terminal — wait for shutdown signal
@@ -145,6 +155,13 @@ class Gateway:
             await stop_event.wait()
             await self.stop()
 
+    def _get_terminal_channel(self):
+        """Find the terminal channel for usage tracking."""
+        for ch in self.channels:
+            if ch.name == "terminal":
+                return ch
+        return None
+
     async def _handle_message(self, text: str, user_id: str, platform: str, channel_id: str | None) -> str:
         """Route a message to the agent (non-streaming)."""
         if not self.agent:
@@ -156,6 +173,7 @@ class Gateway:
             return f"Message too long ({len(text):,} chars). Maximum is {max_size:,} characters."
         logger.info("[%s] %s: %s", platform, user_id, text[:80])
         response = await self.agent.handle_message(text, user_id, platform, channel_id)
+        self._track_usage()
         logger.info("[%s] MicroClaw: %s", platform, response[:80])
         return response
 
@@ -173,8 +191,16 @@ class Gateway:
             return f"Message too long ({len(text):,} chars). Maximum is {max_size:,} characters."
         logger.info("[%s] %s: %s", platform, user_id, text[:80])
         response = await self.agent.handle_message_stream(text, user_id, platform, channel_id, on_chunk=on_chunk)
+        self._track_usage()
         logger.info("[%s] MicroClaw: %s", platform, response[:80])
         return response
+
+    def _track_usage(self) -> None:
+        """Pass accumulated usage from agent to terminal channel."""
+        if self.agent:
+            terminal = self._get_terminal_channel()
+            if terminal and hasattr(terminal, "track_usage"):
+                terminal.track_usage(self.agent.last_usage)
 
     async def _reset_terminal_conversation(self) -> None:
         """Reset the terminal conversation ID so /new starts fresh."""

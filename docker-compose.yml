@@ -37,7 +37,7 @@ services:
     volumes:
       - microclaw-data:/home/microclaw/.microclaw
     ports:
-      - "9225:9225"   # WebChat WebSocket
+      - "8765:8765"   # WebChat WebSocket
       - "8080:8080"   # WhatsApp webhook
     restart: unless-stopped
     profiles:

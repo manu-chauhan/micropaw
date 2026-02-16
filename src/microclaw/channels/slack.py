@@ -61,8 +61,8 @@ class SlackChannel(Channel):
             try:
                 info = await client.users_info(user=user_id)
                 user_name = info["user"]["real_name"] or info["user"]["name"]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Slack user info lookup failed: %s", e)
 
             if self._stream_handler:
                 placeholder = await say(text="...", thread_ts=thread_ts)

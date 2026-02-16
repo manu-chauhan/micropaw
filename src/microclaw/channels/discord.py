@@ -82,8 +82,8 @@ class DiscordChannel(Channel):
                         last_edit = now
                         try:
                             await placeholder.edit(content=accumulated[:MAX_MSG_LEN - 4] + " ...")
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug("Discord stream edit failed: %s", e)
 
                 response = await self._stream_handler(text, user_id, "discord", channel_id, on_chunk)
 

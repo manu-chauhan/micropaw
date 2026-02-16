@@ -115,17 +115,24 @@ class WhatsAppChannel(Channel):
 
     async def _send(self, to: str, text: str) -> None:
         """Send a message via WhatsApp Cloud API."""
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            await client.post(
-                f"https://graph.facebook.com/{API_VERSION}/{self.phone_id}/messages",
-                headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"},
-                json={
-                    "messaging_product": "whatsapp",
-                    "to": to,
-                    "type": "text",
-                    "text": {"body": text},
-                },
-            )
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    f"https://graph.facebook.com/{API_VERSION}/{self.phone_id}/messages",
+                    headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"},
+                    json={
+                        "messaging_product": "whatsapp",
+                        "to": to,
+                        "type": "text",
+                        "text": {"body": text},
+                    },
+                )
+                if resp.status_code >= 400:
+                    logger.error("WhatsApp API error %d: %s", resp.status_code, resp.text[:200])
+        except httpx.TimeoutException:
+            logger.error("WhatsApp send timed out for recipient %s", to)
+        except Exception as e:
+            logger.error("WhatsApp send failed: %s", e)
 
     async def stop(self) -> None:
         if self._server:
