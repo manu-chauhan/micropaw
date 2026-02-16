@@ -11,6 +11,17 @@ from microclaw.tools.base import Tool, ToolContext
 TIMEOUT = 30
 MAX_OUTPUT = 10_000
 
+# Commands that require confirmation when confirm_dangerous is enabled
+_DANGEROUS_PATTERNS = [
+    r"\brm\s+", r"\bmkdir\s+-p\s+/", r"\bchmod\b", r"\bchown\b",
+    r"\bkill\b", r"\bpkill\b", r"\bsudo\b",
+    r"\bpip\s+install\b", r"\bnpm\s+install\b", r"\bapt\s+install\b",
+    r"\bgit\s+push\b", r"\bgit\s+reset\b", r"\bgit\s+checkout\b",
+    r"\bcurl\s+.*-[dX]", r"\bwget\b",
+    r">\s*/", r">>\s*/",  # redirect to absolute path
+]
+_DANGEROUS_RE = [re.compile(p, re.IGNORECASE) for p in _DANGEROUS_PATTERNS]
+
 BLOCKED_PATTERNS = [
     # Destructive file operations
     r"rm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?(-[a-zA-Z]*r[a-zA-Z]*\s+)?/(\s|$|\*)",
@@ -77,6 +88,13 @@ class ShellTool(Tool):
         command = args["command"]
         if any(pat.search(command) for pat in _BLOCKED_RE):
             return "Error: This command has been blocked for safety reasons."
+
+        if context.confirm_dangerous and any(pat.search(command) for pat in _DANGEROUS_RE):
+            return (
+                f"Warning: This command may be dangerous: `{command}`\n"
+                "The user has confirm_dangerous enabled in their config. "
+                "Please describe what this command does and ask the user for explicit permission before running it."
+            )
 
         try:
             proc = await asyncio.create_subprocess_shell(

@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Awaitable
 
+import httpx
+
 from microclaw.config import Config
 from microclaw.core.context import ContextManager
 from microclaw.core.conversation import ConversationManager
@@ -44,6 +46,7 @@ class Agent:
             allow_shell=self.config.permissions.allow_shell,
             allow_file_write=self.config.permissions.allow_file_write,
             allow_web_browse=self.config.permissions.allow_web_browse,
+            confirm_dangerous=self.config.permissions.confirm_dangerous,
         )
 
     def _build_system_prompt(self, platform: str, recent_memories: list[dict] | None = None) -> str:
@@ -139,7 +142,7 @@ class Agent:
                 response = await self.provider.chat(messages, tool_defs)
             except Exception as e:
                 logger.error("AI provider error: %s", e)
-                error_msg = "Sorry, I'm having trouble thinking right now. Please try again."
+                error_msg = _classify_error(e)
                 await self.conversations.save_message(conv_id, Message(role="assistant", content=error_msg))
                 return error_msg
 
@@ -192,7 +195,7 @@ class Agent:
 
             except Exception as e:
                 logger.error("AI provider error: %s", e)
-                error_msg = "Sorry, I'm having trouble thinking right now. Please try again."
+                error_msg = _classify_error(e)
                 await self.conversations.save_message(conv_id, Message(role="assistant", content=error_msg))
                 if on_chunk:
                     await on_chunk(error_msg)
@@ -246,6 +249,28 @@ class Agent:
             await self.conversations.save_message(conv_id, tool_msg)
 
         return messages
+
+
+def _classify_error(e: Exception) -> str:
+    """Turn a provider exception into a user-friendly message."""
+    if isinstance(e, httpx.ConnectError):
+        return "Cannot connect to the AI provider. Check your network or if Ollama is running."
+    if isinstance(e, httpx.TimeoutException):
+        return "The AI provider timed out. Try again, or switch to a faster model."
+    if isinstance(e, httpx.HTTPStatusError):
+        status = e.response.status_code
+        if status == 401:
+            return "Invalid API key. Run 'microclaw setup' to fix it."
+        if status == 403:
+            return "Access denied by the AI provider. Check your API key permissions."
+        if status == 429:
+            return "Rate limited by the AI provider. Wait a moment and try again."
+        if status == 500:
+            return "The AI provider had an internal error. Try again."
+        if status == 503:
+            return "The AI provider is temporarily unavailable. Try again shortly."
+        return f"AI provider error (HTTP {status}). Try again or check your config."
+    return "Something went wrong talking to the AI provider. Please try again."
 
 
 def _summarize_args(args: dict[str, Any]) -> str:

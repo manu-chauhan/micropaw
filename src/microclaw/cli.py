@@ -34,13 +34,13 @@ def _create_single_provider(provider_name: str, config: Config):
         cfg = config.provider_config.claude
         if not cfg.api_key:
             return None
-        return ClaudeProvider(cfg.api_key, cfg.model, cfg.max_tokens)
+        return ClaudeProvider(cfg.api_key, cfg.model, cfg.max_tokens, cfg.base_url)
     elif provider_name == "openai":
         from microclaw.providers.openai import OpenAIProvider
         cfg = config.provider_config.openai
         if not cfg.api_key:
             return None
-        return OpenAIProvider(cfg.api_key, cfg.model, cfg.max_tokens)
+        return OpenAIProvider(cfg.api_key, cfg.model, cfg.max_tokens, cfg.base_url)
     elif provider_name == "ollama":
         from microclaw.providers.ollama import OllamaProvider
         cfg = config.provider_config.ollama
@@ -50,7 +50,7 @@ def _create_single_provider(provider_name: str, config: Config):
         cfg = config.provider_config.gemini
         if not cfg.api_key:
             return None
-        return GeminiProvider(cfg.api_key, cfg.model, cfg.max_tokens)
+        return GeminiProvider(cfg.api_key, cfg.model, cfg.max_tokens, cfg.base_url)
     return None
 
 
@@ -74,8 +74,8 @@ def _create_provider(config: Config):
     return primary
 
 
-def _create_registry():
-    """Create and populate the tool registry."""
+def _create_registry(config: Config):
+    """Create and populate the tool registry, respecting disabled_tools config."""
     from microclaw.tools.base import ToolRegistry
     from microclaw.tools.file_read import FileReadTool
     from microclaw.tools.file_write import FileWriteTool
@@ -88,13 +88,16 @@ def _create_registry():
     from microclaw.tools.web_browse import WebBrowseTool
     from microclaw.tools.web_search import WebSearchTool
 
+    disabled = set(config.permissions.disabled_tools)
+
     registry = ToolRegistry()
     for tool in [
         WebSearchTool(), WebBrowseTool(), FileReadTool(), FileWriteTool(),
         ShellTool(), HttpRequestTool(), MemoryTool(), PdfReadTool(),
         VisionTool(), SessionsTool(),
     ]:
-        registry.register(tool)
+        if tool.name not in disabled:
+            registry.register(tool)
 
     return registry
 
@@ -179,7 +182,7 @@ def chat():
     config.channels.webchat.enabled = False
 
     provider = _create_provider(config)
-    registry = _create_registry()
+    registry = _create_registry(config)
     channels = _create_channels(config)
 
     from microclaw.gateway import Gateway
@@ -197,7 +200,7 @@ def start():
 
     config = load_config()
     provider = _create_provider(config)
-    registry = _create_registry()
+    registry = _create_registry(config)
     channels = _create_channels(config)
 
     if not channels:

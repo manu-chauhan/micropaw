@@ -5,12 +5,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
-from typing import Callable, Awaitable
+import uuid
+from typing import Any, Callable, Awaitable
 
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.text import Text
+from rich.table import Table
 
 from microclaw.channels.base import Channel
 
@@ -19,6 +20,15 @@ console = Console()
 # Callback types
 MessageHandler = Callable[[str, str, str, str | None], Awaitable[str]]
 StreamHandler = Callable[[str, str, str, str | None, Callable[[str], Awaitable[None]] | None], Awaitable[str]]
+
+SLASH_COMMANDS = {
+    "/help": "Show available commands",
+    "/new": "Start a fresh conversation",
+    "/tools": "List available tools and their status",
+    "/usage": "Show token usage for this session",
+    "/clear": "Clear the screen",
+    "/config": "Show current config summary",
+}
 
 
 class TerminalChannel(Channel):
@@ -30,6 +40,15 @@ class TerminalChannel(Channel):
         self._running = False
         self._handler: MessageHandler | None = None
         self._stream_handler: StreamHandler | None = None
+        # Session-level tracking
+        self._session_id: str = uuid.uuid4().hex[:8]
+        self._total_usage: dict[str, int] = {"input": 0, "output": 0}
+        self._message_count: int = 0
+        # Set by gateway for tool visibility and config access
+        self._registry: Any = None
+        self._config: Any = None
+        # Callback to notify agent of conversation reset
+        self._on_new_conversation: Callable[[], Awaitable[None]] | None = None
 
     def set_handler(self, handler: MessageHandler) -> None:
         self._handler = handler
@@ -40,15 +59,17 @@ class TerminalChannel(Channel):
     async def start(self) -> None:
         self._running = True
 
-        # Suppress log noise during interactive chat
+        # Suppress log noise during interactive chat — but keep tool calls visible
         logging.getLogger("microclaw").setLevel(logging.WARNING)
+        # Re-enable agent tool logging so users see what tools are used
+        logging.getLogger("microclaw.core.agent").setLevel(logging.INFO)
 
         console.print()
         console.print(Panel(
             "[bold cyan]MicroClaw[/bold cyan]\n"
             "[dim]Your AI. Your machine. Your keys.[/dim]\n\n"
             "Type your message and press Enter.\n"
-            "Type [bold]quit[/bold] or [bold]exit[/bold] to stop.",
+            "Type [bold]/help[/bold] for commands, [bold]quit[/bold] to stop.",
             border_style="bright_cyan",
             padding=(1, 2),
         ))
@@ -69,10 +90,81 @@ class TerminalChannel(Channel):
                 console.print("\n[dim]Goodbye![/dim]")
                 break
 
+            # Handle slash commands
+            if line.startswith("/"):
+                handled = await self._handle_command(line)
+                if handled:
+                    continue
+
+            self._message_count += 1
+
             if self._stream_handler:
                 await self._handle_streaming(line)
             elif self._handler:
                 await self._handle_batch(line)
+
+    async def _handle_command(self, cmd: str) -> bool:
+        """Handle a slash command. Returns True if handled."""
+        parts = cmd.lower().split()
+        command = parts[0]
+
+        if command == "/help":
+            table = Table(title="Commands", show_header=False, border_style="dim")
+            table.add_column("Command", style="cyan")
+            table.add_column("Description")
+            for name, desc in SLASH_COMMANDS.items():
+                table.add_row(name, desc)
+            table.add_row("quit", "Exit MicroClaw")
+            console.print(table)
+            return True
+
+        elif command == "/new":
+            self._session_id = uuid.uuid4().hex[:8]
+            self._total_usage = {"input": 0, "output": 0}
+            self._message_count = 0
+            if self._on_new_conversation:
+                await self._on_new_conversation()
+            console.print("[dim]Started a new conversation.[/dim]\n")
+            return True
+
+        elif command == "/tools":
+            if self._registry:
+                table = Table(title="Available Tools", border_style="dim")
+                table.add_column("Tool", style="cyan")
+                table.add_column("Description")
+                for tool in self._registry.all():
+                    table.add_row(tool.name, tool.description)
+                console.print(table)
+            else:
+                console.print("[dim]No tool info available.[/dim]")
+            return True
+
+        elif command == "/usage":
+            console.print(Panel(
+                f"[bold]Session Usage[/bold]\n\n"
+                f"Messages: {self._message_count}\n"
+                f"Input tokens: {self._total_usage['input']:,}\n"
+                f"Output tokens: {self._total_usage['output']:,}\n"
+                f"Total tokens: {self._total_usage['input'] + self._total_usage['output']:,}\n"
+                f"Session ID: {self._session_id}",
+                border_style="dim",
+            ))
+            return True
+
+        elif command == "/clear":
+            console.clear()
+            return True
+
+        elif command == "/config":
+            if self._config:
+                from microclaw.config import display_config
+                import json
+                console.print_json(json.dumps(display_config(self._config), indent=2))
+            else:
+                console.print("[dim]No config available.[/dim]")
+            return True
+
+        return False  # Not a known command — send to AI
 
     async def _handle_batch(self, text: str) -> None:
         console.print("[dim italic]  thinking...[/dim italic]", end="\r")
@@ -111,6 +203,11 @@ class TerminalChannel(Channel):
         except Exception:
             console.print(response)
         console.print()
+
+    def track_usage(self, usage: dict[str, int]) -> None:
+        """Track token usage from agent responses."""
+        self._total_usage["input"] += usage.get("input", 0)
+        self._total_usage["output"] += usage.get("output", 0)
 
     async def stop(self) -> None:
         self._running = False

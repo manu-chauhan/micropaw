@@ -25,12 +25,14 @@ class ClaudeConfig(BaseModel):
     api_key: str = ""
     model: str = "claude-sonnet-4-20250514"
     max_tokens: int = 4096
+    base_url: str = "https://api.anthropic.com"
 
 
 class OpenAIConfig(BaseModel):
     api_key: str = ""
     model: str = "gpt-4o"
     max_tokens: int = 4096
+    base_url: str = "https://api.openai.com"
 
 
 class OllamaConfig(BaseModel):
@@ -43,6 +45,7 @@ class GeminiConfig(BaseModel):
     api_key: str = ""
     model: str = "gemini-2.5-flash"
     max_tokens: int = 4096
+    base_url: str = "https://generativelanguage.googleapis.com"
 
 
 class ProviderConfig(BaseModel):
@@ -113,6 +116,7 @@ class PermissionsConfig(BaseModel):
     allow_file_write: bool = False
     allow_web_browse: bool = True
     confirm_dangerous: bool = True
+    disabled_tools: list[str] = []  # tool names to disable, e.g. ["web_search", "http_request"]
 
 
 class PersonaConfig(BaseModel):
@@ -161,6 +165,8 @@ class Config(BaseModel):
 # ---------------------------------------------------------------------------
 
 _ENV_OVERRIDES: list[tuple[str, list[str]]] = [
+    # Primary provider selection
+    ("MICROCLAW_PROVIDER", ["provider"]),
     # Provider keys
     ("ANTHROPIC_API_KEY", ["provider_config", "claude", "api_key"]),
     ("OPENAI_API_KEY", ["provider_config", "openai", "api_key"]),

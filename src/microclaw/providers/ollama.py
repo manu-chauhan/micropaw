@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import uuid
@@ -31,6 +32,13 @@ class OllamaProvider(AIProvider):
         for msg in messages:
             if msg.role == "tool":
                 api_messages.append({"role": "tool", "content": msg.content})
+            elif msg.media:
+                # Ollama supports images via base64 in the "images" field
+                images = [base64.b64encode(m.data).decode() for m in msg.media if m.type == "image"]
+                entry: dict = {"role": msg.role, "content": msg.content}
+                if images:
+                    entry["images"] = images
+                api_messages.append(entry)
             else:
                 api_messages.append({"role": msg.role, "content": msg.content})
 

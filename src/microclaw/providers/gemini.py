@@ -13,21 +13,22 @@ from microclaw.providers.base import AIProvider, AIResponse, Message, ToolCall, 
 
 logger = logging.getLogger(__name__)
 
-_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+_DEFAULT_BASE = "https://generativelanguage.googleapis.com"
 
 
 class GeminiProvider(AIProvider):
     name = "gemini"
 
-    def __init__(self, api_key: str, model: str = "gemini-2.5-flash", max_tokens: int = 4096) -> None:
+    def __init__(self, api_key: str, model: str = "gemini-2.5-flash", max_tokens: int = 4096, base_url: str = _DEFAULT_BASE) -> None:
         self.api_key = api_key
         self.model = model
         self.max_tokens = max_tokens
+        self._api_base = f"{base_url.rstrip('/')}/v1beta/models"
         self._client = httpx.AsyncClient(timeout=120.0)
 
     def _url(self, streaming: bool = False) -> str:
         action = "streamGenerateContent?alt=sse" if streaming else "generateContent"
-        return f"{_API_BASE}/{self.model}:{action}&key={self.api_key}" if streaming else f"{_API_BASE}/{self.model}:{action}?key={self.api_key}"
+        return f"{self._api_base}/{self.model}:{action}&key={self.api_key}" if streaming else f"{self._api_base}/{self.model}:{action}?key={self.api_key}"
 
     def _build_body(self, messages: list[Message], tools: list[ToolDef] | None) -> dict:
         system_text = None

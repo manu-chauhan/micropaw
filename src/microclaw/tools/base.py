@@ -18,6 +18,7 @@ class ToolContext:
     allow_shell: bool = False
     allow_file_write: bool = False
     allow_web_browse: bool = True
+    confirm_dangerous: bool = True
 
 
 class Tool(ABC):

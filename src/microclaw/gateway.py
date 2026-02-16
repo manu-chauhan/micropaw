@@ -94,6 +94,11 @@ class Gateway:
                 # Wire handler callbacks
                 channel.set_handler(self._handle_message)
                 channel.set_stream_handler(self._handle_message_stream)
+                # Give terminal channel extra context for slash commands
+                if channel.name == "terminal":
+                    channel._registry = self.registry
+                    channel._config = self.config
+                    channel._on_new_conversation = self._reset_terminal_conversation
                 channel_tasks.append(channel.start())
                 logger.info("Channel [%s] starting", channel.name)
             except Exception as e:
@@ -170,6 +175,14 @@ class Gateway:
         response = await self.agent.handle_message_stream(text, user_id, platform, channel_id, on_chunk=on_chunk)
         logger.info("[%s] MicroClaw: %s", platform, response[:80])
         return response
+
+    async def _reset_terminal_conversation(self) -> None:
+        """Reset the terminal conversation ID so /new starts fresh."""
+        if self.agent:
+            # Generate a new unique conversation ID for terminal
+            import uuid
+            new_id = f"terminal:terminal-user:{uuid.uuid4().hex[:8]}"
+            self.agent.conversations._terminal_override = new_id
 
     def _create_embedding_provider(self):
         from microclaw.memory.embeddings import LocalEmbedding, NullEmbedding, OllamaEmbedding, OpenAIEmbedding

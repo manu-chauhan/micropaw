@@ -97,8 +97,45 @@
 - **README.md** — Features, quickstart, installation, Docker, architecture, CLI reference
 - **78 unit tests** — Config, bus, security, tools, providers, embeddings — all passing
 
-## File Count & LOC (actual)
-- Source files: 35 Python files + 6 test files
-- Source LOC: 4,462
-- Test LOC: ~450
-- Dependencies: 7 core, 5 optional extras
+## Post-v1 Hardening
+
+### Bug Fixes (Batch 1)
+- Fixed broad `except Exception: pass` in channels — now logs errors properly
+- Fixed `chunk_text()` duplication — moved to `channels/base.py`
+- Added missing `google-genai` and `pypdf` to dependency list (now using raw httpx anyway)
+- Fixed vector search loading all memories — added pagination
+- Fixed Ollama vision — base64 images now sent in the `images` field
+- Fixed `MICROCLAW_PROVIDER` env var override — was missing from mapping table
+- Fixed SSRF DNS resolution bypass — DNS failure now blocks instead of passing through
+- Fixed `confirm_dangerous` config — was defined but never wired to the shell tool
+
+### Security Hardening (Batch 1)
+- WebSocket: 1MB frame limit, 50 max headers, timing-safe auth
+- Shell: 40+ blocked patterns, dangerous command confirmation
+- SSRF: DNS rebinding check, private IP ranges blocked
+- Config: 0o600 file permissions
+- Path: traversal prevention, sensitive file blocking
+
+### Production Hardening
+- **Retry with backoff** — `retry_on_transient()` retries 429/503 with exponential backoff + Retry-After header support
+- **Rate limiting** — Per-user sliding window + burst detection at gateway level
+- **HTTP client cleanup** — All providers and embedding providers implement `close()` for proper connection pool teardown
+- **File logging** — RotatingFileHandler (5MB, 3 backups) via `MICROCLAW_FILE_LOG` or `MICROCLAW_LOG_FILE` env vars
+- **SQLite busy_timeout** — 5-second timeout prevents "database is locked" under concurrent access
+- **Message size validation** — Configurable max (100KB default) prevents memory exhaustion
+
+### UX Improvements
+- **Terminal slash commands** — `/help`, `/new`, `/tools`, `/usage`, `/clear`, `/config` in the REPL
+- **Tool call visibility** — Agent tool calls logged at INFO level so users see what tools are being used
+- **Per-tool enable/disable** — `disabled_tools` list in permissions config
+- **Custom API base URLs** — `base_url` field on Claude, OpenAI, Gemini providers for OpenAI-compatible servers
+- **Actionable error messages** — `_classify_error()` maps provider errors to specific hints (invalid key → run setup, timeout → try faster model, etc.)
+- **Setup wizard improvements** — Ollama validation + model picker, embedding setup, fallback provider key prompting
+- **Conversation reset** — `/new` generates fresh conversation ID in terminal
+
+## File Count & LOC (actual, as of v0.1.0+hardening)
+- Source files: 46 Python files (39 source + 7 test)
+- Source LOC: ~5,500
+- Test LOC: ~780
+- Tests: 101 passing
+- Dependencies: 7 core, 7 optional extras

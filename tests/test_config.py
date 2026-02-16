@@ -46,6 +46,14 @@ class TestConfig:
         assert c.permissions.allow_shell is False
         assert c.permissions.allow_file_write is False
         assert c.permissions.allow_web_browse is True
+        assert c.permissions.disabled_tools == []
+        assert c.permissions.confirm_dangerous is True
+
+    def test_base_url_defaults(self):
+        c = Config()
+        assert c.provider_config.claude.base_url == "https://api.anthropic.com"
+        assert c.provider_config.openai.base_url == "https://api.openai.com"
+        assert c.provider_config.gemini.base_url == "https://generativelanguage.googleapis.com"
 
     def test_persona_defaults(self):
         c = Config()
@@ -72,6 +80,12 @@ class TestEnvOverrides:
         with patch.dict(os.environ, {}, clear=True):
             _apply_env_overrides(raw)
         assert raw == {}
+
+    def test_apply_microclaw_provider(self):
+        raw: dict = {}
+        with patch.dict(os.environ, {"MICROCLAW_PROVIDER": "ollama"}, clear=False):
+            _apply_env_overrides(raw)
+        assert raw["provider"] == "ollama"
 
 
 class TestRedaction:

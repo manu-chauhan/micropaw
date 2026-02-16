@@ -74,7 +74,7 @@ def validate_url(url: str) -> str | None:
             if _is_private_ip(resolved_ip):
                 return f"Blocked: {hostname} resolves to private IP {resolved_ip}"
     except socket.gaierror:
-        pass  # Can't resolve — let the actual request fail
+        return f"Blocked: cannot resolve hostname {hostname}"
 
     return None
 

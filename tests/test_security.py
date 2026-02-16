@@ -7,7 +7,7 @@ import re
 import pytest
 
 from microclaw.security import validate_path, validate_url
-from microclaw.tools.shell import _BLOCKED_RE
+from microclaw.tools.shell import _BLOCKED_RE, _DANGEROUS_RE
 
 
 class TestValidateUrl:
@@ -142,3 +142,26 @@ class TestShellBlocking:
         assert _is_blocked("eval 'rm -rf /'")
         assert _is_blocked("source /tmp/malicious.sh")
         assert _is_blocked("exec /bin/sh")
+
+
+class TestDangerousPatterns:
+    """Tests for dangerous command patterns (confirmation required)."""
+
+    def _is_dangerous(self, cmd: str) -> bool:
+        return any(pat.search(cmd) for pat in _DANGEROUS_RE)
+
+    def test_rm_is_dangerous(self):
+        assert self._is_dangerous("rm file.txt")
+
+    def test_sudo_is_dangerous(self):
+        assert self._is_dangerous("sudo apt update")
+
+    def test_git_push_is_dangerous(self):
+        assert self._is_dangerous("git push origin main")
+
+    def test_safe_commands_not_dangerous(self):
+        assert not self._is_dangerous("ls -la")
+        assert not self._is_dangerous("cat file.txt")
+        assert not self._is_dangerous("python3 script.py")
+        assert not self._is_dangerous("git status")
+        assert not self._is_dangerous("git diff")

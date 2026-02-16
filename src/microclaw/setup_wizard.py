@@ -63,6 +63,33 @@ def run_setup() -> None:
         if host:
             config.provider_config.ollama.host = host
 
+        # Validate Ollama is running and let user pick a model
+        from microclaw.connector import validate_ollama
+        console.print("[dim]Checking Ollama...[/dim]")
+        ok, detail = validate_ollama(host or "http://localhost:11434")
+        if ok:
+            console.print(f"[green]Ollama is running: {detail}[/green]")
+            # Fetch model list for selection
+            try:
+                import httpx
+                resp = httpx.get(f"{(host or 'http://localhost:11434').rstrip('/')}/api/tags", timeout=5)
+                models = [m.get("name", "") for m in resp.json().get("models", []) if m.get("name")]
+                if models:
+                    model = questionary.select(
+                        "Which model do you want to use?",
+                        choices=models,
+                        default=models[0],
+                    ).ask()
+                    if model:
+                        config.provider_config.ollama.model = model
+                else:
+                    console.print("[yellow]No models found. Pull one with: ollama pull llama3.1[/yellow]")
+            except Exception:
+                pass
+        else:
+            console.print(f"[yellow]Warning: {detail}[/yellow]")
+            console.print("[dim]You can start Ollama later. The default model is llama3.1.[/dim]")
+
     # Persona
     name = questionary.text(
         "What should your assistant be called?", default="MicroClaw"
@@ -81,6 +108,34 @@ def run_setup() -> None:
     ).ask()
     config.permissions.allow_file_write = allow_write or False
 
+    # Embeddings (for long-term memory with vector search)
+    enable_embeddings = questionary.confirm(
+        "Enable long-term memory with vector search?", default=False
+    ).ask()
+    if enable_embeddings:
+        config.embedding.enabled = True
+        if provider == "ollama":
+            config.embedding.provider = "ollama"
+            config.embedding.model = "nomic-embed-text"
+            console.print("[dim]Using Ollama embeddings (nomic-embed-text). Pull it with: ollama pull nomic-embed-text[/dim]")
+        else:
+            emb_choice = questionary.select(
+                "Embedding provider:",
+                choices=[
+                    questionary.Choice("Local (sentence-transformers, no API key)", value="local"),
+                    questionary.Choice("OpenAI (text-embedding-3-small)", value="openai"),
+                    questionary.Choice("Ollama (nomic-embed-text)", value="ollama"),
+                ],
+            ).ask()
+            if emb_choice:
+                config.embedding.provider = emb_choice
+                if emb_choice == "local":
+                    config.embedding.model = "BAAI/bge-small-en-v1.5"
+                elif emb_choice == "openai":
+                    config.embedding.model = "text-embedding-3-small"
+                elif emb_choice == "ollama":
+                    config.embedding.model = "nomic-embed-text"
+
     # Fallback providers
     use_fallback = questionary.confirm(
         "Set up fallback providers?", default=False
@@ -93,6 +148,30 @@ def run_setup() -> None:
         ).ask()
         if fallbacks:
             config.fallback_providers = fallbacks
+            # Prompt for API keys for cloud fallback providers
+            for fb in fallbacks:
+                if fb == "ollama":
+                    host = questionary.text(
+                        f"Ollama host for fallback:", default="http://localhost:11434"
+                    ).ask()
+                    if host:
+                        config.provider_config.ollama.host = host
+                elif fb in ("claude", "openai", "gemini"):
+                    existing_key = getattr(config.provider_config, fb).api_key
+                    if existing_key:
+                        console.print(f"[dim]{fb} API key already set.[/dim]")
+                    else:
+                        key_labels = {"claude": "Anthropic", "openai": "OpenAI", "gemini": "Google Gemini"}
+                        fb_key = questionary.password(
+                            f"Enter your {key_labels[fb]} API key for {fb} fallback:"
+                        ).ask()
+                        if fb_key:
+                            if fb == "claude":
+                                config.provider_config.claude.api_key = fb_key
+                            elif fb == "openai":
+                                config.provider_config.openai.api_key = fb_key
+                            elif fb == "gemini":
+                                config.provider_config.gemini.api_key = fb_key
 
     # Save
     save_config(config)

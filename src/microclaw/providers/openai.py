@@ -13,16 +13,17 @@ from microclaw.providers.base import AIProvider, AIResponse, Message, ToolCall, 
 
 logger = logging.getLogger(__name__)
 
-_API_URL = "https://api.openai.com/v1/chat/completions"
+_DEFAULT_BASE = "https://api.openai.com"
 
 
 class OpenAIProvider(AIProvider):
     name = "openai"
 
-    def __init__(self, api_key: str, model: str = "gpt-4o", max_tokens: int = 4096) -> None:
+    def __init__(self, api_key: str, model: str = "gpt-4o", max_tokens: int = 4096, base_url: str = _DEFAULT_BASE) -> None:
         self.api_key = api_key
         self.model = model
         self.max_tokens = max_tokens
+        self._api_url = f"{base_url.rstrip('/')}/v1/chat/completions"
         self._client = httpx.AsyncClient(timeout=120.0)
 
     def _headers(self) -> dict[str, str]:
@@ -70,7 +71,7 @@ class OpenAIProvider(AIProvider):
         return body
 
     async def _do_chat(self, body: dict) -> dict:
-        resp = await self._client.post(_API_URL, headers=self._headers(), json=body)
+        resp = await self._client.post(self._api_url, headers=self._headers(), json=body)
         resp.raise_for_status()
         return resp.json()
 
@@ -112,7 +113,7 @@ class OpenAIProvider(AIProvider):
         tool_calls_map: dict[int, dict] = {}
         usage = {"input": 0, "output": 0}
 
-        async with self._client.stream("POST", _API_URL, headers=self._headers(), json=body) as resp:
+        async with self._client.stream("POST", self._api_url, headers=self._headers(), json=body) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
                 if not line.startswith("data: "):

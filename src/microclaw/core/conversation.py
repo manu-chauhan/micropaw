@@ -11,9 +11,13 @@ MAX_HISTORY = 40
 class ConversationManager:
     def __init__(self, store: MemoryStore) -> None:
         self.store = store
+        self._terminal_override: str | None = None
 
     def get_conversation_id(self, platform: str, user_id: str, channel_id: str | None = None) -> str:
         """Build a conversation ID. Use channel for groups, user for DMs."""
+        # Support /new for terminal — use override ID if set
+        if platform == "terminal" and self._terminal_override:
+            return self._terminal_override
         scope = channel_id or user_id
         return f"{platform}:{scope}"
 
