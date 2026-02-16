@@ -9,7 +9,14 @@ from microclaw.config import CONFIG_DIR
 BLOCKED_PREFIXES = ("/proc", "/sys", "/dev", "/boot", "/sbin")
 
 BLOCKED_FILES = (
-    "/etc/shadow", "/etc/sudoers", "/etc/gshadow", "/etc/master.passwd",
+    "/etc/shadow", "/etc/passwd", "/etc/sudoers", "/etc/gshadow",
+    "/etc/master.passwd", "/etc/security/opasswd",
+)
+
+# Directories under /etc/ that contain sensitive data
+BLOCKED_ETC_DIRS = (
+    "/etc/ssl/private", "/etc/ssh/",
+    "/etc/cron", "/etc/sudoers.d",
 )
 
 SENSITIVE_DIRS = (
@@ -34,6 +41,10 @@ def validate_file_path(path_str: str) -> str | None:
     for blocked in BLOCKED_FILES:
         if resolved == blocked:
             return f"Access denied — {blocked} is a protected file."
+
+    for etc_dir in BLOCKED_ETC_DIRS:
+        if resolved.startswith(etc_dir):
+            return f"Access denied — {etc_dir} contains sensitive data."
 
     if resolved.startswith(_CONFIG_DIR):
         return "Access denied — the MicroClaw config directory contains secrets."

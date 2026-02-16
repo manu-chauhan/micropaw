@@ -76,6 +76,7 @@ def _create_provider(config: Config):
 
 def _create_registry(config: Config):
     """Create and populate the tool registry, respecting disabled_tools config."""
+    import logging
     from microclaw.tools.base import ToolRegistry
     from microclaw.tools.file_read import FileReadTool
     from microclaw.tools.file_write import FileWriteTool
@@ -89,6 +90,8 @@ def _create_registry(config: Config):
     from microclaw.tools.web_search import WebSearchTool
 
     disabled = set(config.permissions.disabled_tools)
+    if disabled:
+        logging.getLogger(__name__).info("Disabled tools: %s", ", ".join(sorted(disabled)))
 
     registry = ToolRegistry()
     for tool in [

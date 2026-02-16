@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
+import signal
 from typing import Any
 
 from microclaw.tools.base import Tool, ToolContext
@@ -121,10 +123,15 @@ class ShellTool(Tool):
 
         except asyncio.TimeoutError:
             try:
-                proc.kill()
-                await proc.wait()
-            except Exception:
-                pass
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=3.0)
+            except (asyncio.TimeoutError, ProcessLookupError):
+                # Process didn't die from SIGTERM — force kill
+                try:
+                    os.kill(proc.pid, signal.SIGKILL)
+                    await proc.wait()
+                except (ProcessLookupError, OSError):
+                    pass
             return f"Error: Command timed out after {TIMEOUT} seconds."
         except Exception as e:
             return f"Error executing command: {e}"

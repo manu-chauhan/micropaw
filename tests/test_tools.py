@@ -93,6 +93,21 @@ class TestPathSecurity:
         assert err is not None
 
 
+    def test_etc_passwd_blocked(self):
+        err = validate_file_path("/etc/passwd")
+        assert err is not None
+        assert "protected" in err.lower()
+
+    def test_etc_ssl_private_blocked(self):
+        err = validate_file_path("/etc/ssl/private/server.key")
+        assert err is not None
+        assert "sensitive" in err.lower()
+
+    def test_etc_ssh_blocked(self):
+        err = validate_file_path("/etc/ssh/sshd_config")
+        assert err is not None
+
+
 class TestWritePathSecurity:
     def test_bashrc_blocked(self):
         err = validate_write_path("/home/user/.bashrc")

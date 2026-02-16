@@ -25,11 +25,13 @@ class FailoverProvider(AIProvider):
 
     async def chat(self, messages: list[Message], tools: list[ToolDef] | None = None) -> AIResponse:
         errors: list[str] = []
-        for provider in self.providers:
+        for i, provider in enumerate(self.providers):
+            if i > 0:
+                logger.info("Falling back to %s", provider.name)
             try:
                 return await provider.chat(messages, tools)
             except Exception as e:
-                logger.warning("Provider %s failed: %s", provider.name, e)
+                logger.warning("Provider %s failed: %s. Trying next.", provider.name, e)
                 errors.append(f"{provider.name}: {e}")
 
         raise AllProvidersFailedError(f"All providers failed: {'; '.join(errors)}")
@@ -56,7 +58,7 @@ class FailoverProvider(AIProvider):
                     yield response
                     return
             except Exception as e:
-                logger.warning("Provider %s failed: %s", provider.name, e)
+                logger.warning("Provider %s failed during streaming: %s", provider.name, e)
                 errors.append(f"{provider.name}: {e}")
 
         raise AllProvidersFailedError(f"All providers failed: {'; '.join(errors)}")
