@@ -77,8 +77,11 @@ class OpenAIProvider(AIProvider):
         resp.raise_for_status()
         data = resp.json()
 
-        choice = data["choices"][0]
-        msg = choice["message"]
+        choices = data.get("choices") or []
+        if not choices:
+            return AIResponse(content="", tool_calls=[], usage={}, stop_reason="error")
+        choice = choices[0]
+        msg = choice.get("message", {})
 
         tool_calls: list[ToolCall] = []
         for tc in msg.get("tool_calls") or []:
@@ -115,7 +118,10 @@ class OpenAIProvider(AIProvider):
                 if raw == "[DONE]":
                     break
 
-                chunk = json.loads(raw)
+                try:
+                    chunk = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
 
                 if chunk.get("usage"):
                     u = chunk["usage"]

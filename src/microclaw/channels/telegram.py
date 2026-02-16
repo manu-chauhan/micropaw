@@ -90,7 +90,7 @@ class TelegramChannel(Channel):
                         try:
                             await context.bot.edit_message_text(
                                 chat_id=chat.id, message_id=placeholder.message_id,
-                                text=accumulated[:MAX_MSG_LEN] + " ...",
+                                text=accumulated[:MAX_MSG_LEN - 4] + " ...",
                             )
                         except Exception:
                             pass

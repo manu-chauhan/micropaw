@@ -16,15 +16,20 @@ def _parse_pages(spec: str, total: int) -> list[int]:
     pages: set[int] = set()
     for part in spec.split(","):
         part = part.strip()
-        if "-" in part:
-            start, end = part.split("-", 1)
-            start_i = max(0, int(start) - 1)
-            end_i = min(total, int(end))
-            pages.update(range(start_i, end_i))
-        else:
-            idx = int(part) - 1
-            if 0 <= idx < total:
-                pages.add(idx)
+        if not part:
+            continue
+        try:
+            if "-" in part:
+                start, end = part.split("-", 1)
+                start_i = max(0, int(start) - 1)
+                end_i = min(total, int(end))
+                pages.update(range(start_i, end_i))
+            else:
+                idx = int(part) - 1
+                if 0 <= idx < total:
+                    pages.add(idx)
+        except ValueError:
+            continue
     return sorted(pages)
 
 

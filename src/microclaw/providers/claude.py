@@ -132,7 +132,10 @@ class ClaudeProvider(AIProvider):
                 if raw == "[DONE]":
                     break
 
-                event = json.loads(raw)
+                try:
+                    event = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
                 etype = event.get("type", "")
 
                 if etype == "message_start":

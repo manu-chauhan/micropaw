@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Callable, Awaitable
 
 from microclaw.channels.base import Channel, chunk_text
 
 logger = logging.getLogger(__name__)
+
+STREAM_EDIT_INTERVAL = 0.8
 
 MAX_MSG_LEN = 2000
 
@@ -69,13 +72,16 @@ class DiscordChannel(Channel):
             if self._stream_handler:
                 placeholder = await message.channel.send("...")
                 accumulated = ""
+                last_edit = 0.0
 
                 async def on_chunk(chunk: str) -> None:
-                    nonlocal accumulated
+                    nonlocal accumulated, last_edit
                     accumulated += chunk
-                    if len(accumulated) % 50 == 0:  # Throttle edits
+                    now = time.monotonic()
+                    if now - last_edit >= STREAM_EDIT_INTERVAL:
+                        last_edit = now
                         try:
-                            await placeholder.edit(content=accumulated[:MAX_MSG_LEN] + " ...")
+                            await placeholder.edit(content=accumulated[:MAX_MSG_LEN - 4] + " ...")
                         except Exception:
                             pass
 

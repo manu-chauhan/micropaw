@@ -45,6 +45,9 @@ class WhatsAppChannel(Channel):
     def set_handler(self, handler: MessageHandler) -> None:
         self._handler = handler
 
+    def set_stream_handler(self, handler: Any) -> None:
+        pass  # WhatsApp doesn't support streaming edits
+
     async def start(self) -> None:
         """Start webhook server for WhatsApp."""
         from aiohttp import web

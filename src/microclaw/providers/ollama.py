@@ -90,7 +90,10 @@ class OllamaProvider(AIProvider):
             async for line in resp.aiter_lines():
                 if not line.strip():
                     continue
-                chunk = json.loads(line)
+                try:
+                    chunk = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
 
                 msg = chunk.get("message", {})
                 if msg.get("content"):

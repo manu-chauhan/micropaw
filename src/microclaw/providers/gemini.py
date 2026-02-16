@@ -33,6 +33,13 @@ class GeminiProvider(AIProvider):
         system_text = None
         contents = []
 
+        # Build mapping from tool_call_id -> function name for tool responses
+        tool_id_to_name: dict[str, str] = {}
+        for msg in messages:
+            if msg.role == "assistant" and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    tool_id_to_name[tc.id] = tc.name
+
         for msg in messages:
             if msg.role == "system":
                 system_text = msg.content
@@ -47,9 +54,10 @@ class GeminiProvider(AIProvider):
                 if parts:
                     contents.append({"role": "model", "parts": parts})
             elif msg.role == "tool":
+                func_name = tool_id_to_name.get(msg.tool_call_id or "", msg.tool_call_id or "unknown")
                 contents.append({
                     "role": "user",
-                    "parts": [{"functionResponse": {"name": msg.tool_call_id or "unknown", "response": {"result": msg.content}}}],
+                    "parts": [{"functionResponse": {"name": func_name, "response": {"result": msg.content}}}],
                 })
 
         body: dict = {
@@ -111,7 +119,10 @@ class GeminiProvider(AIProvider):
             async for line in resp.aiter_lines():
                 if not line.startswith("data: "):
                     continue
-                chunk = json.loads(line[6:])
+                try:
+                    chunk = json.loads(line[6:])
+                except json.JSONDecodeError:
+                    continue
                 chunk_content, chunk_tools = self._parse_candidates(chunk)
                 if chunk_content:
                     content += chunk_content

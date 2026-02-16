@@ -36,6 +36,7 @@ dependencies = [
 telegram = ["python-telegram-bot>=21.0"]
 discord = ["discord.py>=2.3"]
 slack = ["slack-bolt>=1.18"]
+whatsapp = ["aiohttp>=3.9"]
 browser = ["playwright>=1.40"]
 pdf = ["pypdf>=4.0"]
 embeddings = ["sentence-transformers>=3.0"]
@@ -43,6 +44,7 @@ all = [
     "python-telegram-bot>=21.0",
     "discord.py>=2.3",
     "slack-bolt>=1.18",
+    "aiohttp>=3.9",
     "playwright>=1.40",
     "pypdf>=4.0",
     "sentence-transformers>=3.0",

@@ -279,7 +279,11 @@ def _connect_webchat(config: Config) -> bool:
 
     config.channels.webchat.enabled = True
     config.channels.webchat.host = (host or "127.0.0.1").strip()
-    config.channels.webchat.port = int(port) if port else 8765
+    try:
+        config.channels.webchat.port = int(port) if port else 8765
+    except ValueError:
+        console.print("[yellow]Invalid port, using default 8765.[/yellow]")
+        config.channels.webchat.port = 8765
     config.channels.webchat.auth_token = auth_token
     save_config(config)
     console.print("[green]WebChat channel saved and enabled.[/green]")

@@ -52,6 +52,8 @@ BLOCKED_PATTERNS = [
     r"\$\(", r"`",  # subshell / backtick execution bypass
     r"base64\s+.*\|\s*(ba)?sh", r"base64\s+-d\s+.*\|\s*(ba)?sh",
     r"xargs\s+.*sh\b",
+    # Shell builtins that execute arbitrary code
+    r"\beval\s+", r"\bsource\s+", r"\bexec\s+",
 ]
 
 _BLOCKED_RE = [re.compile(p, re.IGNORECASE) for p in BLOCKED_PATTERNS]
