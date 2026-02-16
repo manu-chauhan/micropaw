@@ -145,9 +145,9 @@
 
 ## File Count & LOC (actual, as of v0.1.0+hardening)
 - Source files: 46 Python files (39 source + 7 test)
-- Source LOC: ~5,500
-- Test LOC: ~880
-- Tests: 108 passing
+- Source LOC: ~5,800
+- Test LOC: ~1,060
+- Tests: 116 passing
 - Dependencies: 7 core, 7 optional extras
 
 ### Web Search Enhancement
