@@ -45,6 +45,13 @@ BLOCKED_PATTERNS = [
     # Download and execute
     r"curl\s+.*\|\s*(ba)?sh", r"wget\s+.*\|\s*(ba)?sh",
     r"curl\s+.*-o\s+.+&&\s*chmod\s+\+x", r"wget\s+.*-O\s+.+&&\s*chmod\s+\+x",
+    # Environment variable leaks (API keys live here)
+    r"\benv\b", r"\bprintenv\b", r"\bexport\s+-p\b",
+    r"echo\s+.*\$[A-Z_]", r"printf\s+.*\$[A-Z_]",
+    r"\bset\s*$", r"\bset\s*\|",
+    r"\$\(", r"`",  # subshell / backtick execution bypass
+    r"base64\s+.*\|\s*(ba)?sh", r"base64\s+-d\s+.*\|\s*(ba)?sh",
+    r"xargs\s+.*sh\b",
 ]
 
 _BLOCKED_RE = [re.compile(p, re.IGNORECASE) for p in BLOCKED_PATTERNS]

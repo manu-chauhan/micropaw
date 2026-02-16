@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import logging
+import secrets
 from typing import Any, Callable, Awaitable
 
 import httpx
@@ -66,7 +67,7 @@ class WhatsAppChannel(Channel):
         token = request.query.get("hub.verify_token")
         challenge = request.query.get("hub.challenge")
 
-        if mode == "subscribe" and token == self.verify_token:
+        if mode == "subscribe" and secrets.compare_digest(token or "", self.verify_token):
             return web.Response(text=challenge)
         return web.Response(status=403)
 

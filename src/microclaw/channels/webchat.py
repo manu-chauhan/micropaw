@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 
 MAX_CONNECTIONS = 50
 MAX_MSG_LENGTH = 10_000
+MAX_FRAME_SIZE = 1_048_576  # 1MB max WebSocket frame
+MAX_HEADERS = 50  # Max HTTP headers before rejecting
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 MessageHandler = Callable[[str, str, str, str | None], Awaitable[str]]
@@ -63,6 +65,9 @@ async def _ws_read_frame(reader: asyncio.StreamReader) -> tuple[int, bytes] | No
     elif length == 127:
         length = struct.unpack("!Q", await reader.readexactly(8))[0]
 
+    if length > MAX_FRAME_SIZE:
+        return None  # Reject oversized frames
+
     mask_key = await reader.readexactly(4) if masked else b""
     payload = await reader.readexactly(length)
 
@@ -98,7 +103,8 @@ async def _read_http_request(reader: asyncio.StreamReader) -> dict[str, str] | N
         return None
 
     headers: dict[str, str] = {"_request_line": request_line.decode(errors="replace").strip()}
-    while True:
+    count = 0
+    while count < MAX_HEADERS:
         line = await reader.readline()
         if line in (b"\r\n", b"\n", b""):
             break
@@ -106,6 +112,7 @@ async def _read_http_request(reader: asyncio.StreamReader) -> dict[str, str] | N
         if ":" in decoded:
             key, _, value = decoded.partition(":")
             headers[key.strip().lower()] = value.strip()
+        count += 1
     return headers
 
 
@@ -141,7 +148,7 @@ class WebChatChannel(Channel):
     async def start(self) -> None:
         self._server = await asyncio.start_server(self._handle_connection, self.host, self.port)
         logger.info("WebChat available at http://%s:%d", self.host, self.port)
-        logger.info("WebChat auth token: %s", self.auth_token)
+        logger.info("WebChat auth token: %s...%s", self.auth_token[:4], self.auth_token[-4:])
 
     async def _handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         """Handle a new TCP connection — either HTTP or WebSocket upgrade."""
@@ -159,7 +166,7 @@ class WebChatChannel(Channel):
         elif path == "/" or path.startswith("/?"):
             await self._serve_ui(writer, path)
         elif path.startswith("/api/status"):
-            await self._serve_status(writer)
+            await self._serve_status(writer, path)
         else:
             writer.write(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
             await writer.drain()
@@ -184,7 +191,12 @@ class WebChatChannel(Channel):
         await writer.drain()
         writer.close()
 
-    async def _serve_status(self, writer: asyncio.StreamWriter) -> None:
+    async def _serve_status(self, writer: asyncio.StreamWriter, path: str) -> None:
+        if not self._check_token(path):
+            writer.write(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n")
+            await writer.drain()
+            writer.close()
+            return
         body = json.dumps({"status": "ok", "connections": len(self._connections)}).encode()
         writer.write(f"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n".encode() + body)
         await writer.drain()

@@ -8,6 +8,7 @@ from typing import Any
 
 from microclaw.providers.base import AIProvider, MediaItem, Message
 from microclaw.tools.base import Tool, ToolContext
+from microclaw.tools.path_security import validate_file_path
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,9 @@ class VisionTool(Tool):
 
         path_str = args["path"]
         question = args.get("question", "Describe this image in detail.")
+
+        if error := validate_file_path(path_str):
+            return f"Error: {error}"
 
         path = Path(path_str).resolve()
         if not path.exists():
