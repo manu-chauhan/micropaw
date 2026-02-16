@@ -2,10 +2,47 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from typing import Any
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 1.0  # seconds
+
+
+async def retry_on_transient(func, *args, **kwargs):
+    """Retry an async function on transient HTTP errors (429, 503) with exponential backoff."""
+    last_exc = None
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            return await func(*args, **kwargs)
+        except httpx.HTTPStatusError as e:
+            last_exc = e
+            if e.response.status_code in (429, 503) and attempt < MAX_RETRIES:
+                # Check for Retry-After header
+                retry_after = e.response.headers.get("retry-after")
+                if retry_after:
+                    try:
+                        delay = min(float(retry_after), 30.0)
+                    except ValueError:
+                        delay = RETRY_BASE_DELAY * (2 ** attempt)
+                else:
+                    delay = RETRY_BASE_DELAY * (2 ** attempt)
+                logger.warning(
+                    "Retrying after %s (attempt %d/%d, status %d)",
+                    f"{delay:.1f}s", attempt + 1, MAX_RETRIES, e.response.status_code,
+                )
+                await asyncio.sleep(delay)
+            else:
+                raise
+    raise last_exc  # type: ignore[misc]
 
 
 @dataclass(slots=True)
@@ -78,3 +115,6 @@ class AIProvider(ABC):
         if response.content:
             yield response.content
         yield response
+
+    async def close(self) -> None:
+        """Close any HTTP clients held by this provider."""

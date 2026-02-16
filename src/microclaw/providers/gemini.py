@@ -9,7 +9,7 @@ from collections.abc import AsyncGenerator
 
 import httpx
 
-from microclaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef
+from microclaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef, retry_on_transient
 
 logger = logging.getLogger(__name__)
 
@@ -91,13 +91,16 @@ class GeminiProvider(AIProvider):
                     ))
         return content, tool_calls
 
+    async def _do_chat(self, body: dict) -> dict:
+        resp = await self._client.post(self._url(), headers={"Content-Type": "application/json"}, json=body)
+        resp.raise_for_status()
+        return resp.json()
+
     async def chat(self, messages: list[Message], tools: list[ToolDef] | None = None) -> AIResponse:
         body = self._build_body(messages, tools)
         logger.debug("Calling Gemini %s", self.model)
 
-        resp = await self._client.post(self._url(), headers={"Content-Type": "application/json"}, json=body)
-        resp.raise_for_status()
-        data = resp.json()
+        data = await retry_on_transient(self._do_chat, body)
 
         content, tool_calls = self._parse_candidates(data)
         meta = data.get("usageMetadata", {})
@@ -130,3 +133,6 @@ class GeminiProvider(AIProvider):
                 tool_calls.extend(chunk_tools)
 
         yield AIResponse(content=content, tool_calls=tool_calls, usage={})
+
+    async def close(self) -> None:
+        await self._client.aclose()

@@ -34,6 +34,10 @@ class FailoverProvider(AIProvider):
 
         raise AllProvidersFailedError(f"All providers failed: {'; '.join(errors)}")
 
+    async def close(self) -> None:
+        for provider in self.providers:
+            await provider.close()
+
     async def chat_stream(self, messages: list[Message], tools: list[ToolDef] | None = None) -> AsyncGenerator[str | AIResponse, None]:
         errors: list[str] = []
         for i, provider in enumerate(self.providers):

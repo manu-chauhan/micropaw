@@ -9,7 +9,7 @@ from collections.abc import AsyncGenerator
 
 import httpx
 
-from microclaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef
+from microclaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef, retry_on_transient
 
 logger = logging.getLogger(__name__)
 
@@ -58,13 +58,16 @@ class OllamaProvider(AIProvider):
             ))
         return tool_calls
 
+    async def _do_chat(self, body: dict) -> dict:
+        resp = await self._client.post(self._url(), json=body)
+        resp.raise_for_status()
+        return resp.json()
+
     async def chat(self, messages: list[Message], tools: list[ToolDef] | None = None) -> AIResponse:
         body = self._build_body(messages, tools, stream=False)
         logger.debug("Calling Ollama %s", self.model)
 
-        resp = await self._client.post(self._url(), json=body)
-        resp.raise_for_status()
-        data = resp.json()
+        data = await retry_on_transient(self._do_chat, body)
 
         msg = data.get("message", {})
         return AIResponse(
@@ -112,3 +115,6 @@ class OllamaProvider(AIProvider):
             tool_calls=tool_calls,
             usage={"input": input_tokens, "output": output_tokens},
         )
+
+    async def close(self) -> None:
+        await self._client.aclose()

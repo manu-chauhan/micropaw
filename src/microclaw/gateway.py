@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+import time
 
 from microclaw.channels.base import Channel
 from microclaw.config import Config, DB_FILE
@@ -14,6 +15,34 @@ from microclaw.providers.base import AIProvider
 from microclaw.tools.base import ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+
+class _RateLimiter:
+    """Simple per-user rate limiter using a sliding window."""
+
+    def __init__(self, messages_per_minute: int, burst_limit: int) -> None:
+        self.messages_per_minute = messages_per_minute
+        self.burst_limit = burst_limit
+        self._windows: dict[str, list[float]] = {}
+
+    def check(self, user_id: str) -> bool:
+        """Return True if the request is allowed, False if rate-limited."""
+        now = time.monotonic()
+        window = self._windows.setdefault(user_id, [])
+        # Prune entries older than 60 seconds
+        cutoff = now - 60.0
+        self._windows[user_id] = window = [t for t in window if t > cutoff]
+
+        if len(window) >= self.messages_per_minute:
+            return False
+
+        # Burst check: no more than burst_limit in 5 seconds
+        recent = sum(1 for t in window if t > now - 5.0)
+        if recent >= self.burst_limit:
+            return False
+
+        window.append(now)
+        return True
 
 
 class Gateway:
@@ -32,6 +61,7 @@ class Gateway:
         self.channels = channels
         self.store: MemoryStore | None = None
         self.agent: Agent | None = None
+        self._rate_limiter = _RateLimiter(config.rate_limit.messages_per_minute, config.rate_limit.burst_limit)
 
     async def start(self) -> None:
         """Initialize everything and start all channels."""
@@ -114,6 +144,11 @@ class Gateway:
         """Route a message to the agent (non-streaming)."""
         if not self.agent:
             return "Agent not initialized."
+        if not self._rate_limiter.check(user_id):
+            return "You're sending messages too fast. Please wait a moment."
+        max_size = self.config.context.max_message_size
+        if len(text) > max_size:
+            return f"Message too long ({len(text):,} chars). Maximum is {max_size:,} characters."
         logger.info("[%s] %s: %s", platform, user_id, text[:80])
         response = await self.agent.handle_message(text, user_id, platform, channel_id)
         logger.info("[%s] MicroClaw: %s", platform, response[:80])
@@ -126,6 +161,11 @@ class Gateway:
         """Route a message to the agent (streaming)."""
         if not self.agent:
             return "Agent not initialized."
+        if not self._rate_limiter.check(user_id):
+            return "You're sending messages too fast. Please wait a moment."
+        max_size = self.config.context.max_message_size
+        if len(text) > max_size:
+            return f"Message too long ({len(text):,} chars). Maximum is {max_size:,} characters."
         logger.info("[%s] %s: %s", platform, user_id, text[:80])
         response = await self.agent.handle_message_stream(text, user_id, platform, channel_id, on_chunk=on_chunk)
         logger.info("[%s] MicroClaw: %s", platform, response[:80])
@@ -158,6 +198,19 @@ class Gateway:
             await cleanup_browser()
         except Exception:
             pass
+
+        # Close AI provider HTTP clients
+        try:
+            await self.provider.close()
+        except Exception as e:
+            logger.error("Error closing provider: %s", e)
+
+        # Close embedding provider HTTP client if applicable
+        if self.store and hasattr(self.store.embedder, "close"):
+            try:
+                await self.store.embedder.close()
+            except Exception as e:
+                logger.error("Error closing embedding provider: %s", e)
 
         if self.store:
             await self.store.close()

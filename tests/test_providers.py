@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from microclaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef
+from microclaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef, retry_on_transient
 from microclaw.providers.failover import AllProvidersFailedError, FailoverProvider
 
 
@@ -130,3 +130,71 @@ class TestFailoverProvider:
         async for chunk in fo.chat_stream([Message(role="user", content="hi")]):
             chunks.append(chunk)
         assert "streamed-primary" in str(chunks[0])
+
+
+class TestRetryOnTransient:
+    async def test_succeeds_on_first_try(self):
+        call_count = 0
+
+        async def good_func():
+            nonlocal call_count
+            call_count += 1
+            return "ok"
+
+        result = await retry_on_transient(good_func)
+        assert result == "ok"
+        assert call_count == 1
+
+    async def test_non_retryable_error_raises_immediately(self):
+        import httpx
+
+        async def bad_func():
+            resp = httpx.Response(status_code=401, request=httpx.Request("POST", "https://example.com"))
+            raise httpx.HTTPStatusError("auth failed", request=resp.request, response=resp)
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await retry_on_transient(bad_func)
+
+    async def test_retries_on_429(self, monkeypatch):
+        import httpx
+        import microclaw.providers.base as base_mod
+
+        # Speed up test by zeroing the delay
+        monkeypatch.setattr(base_mod, "RETRY_BASE_DELAY", 0.0)
+
+        call_count = 0
+
+        async def flaky_func():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                resp = httpx.Response(status_code=429, request=httpx.Request("POST", "https://example.com"))
+                raise httpx.HTTPStatusError("rate limited", request=resp.request, response=resp)
+            return "recovered"
+
+        result = await retry_on_transient(flaky_func)
+        assert result == "recovered"
+        assert call_count == 3
+
+
+class TestRateLimiter:
+    def test_allows_normal_traffic(self):
+        from microclaw.gateway import _RateLimiter
+        rl = _RateLimiter(messages_per_minute=20, burst_limit=5)
+        for _ in range(5):
+            assert rl.check("user1") is True
+
+    def test_blocks_burst(self):
+        from microclaw.gateway import _RateLimiter
+        rl = _RateLimiter(messages_per_minute=20, burst_limit=3)
+        for _ in range(3):
+            assert rl.check("user1") is True
+        assert rl.check("user1") is False  # burst exceeded
+
+    def test_separate_users(self):
+        from microclaw.gateway import _RateLimiter
+        rl = _RateLimiter(messages_per_minute=20, burst_limit=3)
+        for _ in range(3):
+            rl.check("user1")
+        assert rl.check("user1") is False
+        assert rl.check("user2") is True  # different user, not limited

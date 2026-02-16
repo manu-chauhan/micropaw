@@ -9,7 +9,7 @@ from collections.abc import AsyncGenerator
 
 import httpx
 
-from microclaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef
+from microclaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef, retry_on_transient
 
 logger = logging.getLogger(__name__)
 
@@ -69,13 +69,16 @@ class OpenAIProvider(AIProvider):
             ]
         return body
 
+    async def _do_chat(self, body: dict) -> dict:
+        resp = await self._client.post(_API_URL, headers=self._headers(), json=body)
+        resp.raise_for_status()
+        return resp.json()
+
     async def chat(self, messages: list[Message], tools: list[ToolDef] | None = None) -> AIResponse:
         body = self._build_body(messages, tools)
         logger.debug("Calling OpenAI %s", self.model)
 
-        resp = await self._client.post(_API_URL, headers=self._headers(), json=body)
-        resp.raise_for_status()
-        data = resp.json()
+        data = await retry_on_transient(self._do_chat, body)
 
         choices = data.get("choices") or []
         if not choices:
@@ -160,3 +163,6 @@ class OpenAIProvider(AIProvider):
             final_tool_calls.append(ToolCall(id=entry["id"], name=entry["name"], arguments=args))
 
         yield AIResponse(content=content, tool_calls=final_tool_calls, usage=usage)
+
+    async def close(self) -> None:
+        await self._client.aclose()

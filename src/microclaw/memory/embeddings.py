@@ -47,6 +47,9 @@ class OpenAIEmbedding(EmbeddingProvider):
         resp.raise_for_status()
         return resp.json()["data"][0]["embedding"]
 
+    async def close(self) -> None:
+        await self._client.aclose()
+
 
 class OllamaEmbedding(EmbeddingProvider):
     """Ollama embeddings via raw httpx — for local models."""
@@ -65,6 +68,9 @@ class OllamaEmbedding(EmbeddingProvider):
         )
         resp.raise_for_status()
         return resp.json()["embeddings"][0]
+
+    async def close(self) -> None:
+        await self._client.aclose()
 
 
 class LocalEmbedding(EmbeddingProvider):

@@ -136,6 +136,7 @@ class ContextConfig(BaseModel):
     max_history_messages: int = 50
     compaction_threshold: int = 30
     max_tool_iterations: int = 15
+    max_message_size: int = 100_000  # max input message size in characters
 
 
 # ---------------------------------------------------------------------------
