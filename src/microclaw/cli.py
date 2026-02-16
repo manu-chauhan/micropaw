@@ -218,6 +218,14 @@ def connect(channel):
     connect_channel(channel_name=channel, config=config)
 
 
+@main.command()
+def test():
+    """Test connectivity to all configured channels and AI provider."""
+    from microclaw.connector import test_channels
+    config = load_config()
+    test_channels(config)
+
+
 @main.command(name="config")
 def show_config():
     """Show current configuration (redacted)."""
