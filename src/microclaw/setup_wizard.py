@@ -81,15 +81,6 @@ def run_setup() -> None:
     ).ask()
     config.permissions.allow_file_write = allow_write or False
 
-    # Channels
-    console.print("\n[bold]Channel Setup[/bold] (you can enable more later in config)")
-
-    enable_webchat = questionary.confirm(
-        "Enable web chat (WebSocket)?", default=False
-    ).ask()
-    if enable_webchat:
-        config.channels.webchat.enabled = True
-
     # Fallback providers
     use_fallback = questionary.confirm(
         "Set up fallback providers?", default=False
@@ -105,5 +96,18 @@ def run_setup() -> None:
 
     # Save
     save_config(config)
-    console.print(f"\n[green]Config saved to {config}[/green]")
-    console.print("[dim]Run 'microclaw chat' to start chatting![/dim]")
+    console.print(f"\n[green]Config saved![/green]")
+
+    # Offer channel connection
+    connect_channel = questionary.confirm(
+        "Connect a messaging channel (Telegram, Discord, etc.)?", default=False
+    ).ask()
+    if connect_channel:
+        from microclaw.connector import connect_channel as do_connect
+        while True:
+            do_connect(config=config)
+            another = questionary.confirm("Connect another channel?", default=False).ask()
+            if not another:
+                break
+
+    console.print("\n[dim]Run 'microclaw chat' to start chatting![/dim]")

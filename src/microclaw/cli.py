@@ -209,6 +209,15 @@ def start():
     asyncio.run(gw.start())
 
 
+@main.command()
+@click.argument("channel", required=False, type=click.Choice(["telegram", "discord", "slack", "whatsapp", "webchat"]))
+def connect(channel):
+    """Connect a messaging channel (Telegram, Discord, Slack, WhatsApp, WebChat)."""
+    from microclaw.connector import connect_channel
+    config = load_config()
+    connect_channel(channel_name=channel, config=config)
+
+
 @main.command(name="config")
 def show_config():
     """Show current configuration (redacted)."""
