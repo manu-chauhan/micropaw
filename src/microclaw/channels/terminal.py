@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 from typing import Callable, Awaitable
 
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.text import Text
 
 from microclaw.channels.base import Channel
 
@@ -37,16 +39,25 @@ class TerminalChannel(Channel):
 
     async def start(self) -> None:
         self._running = True
+
+        # Suppress log noise during interactive chat
+        logging.getLogger("microclaw").setLevel(logging.WARNING)
+
+        console.print()
         console.print(Panel(
-            "[bold cyan]MicroClaw Terminal[/bold cyan]\n"
-            "Type your message and press Enter. Type [bold]quit[/bold] or [bold]exit[/bold] to stop.",
-            border_style="cyan",
+            "[bold cyan]MicroClaw[/bold cyan]\n"
+            "[dim]Your AI. Your machine. Your keys.[/dim]\n\n"
+            "Type your message and press Enter.\n"
+            "Type [bold]quit[/bold] or [bold]exit[/bold] to stop.",
+            border_style="bright_cyan",
+            padding=(1, 2),
         ))
+        console.print()
 
         while self._running:
             try:
                 line = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: input("\nYou: ")
+                    None, lambda: console.input("[bold green]You >[/bold green] ")
                 )
             except (EOFError, KeyboardInterrupt):
                 break
@@ -55,7 +66,7 @@ class TerminalChannel(Channel):
             if not line:
                 continue
             if line.lower() in ("quit", "exit"):
-                console.print("[dim]Goodbye![/dim]")
+                console.print("\n[dim]Goodbye![/dim]")
                 break
 
             if self._stream_handler:
@@ -64,14 +75,10 @@ class TerminalChannel(Channel):
                 await self._handle_batch(line)
 
     async def _handle_batch(self, text: str) -> None:
-        console.print("[dim]MicroClaw is thinking...[/dim]", end="\r")
+        console.print("[dim italic]  thinking...[/dim italic]", end="\r")
         response = await self._handler(text, "terminal-user", "terminal", None)
         console.print(" " * 40, end="\r")
-        console.print()
-        try:
-            console.print(Markdown(response))
-        except Exception:
-            console.print(response)
+        self._print_response(response)
 
     async def _handle_streaming(self, text: str) -> None:
         first_chunk = True
@@ -80,20 +87,33 @@ class TerminalChannel(Channel):
             nonlocal first_chunk
             if first_chunk:
                 sys.stdout.write("\r" + " " * 40 + "\r")
-                sys.stdout.write("\nMicroClaw: ")
+                console.print("[bold cyan]MicroClaw >[/bold cyan] ", end="")
                 first_chunk = False
             sys.stdout.write(chunk)
             sys.stdout.flush()
 
-        console.print("[dim]MicroClaw is thinking...[/dim]", end="\r")
-        await self._stream_handler(text, "terminal-user", "terminal", None, on_chunk)
+        console.print("[dim italic]  thinking...[/dim italic]", end="\r")
+        response = await self._stream_handler(text, "terminal-user", "terminal", None, on_chunk)
 
         if not first_chunk:
-            sys.stdout.write("\n")
+            sys.stdout.write("\n\n")
             sys.stdout.flush()
+        else:
+            # Streaming didn't yield chunks — print the full response
+            console.print(" " * 40, end="\r")
+            self._print_response(response)
+
+    def _print_response(self, response: str) -> None:
+        console.print()
+        console.print("[bold cyan]MicroClaw >[/bold cyan]")
+        try:
+            console.print(Markdown(response), style="white")
+        except Exception:
+            console.print(response)
+        console.print()
 
     async def stop(self) -> None:
         self._running = False
 
     async def send_message(self, chat_id: str, text: str) -> None:
-        console.print(f"\nMicroClaw: {text}")
+        self._print_response(text)

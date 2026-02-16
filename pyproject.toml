@@ -38,12 +38,14 @@ discord = ["discord.py>=2.3"]
 slack = ["slack-bolt>=1.18"]
 browser = ["playwright>=1.40"]
 pdf = ["pypdf>=4.0"]
+embeddings = ["sentence-transformers>=3.0"]
 all = [
     "python-telegram-bot>=21.0",
     "discord.py>=2.3",
     "slack-bolt>=1.18",
     "playwright>=1.40",
     "pypdf>=4.0",
+    "sentence-transformers>=3.0",
 ]
 dev = [
     "pytest>=8.0",

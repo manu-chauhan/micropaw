@@ -132,9 +132,11 @@ class Gateway:
         return response
 
     def _create_embedding_provider(self):
-        from microclaw.memory.embeddings import NullEmbedding, OllamaEmbedding, OpenAIEmbedding
+        from microclaw.memory.embeddings import LocalEmbedding, NullEmbedding, OllamaEmbedding, OpenAIEmbedding
         cfg = self.config.embedding
-        if cfg.provider == "openai":
+        if cfg.provider == "local":
+            return LocalEmbedding(cfg.model)
+        elif cfg.provider == "openai":
             api_key = self.config.provider_config.openai.api_key
             if not api_key:
                 logger.warning("Embeddings enabled but no OpenAI API key; disabling vector search")

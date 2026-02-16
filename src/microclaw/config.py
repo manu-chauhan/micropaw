@@ -128,8 +128,8 @@ class RateLimitConfig(BaseModel):
 
 class EmbeddingConfig(BaseModel):
     enabled: bool = False
-    provider: Literal["openai", "ollama"] = "openai"
-    model: str = "text-embedding-3-small"
+    provider: Literal["local", "openai", "ollama"] = "local"
+    model: str = "BAAI/bge-small-en-v1.5"
 
 
 class ContextConfig(BaseModel):
