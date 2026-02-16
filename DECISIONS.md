@@ -78,6 +78,16 @@
 **Rationale:** Proven pattern from OpenPaw. One Config class replaces OpenClaw's 126 config files. Env var overrides via a clean mapping table instead of ad-hoc os.getenv() calls.
 **Impact:** `~/.microclaw/config.json` with 0o600 permissions. All secrets in one place.
 
+### D13: Multi-backend web search with automatic failover
+**Decided:** 2026-02-16
+**Rationale:** DuckDuckGo Instant Answer API was the only search backend — limited to instant answers, no full web results. SearXNG is a free, open-source metasearch engine that aggregates results from Google/Bing/DDG. Public instances support JSON API with no API key needed. Brave Search has the best quality (independent 30B+ page index) but requires an API key.
+**Design:** Three-tier fallback chain:
+1. **Brave** (if API key configured) — best quality, ~1,000 free queries/month
+2. **SearXNG** (default) — 5 public instances, shuffle and try up to 3 with 8s timeout each
+3. **DuckDuckGo** (last resort) — always available, lowest quality
+**Config:** `SearchConfig` with `provider` (auto/searxng/brave/duckduckgo), `brave_api_key`, `searxng_url` (for self-hosted). Env vars: `BRAVE_API_KEY`, `SEARXNG_URL`.
+**Impact:** Zero-config web search that actually works. Users can optionally upgrade to Brave for best results or self-host SearXNG for full control.
+
 ## Implementation Timeline
 
 | Phase | Description | Status |
@@ -136,6 +146,13 @@
 ## File Count & LOC (actual, as of v0.1.0+hardening)
 - Source files: 46 Python files (39 source + 7 test)
 - Source LOC: ~5,500
-- Test LOC: ~780
-- Tests: 101 passing
+- Test LOC: ~880
+- Tests: 108 passing
 - Dependencies: 7 core, 7 optional extras
+
+### Web Search Enhancement
+- **SearXNG as default** — free metasearch aggregator, 5 public instances with shuffled load balancing
+- **Brave Search** — optional best-quality backend with API key
+- **Smart fallback** — Brave (if key) → SearXNG (3 tries) → DuckDuckGo (last resort)
+- **Zero config** — works out of the box, no API key needed
+- **Self-hosted SearXNG** — `SEARXNG_URL` env var or config for self-hosted instances

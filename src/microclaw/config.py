@@ -136,6 +136,12 @@ class EmbeddingConfig(BaseModel):
     model: str = "BAAI/bge-small-en-v1.5"
 
 
+class SearchConfig(BaseModel):
+    provider: Literal["auto", "searxng", "brave", "duckduckgo"] = "auto"
+    brave_api_key: str = ""
+    searxng_url: str = ""  # self-hosted SearXNG URL, e.g. "http://localhost:8888"
+
+
 class ContextConfig(BaseModel):
     max_history_messages: int = 50
     compaction_threshold: int = 30
@@ -156,6 +162,7 @@ class Config(BaseModel):
     persona: PersonaConfig = PersonaConfig()
     rate_limit: RateLimitConfig = RateLimitConfig()
     embedding: EmbeddingConfig = EmbeddingConfig()
+    search: SearchConfig = SearchConfig()
     context: ContextConfig = ContextConfig()
     fallback_providers: list[str] = []
 
@@ -182,6 +189,9 @@ _ENV_OVERRIDES: list[tuple[str, list[str]]] = [
     ("WHATSAPP_PHONE_ID", ["channels", "whatsapp", "phone_id"]),
     ("WHATSAPP_APP_SECRET", ["channels", "whatsapp", "app_secret"]),
     ("WEBCHAT_AUTH_TOKEN", ["channels", "webchat", "auth_token"]),
+    # Search
+    ("BRAVE_API_KEY", ["search", "brave_api_key"]),
+    ("SEARXNG_URL", ["search", "searxng_url"]),
 ]
 
 
@@ -261,5 +271,10 @@ def display_config(config: Config) -> dict:
         for field in fields:
             if ch.get(field):
                 ch[field] = _redact(ch[field])
+
+    # Redact search API key
+    search_key = data.get("search", {}).get("brave_api_key", "")
+    if search_key:
+        data["search"]["brave_api_key"] = _redact(search_key)
 
     return data

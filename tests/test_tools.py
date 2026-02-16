@@ -1,8 +1,9 @@
-"""Tests for the tool system — registry, path security, chunk_text."""
+"""Tests for the tool system — registry, path security, chunk_text, web search."""
 
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -157,3 +158,182 @@ class TestChunkText:
 
     def test_empty_text(self):
         assert chunk_text("", 100) == [""]
+
+
+# ---------------------------------------------------------------------------
+# Web search tests
+# ---------------------------------------------------------------------------
+
+class TestWebSearch:
+    """Tests for the multi-backend web search system."""
+
+    @pytest.mark.asyncio
+    async def test_searxng_returns_formatted_results(self):
+        from microclaw.tools.web_search import _search_searxng
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "results": [
+                {"title": "Python Docs", "url": "https://python.org", "content": "Official docs"},
+                {"title": "PyPI", "url": "https://pypi.org", "content": "Package index"},
+            ]
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("microclaw.tools.web_search.httpx.AsyncClient", return_value=mock_client):
+            result = await _search_searxng("python", 5, base_url="http://localhost:8888")
+
+        assert result is not None
+        assert "Python Docs" in result
+        assert "python.org" in result
+        assert "PyPI" in result
+
+    @pytest.mark.asyncio
+    async def test_searxng_returns_none_on_failure(self):
+        from microclaw.tools.web_search import _search_searxng
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=Exception("Connection refused"))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("microclaw.tools.web_search.httpx.AsyncClient", return_value=mock_client):
+            result = await _search_searxng("test", 5, base_url="http://localhost:8888")
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_brave_returns_formatted_results(self):
+        from microclaw.tools.web_search import _search_brave
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "web": {
+                "results": [
+                    {"title": "Brave Result", "url": "https://brave.com", "description": "A result"},
+                ]
+            }
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("microclaw.tools.web_search.httpx.AsyncClient", return_value=mock_client):
+            result = await _search_brave("test", 5, "BSA-fake-key")
+
+        assert result is not None
+        assert "Brave Result" in result
+        assert "via Brave" in result
+
+    @pytest.mark.asyncio
+    async def test_brave_returns_none_on_rate_limit(self):
+        import httpx
+        from microclaw.tools.web_search import _search_brave
+
+        mock_response = MagicMock()
+        mock_response.status_code = 429
+        error = httpx.HTTPStatusError("Rate limited", request=MagicMock(), response=mock_response)
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=error)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("microclaw.tools.web_search.httpx.AsyncClient", return_value=mock_client):
+            result = await _search_brave("test", 5, "BSA-fake-key")
+
+        assert result is None  # None allows fallthrough to next backend
+
+    @pytest.mark.asyncio
+    async def test_duckduckgo_always_returns_string(self):
+        from microclaw.tools.web_search import _search_duckduckgo
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "AbstractText": "Python is a programming language.",
+            "Heading": "Python",
+            "AbstractURL": "https://en.wikipedia.org/wiki/Python",
+            "RelatedTopics": [],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("microclaw.tools.web_search.httpx.AsyncClient", return_value=mock_client):
+            result = await _search_duckduckgo("python", 5)
+
+        assert isinstance(result, str)
+        assert "Python" in result
+
+    @pytest.mark.asyncio
+    async def test_duckduckgo_returns_no_results_message(self):
+        from microclaw.tools.web_search import _search_duckduckgo
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"RelatedTopics": []}
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("microclaw.tools.web_search.httpx.AsyncClient", return_value=mock_client):
+            result = await _search_duckduckgo("xyznonexistent", 5)
+
+        assert isinstance(result, str)
+        assert "No results" in result
+
+    @pytest.mark.asyncio
+    async def test_tool_execute_fallback_chain(self):
+        """Test that the tool falls back from SearXNG to DuckDuckGo."""
+        from microclaw.tools.web_search import WebSearchTool, set_search_config
+
+        # Set up config with auto provider (no brave key)
+        mock_config = MagicMock()
+        mock_config.provider = "auto"
+        mock_config.brave_api_key = ""
+        mock_config.searxng_url = ""
+        set_search_config(mock_config)
+
+        tool = WebSearchTool()
+        ctx = ToolContext(conversation_id="conv1", user_id="u1", platform="test")
+
+        # Mock SearXNG to fail, DDG to succeed
+        with patch("microclaw.tools.web_search._search_searxng", AsyncMock(return_value=None)), \
+             patch("microclaw.tools.web_search._search_duckduckgo", AsyncMock(return_value="DDG results")) as mock_ddg:
+            result = await tool.execute({"query": "test"}, ctx)
+
+        assert result == "DDG results"
+        mock_ddg.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_tool_execute_brave_with_key(self):
+        """Test that Brave is used when API key is configured."""
+        from microclaw.tools.web_search import WebSearchTool, set_search_config
+
+        mock_config = MagicMock()
+        mock_config.provider = "auto"
+        mock_config.brave_api_key = "BSA-test-key"
+        mock_config.searxng_url = ""
+        set_search_config(mock_config)
+
+        tool = WebSearchTool()
+        ctx = ToolContext(conversation_id="conv1", user_id="u1", platform="test")
+
+        with patch("microclaw.tools.web_search._search_brave", AsyncMock(return_value="Brave results")) as mock_brave:
+            result = await tool.execute({"query": "test"}, ctx)
+
+        assert result == "Brave results"
+        mock_brave.assert_called_once_with("test", 5, "BSA-test-key")

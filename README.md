@@ -48,7 +48,7 @@ MicroClaw is a tool-using AI agent. It doesn't just chat — it acts.
 
 | Tool | Description |
 |------|-------------|
-| `web_search` | Search the web via DuckDuckGo |
+| `web_search` | Search the web (SearXNG → DuckDuckGo fallback, or Brave) |
 | `web_browse` | Browse any URL and extract content (Playwright) |
 | `http_request` | Make HTTP requests with SSRF protection |
 | `file_read` | Read any file on your system (with path security) |
@@ -79,6 +79,43 @@ All tools can be individually disabled via config:
 
 - **Image analysis** via provider vision APIs (Claude, OpenAI, Gemini, Ollama)
 - **PDF extraction** — read and summarize PDF documents
+
+### Web Search — Smart Fallback Chain
+
+MicroClaw uses a multi-backend search system with automatic failover:
+
+```
+Brave (if API key set) → SearXNG (3 public instances) → DuckDuckGo (last resort)
+```
+
+**Zero config** — works out of the box using free SearXNG public instances. No API key needed.
+
+| Backend | Quality | Cost | API Key | Notes |
+|---------|---------|------|---------|-------|
+| **Brave Search** | Best | ~1,000 free/month | Yes | Independent 30B+ page index |
+| **SearXNG** | High | Free, unlimited | No | Aggregates Google/Bing/DDG results |
+| **DuckDuckGo** | Low | Free, unlimited | No | Instant answers only, not full results |
+
+**Upgrade to Brave** (optional, best results):
+```json
+{
+  "search": {
+    "brave_api_key": "BSA..."
+  }
+}
+```
+
+**Self-host SearXNG** (optional, full control):
+```bash
+docker run -d -p 8888:8080 searxng/searxng
+```
+```json
+{
+  "search": {
+    "searxng_url": "http://localhost:8888"
+  }
+}
+```
 
 ### Example
 
@@ -261,6 +298,8 @@ Environment variables override config file values:
 | `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` | Slack tokens |
 | `WHATSAPP_TOKEN` / `WHATSAPP_PHONE_ID` | WhatsApp credentials |
 | `WEBCHAT_AUTH_TOKEN` | WebChat authentication token |
+| `BRAVE_API_KEY` | Brave Search API key (optional, best search quality) |
+| `SEARXNG_URL` | Self-hosted SearXNG instance URL |
 | `MICROCLAW_FILE_LOG` | Enable file logging (`1`/`true`/`yes`) |
 | `MICROCLAW_LOG_FILE` | Custom log file path (enables file logging) |
 

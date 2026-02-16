@@ -84,6 +84,9 @@ class Gateway:
         from microclaw.tools.vision import set_provider
         set_provider(self.provider)
 
+        from microclaw.tools.web_search import set_search_config
+        set_search_config(self.config.search)
+
         # Init agent
         self.agent = Agent(self.config, self.provider, self.registry, self.store)
 
