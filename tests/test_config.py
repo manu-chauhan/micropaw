@@ -87,6 +87,18 @@ class TestEnvOverrides:
             _apply_env_overrides(raw)
         assert raw["provider"] == "ollama"
 
+    def test_apply_whatsapp_verify_token(self):
+        raw: dict = {}
+        with patch.dict(os.environ, {"WHATSAPP_VERIFY_TOKEN": "my-verify-token"}, clear=False):
+            _apply_env_overrides(raw)
+        assert raw["channels"]["whatsapp"]["verify_token"] == "my-verify-token"
+
+    def test_apply_brave_api_key(self):
+        raw: dict = {}
+        with patch.dict(os.environ, {"BRAVE_API_KEY": "BSA-test-key"}, clear=False):
+            _apply_env_overrides(raw)
+        assert raw["search"]["brave_api_key"] == "BSA-test-key"
+
 
 class TestRedaction:
     """Tests for secret redaction."""

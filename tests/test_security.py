@@ -60,6 +60,15 @@ class TestValidateUrl:
         err = validate_url("http://192.168.1.1/")
         assert err is not None
 
+    def test_blocks_localhost_uppercase(self):
+        err = validate_url("http://LOCALHOST:8080/admin")
+        assert err is not None
+        assert "Blocked" in err
+
+    def test_blocks_localhost_mixed_case(self):
+        err = validate_url("http://Localhost:3000/")
+        assert err is not None
+
 
 class TestValidatePath:
     def test_normal_path(self):

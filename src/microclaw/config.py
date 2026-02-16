@@ -187,6 +187,7 @@ _ENV_OVERRIDES: list[tuple[str, list[str]]] = [
     ("SLACK_SIGNING_SECRET", ["channels", "slack", "signing_secret"]),
     ("WHATSAPP_TOKEN", ["channels", "whatsapp", "token"]),
     ("WHATSAPP_PHONE_ID", ["channels", "whatsapp", "phone_id"]),
+    ("WHATSAPP_VERIFY_TOKEN", ["channels", "whatsapp", "verify_token"]),
     ("WHATSAPP_APP_SECRET", ["channels", "whatsapp", "app_secret"]),
     ("WEBCHAT_AUTH_TOKEN", ["channels", "webchat", "auth_token"]),
     # Search

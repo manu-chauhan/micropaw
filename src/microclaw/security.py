@@ -45,7 +45,7 @@ def validate_url(url: str) -> str | None:
     if parsed.scheme not in ALLOWED_SCHEMES:
         return f"Blocked scheme: {parsed.scheme!r}. Only http/https allowed."
 
-    hostname = parsed.hostname or ""
+    hostname = (parsed.hostname or "").lower()
     if not hostname:
         return "No hostname in URL"
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any, Callable, Awaitable
@@ -25,6 +26,7 @@ class DiscordChannel(Channel):
         self.token = token
         self.allowed_users = set(allowed_users) if allowed_users else set()
         self._client: Any = None
+        self._task: asyncio.Task | None = None
         self._handler: MessageHandler | None = None
         self._stream_handler: StreamHandler | None = None
 
@@ -44,10 +46,6 @@ class DiscordChannel(Channel):
         intents.message_content = True
         client = discord.Client(intents=intents)
         self._client = client
-
-        @client.event
-        async def on_ready() -> None:
-            logger.info("Discord channel connected: %s", client.user)
 
         @client.event
         async def on_message(message: discord.Message) -> None:
@@ -102,14 +100,34 @@ class DiscordChannel(Channel):
                 for chunk in chunk_text(response, MAX_MSG_LEN):
                     await message.channel.send(chunk)
 
-        # Start in background (non-blocking)
+        # Start in background — client.start() blocks forever, so run as a task
         logger.info("Discord channel starting...")
-        await client.start(self.token)
+        ready_event = asyncio.Event()
+
+        @client.event
+        async def on_ready() -> None:
+            logger.info("Discord channel connected: %s", client.user)
+            ready_event.set()
+
+        self._task = asyncio.create_task(client.start(self.token))
+
+        # Wait up to 30 seconds for the bot to connect
+        try:
+            await asyncio.wait_for(ready_event.wait(), timeout=30.0)
+        except asyncio.TimeoutError:
+            self._task.cancel()
+            raise RuntimeError("Discord bot failed to connect within 30 seconds")
 
     async def stop(self) -> None:
         if self._client:
             await self._client.close()
-            logger.info("Discord channel stopped.")
+        if self._task and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
+        logger.info("Discord channel stopped.")
 
     async def send_message(self, chat_id: str, text: str) -> None:
         if self._client:

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from typing import Any, Callable, Awaitable
 
 from microclaw.channels.base import Channel, chunk_text
@@ -10,6 +12,7 @@ from microclaw.channels.base import Channel, chunk_text
 logger = logging.getLogger(__name__)
 
 MAX_MSG_LEN = 4000
+STREAM_EDIT_INTERVAL = 1.0
 
 MessageHandler = Callable[[str, str, str, str | None], Awaitable[str]]
 StreamHandler = Callable[[str, str, str, str | None, Callable[[str], Awaitable[None]] | None], Awaitable[str]]
@@ -26,6 +29,7 @@ class SlackChannel(Channel):
         self._stream_handler: StreamHandler | None = None
         self._app: Any = None
         self._socket_handler: Any = None
+        self._task: asyncio.Task | None = None
 
     def set_handler(self, handler: MessageHandler) -> None:
         self._handler = handler
@@ -67,10 +71,21 @@ class SlackChannel(Channel):
             if self._stream_handler:
                 placeholder = await say(text="...", thread_ts=thread_ts)
                 accumulated = ""
+                last_edit = 0.0
 
                 async def on_chunk(chunk: str) -> None:
-                    nonlocal accumulated
+                    nonlocal accumulated, last_edit
                     accumulated += chunk
+                    now = time.monotonic()
+                    if now - last_edit >= STREAM_EDIT_INTERVAL:
+                        last_edit = now
+                        try:
+                            await client.chat_update(
+                                channel=channel_id, ts=placeholder["ts"],
+                                text=accumulated[:MAX_MSG_LEN - 4] + " ...",
+                            )
+                        except Exception as e:
+                            logger.debug("Slack stream edit failed: %s", e)
 
                 response = await self._stream_handler(text, user_id, "slack", channel_id, on_chunk)
 
@@ -92,13 +107,24 @@ class SlackChannel(Channel):
 
         self._socket_handler = AsyncSocketModeHandler(self._app, self.app_token)
         logger.info("Slack channel starting (Socket Mode)...")
-        await self._socket_handler.start_async()
+        # start_async() blocks forever, so run as a background task
+        self._task = asyncio.create_task(self._socket_handler.start_async())
+        # Give it a moment to connect
+        await asyncio.sleep(2.0)
+        if self._task.done() and self._task.exception():
+            raise self._task.exception()
         logger.info("Slack channel connected.")
 
     async def stop(self) -> None:
         if self._socket_handler:
             await self._socket_handler.close_async()
-            logger.info("Slack channel stopped.")
+        if self._task and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
+        logger.info("Slack channel stopped.")
 
     async def send_message(self, chat_id: str, text: str) -> None:
         if self._app:
