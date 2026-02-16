@@ -56,9 +56,9 @@ dev = [
 microclaw = "microclaw.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/manu-chauhan/microclaw"
-Repository = "https://github.com/manu-chauhan/microclaw"
-Issues = "https://github.com/manu-chauhan/microclaw/issues"
+Homepage = "https://gitlab.com/MANU-CHAUHAN/microclaw"
+Repository = "https://gitlab.com/MANU-CHAUHAN/microclaw"
+Issues = "https://gitlab.com/MANU-CHAUHAN/microclaw/-/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/microclaw"]

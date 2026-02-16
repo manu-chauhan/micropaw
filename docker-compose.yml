@@ -1,0 +1,47 @@
+# MicroClaw — Docker Compose
+#
+# Usage:
+#   microclaw chat    → docker compose run --rm microclaw chat
+#   microclaw start   → docker compose up
+#   with browser      → docker compose --profile browser up
+#   all extras        → docker compose --profile full up
+
+services:
+  microclaw:
+    build:
+      context: .
+      target: base
+    env_file: .env
+    volumes:
+      - microclaw-data:/home/microclaw/.microclaw
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+
+  microclaw-browser:
+    build:
+      context: .
+      target: browser
+    env_file: .env
+    volumes:
+      - microclaw-data:/home/microclaw/.microclaw
+    restart: unless-stopped
+    profiles:
+      - browser
+
+  microclaw-full:
+    build:
+      context: .
+      target: full
+    env_file: .env
+    volumes:
+      - microclaw-data:/home/microclaw/.microclaw
+    ports:
+      - "9225:9225"   # WebChat WebSocket
+      - "8080:8080"   # WhatsApp webhook
+    restart: unless-stopped
+    profiles:
+      - full
+
+volumes:
+  microclaw-data:

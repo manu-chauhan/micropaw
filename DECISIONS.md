@@ -88,9 +88,17 @@
 | Phase 4: Tools | All 11 tools (file, shell, web, memory, vision, pdf, sessions) | ✅ Complete |
 | Phase 5: Channels | Terminal, WebChat, Telegram, Discord, Slack, WhatsApp | ✅ Complete |
 | Phase 6: Gateway + CLI | Central coordinator, Click CLI, setup wizard | ✅ Complete |
-| Phase 7: Polish | Docker, tests, .env.example, README | Pending |
+| Phase 7: Polish | Docker, tests, .env.example, README | ✅ Complete |
 
-## File Count & LOC (estimated)
-- Source files: ~35 Python files
-- Estimated total: ~4,500 LOC
+## Phase 7 Deliverables
+- **Dockerfile** — Multi-stage: base (core), browser (+ Playwright/Chromium), full (all extras)
+- **docker-compose.yml** — 3 service profiles (base, browser, full) with named volume
+- **.env.example** — All supported environment variables documented
+- **README.md** — Features, quickstart, installation, Docker, architecture, CLI reference
+- **78 unit tests** — Config, bus, security, tools, providers, embeddings — all passing
+
+## File Count & LOC (actual)
+- Source files: 35 Python files + 6 test files
+- Source LOC: 4,462
+- Test LOC: ~450
 - Dependencies: 7 core, 5 optional extras
