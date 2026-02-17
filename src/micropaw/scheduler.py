@@ -42,6 +42,12 @@ class Scheduler:
         self._running = False
         self._db: aiosqlite.Connection | None = None
         self._last_heartbeat: float = 0.0
+        self._last_chat_ids: dict[str, str] = {}  # channel_name → last-known chat_id
+
+    def record_activity(self, channel: str, chat_id: str) -> None:
+        """Record the last-known chat_id for a channel (called by Gateway on every message)."""
+        if chat_id:
+            self._last_chat_ids[channel] = chat_id
 
     async def init(self) -> None:
         from pathlib import Path
@@ -85,10 +91,16 @@ class Scheduler:
 
         for job_id, description, interval, one_shot, user_id, platform, chat_id in jobs:
             try:
-                response = await self._handler(
-                    f"[Scheduled task] {description}", user_id, platform, chat_id,
-                )
-                await self._deliver(platform, chat_id, f"[Cron #{job_id}] {response}")
+                if one_shot:
+                    # One-shot jobs are reminders — deliver directly to ALL active channels
+                    await self._deliver_all(platform, chat_id, f"Reminder: {description}")
+                else:
+                    # Recurring jobs need agent processing (e.g., "check inbox for new emails")
+                    response = await self._handler(
+                        f"You have a scheduled task to perform. Do it now and report the result: {description}",
+                        user_id, platform, chat_id,
+                    )
+                    await self._deliver(platform, chat_id, f"[Cron #{job_id}] {response}")
             except Exception as e:
                 logger.error("Cron job #%d failed: %s", job_id, e)
 
@@ -127,6 +139,32 @@ class Scheduler:
         if self._channels:
             ch = self._channels[0]
             await self._bus.publish_outbound(OutboundMessage(ch.name, chat_id, content))
+
+    async def _deliver_all(self, origin_channel: str, origin_chat_id: str, content: str) -> None:
+        """Deliver to ALL active channels — for reminders and urgent notifications."""
+        if not self._bus or self._bus.closed:
+            logger.warning("Bus closed, cannot deliver notification")
+            return
+
+        delivered = set()
+        for ch in self._channels:
+            if ch.name == origin_channel:
+                await self._bus.publish_outbound(OutboundMessage(ch.name, origin_chat_id, content))
+                delivered.add(ch.name)
+            elif ch.name == "terminal":
+                await self._bus.publish_outbound(OutboundMessage("terminal", "", content))
+                delivered.add(ch.name)
+            else:
+                # Use last-known chat_id from user activity on this channel
+                chat_id = self._last_chat_ids.get(ch.name)
+                if chat_id:
+                    await self._bus.publish_outbound(OutboundMessage(ch.name, chat_id, content))
+                    delivered.add(ch.name)
+                else:
+                    logger.debug("No known chat_id for channel [%s], skipping", ch.name)
+
+        if not delivered:
+            logger.warning("No channels available for notification delivery")
 
     async def _process_heartbeat(self) -> None:
         heartbeat_file = CONFIG_DIR / "HEARTBEAT.md"

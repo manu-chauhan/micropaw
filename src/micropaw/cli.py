@@ -78,7 +78,9 @@ def _create_registry(config: Config):
     """Create and populate the tool registry, respecting disabled_tools config."""
     import logging
     from micropaw.tools.base import ToolRegistry
+    from micropaw.tools.calendar_tool import CalendarTool
     from micropaw.tools.cron_tool import CronTool
+    from micropaw.tools.email_tool import EmailTool
     from micropaw.tools.file_read import FileReadTool
     from micropaw.tools.file_write import FileWriteTool
     from micropaw.tools.http_request import HttpRequestTool
@@ -100,6 +102,7 @@ def _create_registry(config: Config):
         WebSearchTool(), WebBrowseTool(), FileReadTool(), FileWriteTool(),
         ShellTool(), HttpRequestTool(), MemoryTool(), PdfReadTool(),
         VisionTool(), SessionsTool(), DelegateTool(), CronTool(),
+        EmailTool(), CalendarTool(),
     ]:
         if tool.name not in disabled:
             registry.register(tool)

@@ -85,6 +85,14 @@ class Gateway:
         from micropaw.tools.web_search import set_search_config
         set_search_config(self.config.search)
 
+        from micropaw.tools.email_tool import set_email_config
+        if self.config.email.enabled and self.config.email.password:
+            set_email_config(self.config.email)
+
+        from micropaw.tools.calendar_tool import set_calendar_config
+        if self.config.calendar.enabled and self.config.calendar.client_id:
+            set_calendar_config(self.config.calendar)
+
         from micropaw.bus import MessageBus
         from micropaw.tools.delegate import set_delegate_deps
         self._bus = MessageBus()
@@ -198,6 +206,7 @@ class Gateway:
         max_size = self.config.context.max_message_size
         if len(text) > max_size:
             return f"Message too long ({len(text):,} chars). Maximum is {max_size:,} characters."
+        self._record_channel_activity(platform, user_id, channel_id)
         logger.info("[%s] %s: %s", platform, user_id, text[:80])
         response = await self.agent.handle_message(text, user_id, platform, channel_id)
         self._track_usage()
@@ -216,11 +225,18 @@ class Gateway:
         max_size = self.config.context.max_message_size
         if len(text) > max_size:
             return f"Message too long ({len(text):,} chars). Maximum is {max_size:,} characters."
+        self._record_channel_activity(platform, user_id, channel_id)
         logger.info("[%s] %s: %s", platform, user_id, text[:80])
         response = await self.agent.handle_message_stream(text, user_id, platform, channel_id, on_chunk=on_chunk)
         self._track_usage()
         logger.info("[%s] MicroPaw: %s", platform, response[:80])
         return response
+
+    def _record_channel_activity(self, platform: str, user_id: str, channel_id: str | None) -> None:
+        """Record last-known chat_id per channel so the scheduler can broadcast."""
+        if hasattr(self, "_scheduler"):
+            effective_chat_id = f"{platform}:{channel_id or user_id}"
+            self._scheduler.record_activity(platform, effective_chat_id)
 
     def _track_usage(self) -> None:
         """Pass accumulated usage from agent to terminal channel."""

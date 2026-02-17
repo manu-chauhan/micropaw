@@ -189,6 +189,52 @@ def run_setup() -> None:
                             elif fb == "gemini":
                                 config.provider_config.gemini.api_key = fb_key
 
+    # --- Email (Gmail) ---
+    setup_email = questionary.confirm(
+        "Configure email access (Gmail)?", default=False
+    ).ask()
+    if setup_email:
+        console.print(Panel(
+            "[bold]Gmail App Password Setup[/bold]\n\n"
+            "1. Go to https://myaccount.google.com/apppasswords\n"
+            "2. Select 'Mail' and generate an App Password\n"
+            "3. Copy the 16-character password\n\n"
+            "[yellow]Note:[/yellow] You need 2-Step Verification enabled.",
+            border_style="blue",
+            padding=(1, 2),
+        ))
+        email_address = questionary.text("Gmail address:").ask()
+        app_password = questionary.password("App Password:").ask()
+        if email_address and app_password:
+            config.email.enabled = True
+            config.email.email_address = email_address.strip()
+            config.email.password = app_password.strip().replace(" ", "")
+            console.print("[green]Email configured.[/green]")
+
+    # --- Google Calendar ---
+    setup_cal = questionary.confirm(
+        "Configure Google Calendar?", default=False
+    ).ask()
+    if setup_cal:
+        console.print(Panel(
+            "[bold]Google Calendar OAuth2 Setup[/bold]\n\n"
+            "1. Go to https://console.cloud.google.com/apis/credentials\n"
+            "2. Create a project (or select existing)\n"
+            "3. Enable the Google Calendar API\n"
+            "4. Create OAuth2 credentials (Desktop app type)\n"
+            "5. Copy the Client ID and Client Secret\n\n"
+            "[dim]On first use, the calendar tool will open your browser for consent.[/dim]",
+            border_style="blue",
+            padding=(1, 2),
+        ))
+        client_id = questionary.text("OAuth2 Client ID:").ask()
+        client_secret = questionary.password("OAuth2 Client Secret:").ask()
+        if client_id and client_secret:
+            config.calendar.enabled = True
+            config.calendar.client_id = client_id.strip()
+            config.calendar.client_secret = client_secret.strip()
+            console.print("[green]Calendar configured. Use 'authorize' action on first use.[/green]")
+
     # Save
     save_config(config)
     console.print(f"\n[green]Config saved![/green]")

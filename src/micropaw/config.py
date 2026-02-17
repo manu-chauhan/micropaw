@@ -155,6 +155,22 @@ class SchedulerConfig(BaseModel):
     max_jobs: int = 50
 
 
+class EmailConfig(BaseModel):
+    enabled: bool = False
+    email_address: str = ""
+    password: str = ""  # Gmail App Password
+    imap_host: str = "imap.gmail.com"
+    imap_port: int = 993
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 465
+
+
+class CalendarConfig(BaseModel):
+    enabled: bool = False
+    client_id: str = ""  # Google Cloud OAuth2 client ID
+    client_secret: str = ""  # Google Cloud OAuth2 client secret
+
+
 class ContextConfig(BaseModel):
     max_history_messages: int = 50
     compaction_threshold: int = 30
@@ -179,6 +195,8 @@ class Config(BaseModel):
     search: SearchConfig = SearchConfig()
     context: ContextConfig = ContextConfig()
     scheduler: SchedulerConfig = SchedulerConfig()
+    email: EmailConfig = EmailConfig()
+    calendar: CalendarConfig = CalendarConfig()
     fallback_providers: list[str] = []
 
 
@@ -213,6 +231,12 @@ _ENV_OVERRIDES: list[tuple[str, list[str]]] = [
     # Search
     ("BRAVE_API_KEY", ["search", "brave_api_key"]),
     ("SEARXNG_URL", ["search", "searxng_url"]),
+    # Email
+    ("MICROPAW_EMAIL_ADDRESS", ["email", "email_address"]),
+    ("MICROPAW_EMAIL_PASSWORD", ["email", "password"]),
+    # Calendar
+    ("GOOGLE_CLIENT_ID", ["calendar", "client_id"]),
+    ("GOOGLE_CLIENT_SECRET", ["calendar", "client_secret"]),
 ]
 
 
@@ -311,5 +335,15 @@ def display_config(config: Config) -> dict:
     search_key = data.get("search", {}).get("brave_api_key", "")
     if search_key:
         data["search"]["brave_api_key"] = _redact(search_key)
+
+    # Redact email password
+    email_pw = data.get("email", {}).get("password", "")
+    if email_pw:
+        data["email"]["password"] = _redact(email_pw)
+
+    # Redact calendar client secret
+    cal_secret = data.get("calendar", {}).get("client_secret", "")
+    if cal_secret:
+        data["calendar"]["client_secret"] = _redact(cal_secret)
 
     return data

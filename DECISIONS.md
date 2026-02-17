@@ -95,7 +95,7 @@
 | Phase 1: Foundation | pyproject.toml, config, base types, bus, security, logger | ✅ Complete |
 | Phase 2: Providers | Claude, OpenAI, Gemini, Ollama — all via httpx + failover | ✅ Complete |
 | Phase 3: Agent Core | Agent loop, context compaction, conversation, memory store | ✅ Complete |
-| Phase 4: Tools | All 11 tools (file, shell, web, memory, vision, pdf, sessions, delegate) | ✅ Complete |
+| Phase 4: Tools | All 14 tools (file, shell, web, memory, vision, pdf, sessions, delegate, cron, email, calendar) | ✅ Complete |
 | Phase 5: Channels | Terminal, WebChat, Telegram, Discord, Slack, WhatsApp | ✅ Complete |
 | Phase 6: Gateway + CLI | Central coordinator, Click CLI, setup wizard | ✅ Complete |
 | Phase 7: Polish | Docker, tests, .env.example, README | ✅ Complete |
@@ -360,9 +360,27 @@
    - **Fix:** Parser now checks for direct text first, then falls back to joining text from `<s>` child elements. Both old and new XML formats are handled.
    - **Files:** `tools/web_browse.py`
 
+8. **Reminders not delivered to all active channels** — `_deliver_all()` in the scheduler only delivered to the originating channel and terminal. Other active channels (e.g., Discord when reminder was set via Telegram) were silently skipped because their chat_id was unknown.
+   - **Fix:** Added `_last_chat_ids` registry to Scheduler, populated by Gateway on every incoming message via `record_activity()`. `_deliver_all()` now broadcasts to all active channels: originating channel (stored chat_id), terminal (no chat_id needed), and all other channels using their last-known chat_id from recent user activity.
+   - **Files:** `scheduler.py`, `gateway.py`
+
+### D33: Email Tool (Gmail via IMAP/SMTP)
+**Decided:** 2026-02-17
+**Rationale:** Gap analysis identified email as the main missing feature vs OpenClaw. Gmail is the target provider.
+**Design:** Multi-action tool (inbox/read/send/search) using Python stdlib `imaplib`/`smtplib`/`email`. Gmail App Passwords for auth (no OAuth complexity). Sync calls wrapped via `asyncio.to_thread()`. UID-based message identification. `BODY.PEEK` to avoid marking messages as read. Body truncated at 10KB.
+**Dependencies:** Zero — all stdlib.
+**Config:** `EmailConfig` with email_address, password, imap/smtp host/port. Env vars: `MICROPAW_EMAIL_ADDRESS`, `MICROPAW_EMAIL_PASSWORD`.
+
+### D34: Calendar Tool (Google Calendar via REST API v3)
+**Decided:** 2026-02-17
+**Rationale:** Calendar integration closes the last major feature gap vs competitors. Google Calendar is the target.
+**Design:** Multi-action tool (authorize/list/create/delete/search) using raw httpx to Google Calendar REST API. OAuth2 with one-time browser auth flow: local HTTP server captures redirect code, exchanges for tokens, stores in `~/.micropaw/google_tokens.json` with 0o600 permissions. Auto-refresh on token expiry. Supports timed and all-day events.
+**Dependencies:** Zero new — uses httpx (already core), `http.server`/`webbrowser` (stdlib).
+**Config:** `CalendarConfig` with client_id, client_secret. Env vars: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`.
+
 ### Metrics (v0.3.0-dev)
-- Source LOC: ~7,100
-- Test LOC: ~3,400
-- Tests: 303 passing
-- Tools: 12 (added cron)
-- Dependencies: 8 core (sentence-transformers → fastembed), 7 optional extras
+- Source LOC: ~7,700
+- Test LOC: ~3,900
+- Tests: 334 passing
+- Tools: 14 (added email, calendar)
+- Dependencies: 8 core, 7 optional extras

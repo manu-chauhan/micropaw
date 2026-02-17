@@ -8,11 +8,11 @@
 
 **Your AI. Your machine. Your keys.**
 
-6 channels. 4 providers. 12 tools. Shared memory everywhere. ~7,100 lines of Python. Zero SDK dependencies.
+6 channels. 4 providers. 14 tools. Shared memory everywhere. ~7,700 lines of Python. Zero SDK dependencies.
 
 [![PyPI](https://img.shields.io/pypi/v/micropaw)](https://pypi.org/project/micropaw/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
-[![Tests](https://img.shields.io/badge/tests-303%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-334%20passed-brightgreen)]()
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=flat&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/manuchauhan)
 
@@ -44,7 +44,9 @@ paw chat      # start talking
 
 - **Context compaction** — Conversations never hit a wall. When context fills up, older messages are summarized by the LLM while the last 10 are kept verbatim. Unbounded conversations.
 
-- **Scheduled tasks** — Tell MicroPaw "remind me every 2 hours to stretch" or use `paw cron add`. Recurring and one-shot jobs, managed via CLI or conversationally through the LLM.
+- **Scheduled tasks** — Tell MicroPaw "remind me every 2 hours to stretch" or use `paw cron add`. Recurring and one-shot jobs, managed via CLI or conversationally through the LLM. Reminders broadcast to all active channels.
+
+- **Email & Calendar** — Check your Gmail inbox, send emails, search by sender/subject. List, create, and delete Google Calendar events. All via natural language — "what's on my calendar tomorrow?" or "send an email to Alice saying I'll be late."
 
 - **Proactive heartbeat** — Drop tasks in `~/.micropaw/HEARTBEAT.md` and MicroPaw picks them up every 30 minutes. No prompting needed — it just does the work.
 
@@ -74,7 +76,7 @@ paw chat      # start talking
 
 - **Zero SDK dependencies** — All 4 AI providers via raw httpx. No `anthropic`, `openai`, or `google-genai` packages. Switching providers is a config change.
 
-- **12 built-in tools** — Web search (Brave → SearXNG → DuckDuckGo), browser automation, file I/O, shell, HTTP requests, memory, vision, PDF, sessions, delegation, cron scheduling — all security-hardened.
+- **14 built-in tools** — Web search (Brave → SearXNG → DuckDuckGo), browser automation, file I/O, shell, HTTP requests, memory, vision, PDF, sessions, delegation, cron scheduling, email (Gmail), calendar (Google Calendar) — all security-hardened.
 
 - **Raw WebSocket** — WebChat channel implements RFC 6455 from scratch. No aiohttp. ~100 LOC.
 
@@ -93,13 +95,13 @@ paw chat      # start talking
 | **Language** | Python | TypeScript | TypeScript | Go | C |
 | **Codebase** | ~7,100 LOC | ~430k LOC | ~500 LOC | ~4k LOC | ~15k LOC |
 | **Channels** | 6 | 15+ | 1 (WhatsApp) | 5 | 3 |
-| **Tools** | 12 | 25 + 53 skills | SDK-dependent | 6 | 6 |
+| **Tools** | 14 | 25 + 53 skills | SDK-dependent | 6 | 6 |
 | **AI SDKs** | None — raw httpx | Internal framework | Anthropic SDK | None — raw HTTP | None — raw HTTP |
 | **RAG / Vectors** | sqlite-vec ANN + fallback | sqlite-vec + BM25 | No | No | No |
 | **Telemetry** | None, ever | Local JSONL (opt-out) | None | None | None |
 | **License** | MIT | MIT | MIT | MIT | MIT |
 
-**MicroPaw sits in the sweet spot** — full-featured like OpenClaw (RAG, 6 channels, 12 tools, scheduling, multi-agent delegation) but lightweight like PicoClaw (~7,100 LOC, zero SDK dependencies). No telemetry, no bloat, no wrappers.
+**MicroPaw sits in the sweet spot** — full-featured like OpenClaw (RAG, 6 channels, 14 tools, scheduling, email, calendar, multi-agent delegation) but lightweight like PicoClaw (~7,700 LOC, zero SDK dependencies). No telemetry, no bloat, no wrappers.
 
 ---
 
@@ -203,6 +205,8 @@ paw chat
 | `sessions` | List and export conversation history |
 | `delegate` | Spin up sub-agents for parallel tasks |
 | `cron` | Schedule recurring or one-shot tasks via LLM |
+| `email` | Gmail inbox, read, send, search via IMAP/SMTP |
+| `calendar` | Google Calendar list, create, delete, search events |
 
 Disable any tool:
 ```json
@@ -472,7 +476,7 @@ docker compose --profile full up                     # Everything
 <summary><strong>Architecture</strong></summary>
 
 ```
-src/micropaw/          ~7,100 LOC source + ~3,400 LOC tests
+src/micropaw/          ~7,700 LOC source + ~3,900 LOC tests
  cli.py                 Click CLI (14 commands)
  config.py              Single Pydantic config model
  connector.py           Guided channel setup + live validation
@@ -487,7 +491,7 @@ src/micropaw/          ~7,100 LOC source + ~3,400 LOC tests
    conversation.py      History + session management
  providers/             4 providers + failover (raw httpx, retry)
  channels/              6 channels
- tools/                 12 tools (including cron scheduling)
+ tools/                 14 tools (cron, email, calendar, delegation, etc.)
  memory/                SQLite + vectors + embeddings + RAG chunker
 ```
 
@@ -501,7 +505,7 @@ Full decision log: [`DECISIONS.md`](DECISIONS.md)
 
 ```bash
 pip install ".[dev]"
-pytest                 # 303 tests
+pytest                 # 334 tests
 ruff check src/
 mypy src/
 ```
