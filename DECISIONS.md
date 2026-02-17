@@ -29,9 +29,9 @@
 **Impact:** No aiohttp dependency for webchat. WhatsApp still uses aiohttp for its webhook server (Meta requires HTTP).
 
 ### D3: Message Bus as optional coordination layer
-**Decided:** 2026-02-16
-**Rationale:** NanoClaw's bus architecture is clean but adds complexity for v1. MicroClaw keeps the handler callback pattern (simpler, proven) with the bus available for future WebSocket streaming and multi-agent scenarios.
-**Impact:** Channels use direct handler callbacks. Bus module exists but isn't wired into the main flow yet — reserved for v2.
+**Decided:** 2026-02-16, **Updated:** 2026-02-17
+**Rationale:** NanoClaw's bus architecture is clean but adds complexity for v1. MicroClaw keeps the handler callback pattern (simpler, proven) for request-response messages. Bus wired in v1.1 for background sub-agent result delivery (see D17).
+**Impact:** Channels use direct handler callbacks for real-time messages. Bus handles async delivery (background sub-agent results). Hybrid approach: callbacks for streaming, bus for fire-and-forget.
 
 ### D4: Playwright for browser automation (not CDP)
 **Decided:** 2026-02-16
@@ -95,7 +95,7 @@
 | Phase 1: Foundation | pyproject.toml, config, base types, bus, security, logger | ✅ Complete |
 | Phase 2: Providers | Claude, OpenAI, Gemini, Ollama — all via httpx + failover | ✅ Complete |
 | Phase 3: Agent Core | Agent loop, context compaction, conversation, memory store | ✅ Complete |
-| Phase 4: Tools | All 11 tools (file, shell, web, memory, vision, pdf, sessions) | ✅ Complete |
+| Phase 4: Tools | All 11 tools (file, shell, web, memory, vision, pdf, sessions, delegate) | ✅ Complete |
 | Phase 5: Channels | Terminal, WebChat, Telegram, Discord, Slack, WhatsApp | ✅ Complete |
 | Phase 6: Gateway + CLI | Central coordinator, Click CLI, setup wizard | ✅ Complete |
 | Phase 7: Polish | Docker, tests, .env.example, README | ✅ Complete |
@@ -105,7 +105,7 @@
 - **docker-compose.yml** — 3 service profiles (base, browser, full) with named volume
 - **.env.example** — All supported environment variables documented
 - **README.md** — Features, quickstart, installation, Docker, architecture, CLI reference
-- **78 unit tests** — Config, bus, security, tools, providers, embeddings — all passing
+- **125 unit tests** — Config, bus, security, tools, providers, embeddings, sub-agent, delegate — all passing
 
 ## Post-v1 Hardening
 
@@ -143,9 +143,20 @@
 - **Setup wizard improvements** — Ollama validation + model picker, embedding setup, fallback provider key prompting
 - **Conversation reset** — `/new` generates fresh conversation ID in terminal
 
+### Bug Fixes (Batch 2)
+- **Critical:** `agent.last_usage` never reset between messages — `/usage` double-counted every prior message's tokens
+- **Critical:** SubAgent nudge used empty assistant content (`""`) — Claude API rejects this with 400. Fixed to non-empty nudge
+- `asyncio.get_event_loop()` → `asyncio.get_running_loop()` in terminal and embeddings (deprecated in Python 3.12+)
+- WebChat `_process_message` blocked the frame loop — client couldn't ping during AI thinking. Now uses `asyncio.create_task()`
+- WhatsApp channel missing helpful `"Install with: pip install microclaw[whatsapp]"` on ImportError
+- `load_config` silently swallowed corrupt JSON — now warns via logger
+- `memory_tool.delete` returned "Memory deleted" for nonexistent keys — now returns "Memory not found"
+- `sessions.py` bypassed store abstraction with raw SQL — now uses `store.list_conversations()` and `store.export_messages()`
+- Gateway accessed `conversations._terminal_override` private attribute — added public `reset_terminal_session()` method
+
 ## File Count & LOC (actual, as of v0.1.0+hardening)
 - Source files: 48 Python files (41 source + 7 test)
-- Source LOC: ~6,200
+- Source LOC: ~6,150
 - Test LOC: ~1,170
 - Tests: 125 passing
 - Dependencies: 7 core, 7 optional extras
