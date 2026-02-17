@@ -44,22 +44,40 @@ microclaw chat      # start talking
 
 ## One AI, Every Platform
 
-```
-Terminal  Telegram  Discord  Slack  WhatsApp  WebChat
-    \        |        |       |       |        /
-     +-------+--------+-------+-------+------+
-                       |
-                   [Gateway]
-                       |
-              +--------+--------+
-              |        |        |
-           [Agent]  [Tools]  [Memory]
-              |                  |
-         [Provider]       [SQLite + vectors]
-```
+<div align="center">
 
-> **Talk on Telegram during the day. Switch to Discord at night. Ask from WhatsApp on the go.**
-> Your assistant carries the full conversation and memory across every channel — same personality, same knowledge, same context.
+<br>
+
+![Terminal](https://img.shields.io/badge/Terminal-%23121011?style=for-the-badge&logo=gnubash&logoColor=white)
+![Telegram](https://img.shields.io/badge/Telegram-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)
+![Discord](https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)
+![Slack](https://img.shields.io/badge/Slack-4A154B?style=for-the-badge&logo=slack&logoColor=white)
+![WhatsApp](https://img.shields.io/badge/WhatsApp-25D366?style=for-the-badge&logo=whatsapp&logoColor=white)
+![WebChat](https://img.shields.io/badge/WebChat-0088CC?style=for-the-badge&logo=websocket&logoColor=white)
+
+<br>
+
+### Talk on Telegram during the day. Switch to Discord at night. Ask from WhatsApp on the go.
+
+**Your assistant carries the full conversation and memory across every channel — same personality, same knowledge, same context. Set up once, run everywhere.**
+
+<br>
+
+</div>
+
+```
+         Telegram  Discord  Slack  WhatsApp  WebChat
+              \       |       |       |        /
+               +------+-------+-------+------+
+                              |
+    Terminal  ───────  [  Gateway  ]
+                              |
+                     +--------+--------+
+                     |        |        |
+                  [Agent]  [Tools]  [Memory ── SQLite + vectors]
+                     |
+                [Provider ── Claude / GPT-4o / Gemini / Ollama]
+```
 
 ```bash
 microclaw connect telegram    # guided setup, validates token live
