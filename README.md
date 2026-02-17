@@ -1,6 +1,8 @@
 <div align="center">
 
-# MicroPaw
+<img src="puppy.png" width="120" alt="MicroPaw">
+
+# 🐾 MicroPaw
 
 ### A local-first AI agent that runs on your machine, talks on every platform, and keeps your keys to yourself.
 
