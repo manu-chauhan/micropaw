@@ -1,4 +1,4 @@
-"""Tests for the tool system — registry, path security, chunk_text, web search."""
+"""Tests for the tool system — registry, path security, chunk_text, web search, sub-agent."""
 
 from __future__ import annotations
 
@@ -337,3 +337,90 @@ class TestWebSearch:
 
         assert result == "Brave results"
         mock_brave.assert_called_once_with("test", 5, "BSA-test-key")
+
+
+# ---------------------------------------------------------------------------
+# Sub-agent tests
+# ---------------------------------------------------------------------------
+
+class TestSubAgent:
+    @pytest.mark.asyncio
+    async def test_inline_returns_text(self):
+        from microclaw.core.subagent import SubAgent
+        from microclaw.providers.base import AIResponse
+
+        mock_provider = AsyncMock()
+        mock_provider.chat = AsyncMock(return_value=AIResponse(
+            content="The answer is 42.", tool_calls=[], usage={"input": 10, "output": 5},
+        ))
+
+        agent = SubAgent(mock_provider)
+        result = await agent.run("What is the meaning of life?")
+
+        assert result == "The answer is 42."
+        mock_provider.chat.assert_called_once()
+        # Verify tools=None (security: no tool access)
+        _, kwargs = mock_provider.chat.call_args
+        assert kwargs.get("tools") is None
+
+    @pytest.mark.asyncio
+    async def test_max_iterations_bail(self):
+        from microclaw.core.subagent import SubAgent
+        from microclaw.providers.base import AIResponse
+
+        mock_provider = AsyncMock()
+        mock_provider.chat = AsyncMock(return_value=AIResponse(
+            content="", tool_calls=[], usage={"input": 5, "output": 0},
+        ))
+
+        agent = SubAgent(mock_provider)
+        result = await agent.run("Do something")
+
+        assert "maximum iterations" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_provider_error_handled(self):
+        from microclaw.core.subagent import SubAgent
+
+        mock_provider = AsyncMock()
+        mock_provider.chat = AsyncMock(side_effect=RuntimeError("API down"))
+
+        agent = SubAgent(mock_provider)
+        result = await agent.run("Test task")
+
+        assert "error" in result.lower()
+        assert "API down" in result
+
+
+class TestDelegateTool:
+    @pytest.mark.asyncio
+    async def test_inline_mode(self):
+        from microclaw.providers.base import AIResponse
+        from microclaw.tools.delegate import DelegateTool, set_delegate_deps
+
+        mock_provider = AsyncMock()
+        mock_provider.chat = AsyncMock(return_value=AIResponse(
+            content="Delegated result", tool_calls=[], usage={"input": 10, "output": 5},
+        ))
+        set_delegate_deps(mock_provider, None)
+
+        tool = DelegateTool()
+        ctx = ToolContext(conversation_id="conv1", user_id="u1", platform="test")
+        result = await tool.execute({"task": "Summarize this"}, ctx)
+
+        assert result == "Delegated result"
+
+    @pytest.mark.asyncio
+    async def test_background_without_bus_errors(self):
+        from microclaw.providers.base import AIResponse
+        from microclaw.tools.delegate import DelegateTool, set_delegate_deps
+
+        mock_provider = AsyncMock()
+        set_delegate_deps(mock_provider, None)
+
+        tool = DelegateTool()
+        ctx = ToolContext(conversation_id="conv1", user_id="u1", platform="test")
+        result = await tool.execute({"task": "Background task", "mode": "background"}, ctx)
+
+        assert "error" in result.lower()
+        assert "bus" in result.lower()

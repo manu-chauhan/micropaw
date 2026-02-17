@@ -85,6 +85,7 @@ def _create_registry(config: Config):
     from microclaw.tools.pdf_read import PdfReadTool
     from microclaw.tools.sessions import SessionsTool
     from microclaw.tools.shell import ShellTool
+    from microclaw.tools.delegate import DelegateTool
     from microclaw.tools.vision import VisionTool
     from microclaw.tools.web_browse import WebBrowseTool
     from microclaw.tools.web_search import WebSearchTool
@@ -97,7 +98,7 @@ def _create_registry(config: Config):
     for tool in [
         WebSearchTool(), WebBrowseTool(), FileReadTool(), FileWriteTool(),
         ShellTool(), HttpRequestTool(), MemoryTool(), PdfReadTool(),
-        VisionTool(), SessionsTool(),
+        VisionTool(), SessionsTool(), DelegateTool(),
     ]:
         if tool.name not in disabled:
             registry.register(tool)
@@ -311,6 +312,59 @@ def doctor():
     table.add_row("Disk space", ok(free_mb > 100), f"{free_mb:.0f} MB free")
 
     console.print(table)
+
+
+@main.command()
+@click.option("--conversation-id", "-c", default=None, help="Conversation ID to export.")
+@click.option("--format", "-f", "fmt", type=click.Choice(["json", "markdown"]), default="json", help="Export format.")
+@click.option("--output", "-o", "output_file", default=None, help="Output file (default: stdout).")
+def export(conversation_id, fmt, output_file):
+    """Export conversation history."""
+    async def _export():
+        from microclaw.memory.store import MemoryStore
+        store = MemoryStore(DB_FILE)
+        await store.init()
+        try:
+            if not conversation_id:
+                convos = await store.list_conversations()
+                if not convos:
+                    console.print("[dim]No conversations found.[/dim]")
+                    return
+                table = Table(title="Conversations")
+                table.add_column("ID", style="cyan")
+                table.add_column("Platform")
+                table.add_column("User")
+                table.add_column("Updated")
+                for c in convos:
+                    table.add_row(c["id"][:12] + "…", c["platform"], c["user_id"], c["updated_at"])
+                console.print(table)
+                console.print("\n[dim]Use --conversation-id to export a specific conversation.[/dim]")
+                return
+
+            messages = await store.export_messages(conversation_id)
+            if not messages:
+                console.print(f"[red]No messages found for conversation {conversation_id}.[/red]")
+                return
+
+            if fmt == "json":
+                text = json.dumps(messages, indent=2)
+            else:
+                lines = []
+                for m in messages:
+                    role = m["role"].upper()
+                    lines.append(f"### {role} ({m['created_at']})\n\n{m['content']}\n")
+                text = "\n---\n\n".join(lines)
+
+            if output_file:
+                from pathlib import Path
+                Path(output_file).write_text(text)
+                console.print(f"[green]Exported {len(messages)} messages to {output_file}[/green]")
+            else:
+                click.echo(text)
+        finally:
+            await store.close()
+
+    asyncio.run(_export())
 
 
 @main.command()

@@ -144,10 +144,10 @@
 - **Conversation reset** — `/new` generates fresh conversation ID in terminal
 
 ## File Count & LOC (actual, as of v0.1.0+hardening)
-- Source files: 46 Python files (39 source + 7 test)
-- Source LOC: ~5,800
-- Test LOC: ~1,060
-- Tests: 116 passing
+- Source files: 48 Python files (41 source + 7 test)
+- Source LOC: ~6,200
+- Test LOC: ~1,170
+- Tests: 125 passing
 - Dependencies: 7 core, 7 optional extras
 
 ### Web Search Enhancement
@@ -156,3 +156,27 @@
 - **Smart fallback** — Brave (if key) → SearXNG (3 tries) → DuckDuckGo (last resort)
 - **Zero config** — works out of the box, no API key needed
 - **Self-hosted SearXNG** — `SEARXNG_URL` env var or config for self-hosted instances
+
+### D14: Channel Health Monitoring
+**Decided:** 2026-02-17
+**Rationale:** Discord and Slack channels run as `asyncio.create_task()` — if the task crashes after startup, the gateway doesn't know. Telegram and python-telegram-bot already auto-reconnect natively.
+**Design:** `_watch_task()` coroutine pattern: await the background task, on crash log + sleep 5s + restart. Discord adds `on_disconnect`/`on_resumed` events for visibility.
+**Impact:** Self-healing channels — crash detection + automatic restart without gateway awareness needed.
+
+### D15: Conversation Export
+**Decided:** 2026-02-17
+**Rationale:** No way to export chat history from the SQLite database. Users need this for backup, audit, or sharing.
+**Design:** `microclaw export` CLI command. No conversation ID → lists all conversations in a Rich table. With `--conversation-id` + `--format` (json/markdown) + `--output` (file/stdout). Read-only SQLite, own MemoryStore connection.
+**Impact:** Full conversation export with zero dependencies.
+
+### D16: Sub-Agent System
+**Decided:** 2026-02-17
+**Rationale:** Main agent should be able to delegate sub-tasks to independent LLM loops. Inspired by NanoClaw's sub-agent pattern. Security: sub-agents have NO tool access (tools=None always) — physically cannot read files, execute shell, or access memory.
+**Design:** `SubAgent(provider, system_prompt)` with `run(task) -> str`. Max 10 iterations, nudge on empty response. `DelegateTool` with inline (blocking) and background (fire-and-forget via bus) modes.
+**Impact:** Multi-agent delegation. Sub-agents capped at 10 iterations. Bus bounded queues (maxsize=100) prevent memory exhaustion.
+
+### D17: Message Bus Wiring
+**Decided:** 2026-02-17
+**Rationale:** Bus module existed but was unwired (D3). Now wired specifically for background sub-agent result delivery — NOT replacing handler callbacks for regular messages.
+**Design:** Gateway creates MessageBus, injects via `set_delegate_deps()`. Background `_bus_consumer()` task consumes outbound messages and routes to appropriate channel's `send_message()`. Cleaned up in `stop()`.
+**Impact:** Background sub-agent results delivered to users via their original channel.

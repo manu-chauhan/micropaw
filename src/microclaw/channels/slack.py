@@ -30,6 +30,7 @@ class SlackChannel(Channel):
         self._app: Any = None
         self._socket_handler: Any = None
         self._task: asyncio.Task | None = None
+        self._watcher: asyncio.Task | None = None
 
     def set_handler(self, handler: MessageHandler) -> None:
         self._handler = handler
@@ -109,13 +110,31 @@ class SlackChannel(Channel):
         logger.info("Slack channel starting (Socket Mode)...")
         # start_async() blocks forever, so run as a background task
         self._task = asyncio.create_task(self._socket_handler.start_async())
+        self._watcher = asyncio.create_task(self._watch_task())
         # Give it a moment to connect
         await asyncio.sleep(2.0)
         if self._task.done() and self._task.exception():
             raise self._task.exception()
         logger.info("Slack channel connected.")
 
+    async def _watch_task(self) -> None:
+        """Monitor the background task; log and restart on crash."""
+        while True:
+            try:
+                await self._task
+                return
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                logger.error("Slack task crashed: %s — restarting in 5s", e)
+                await asyncio.sleep(5)
+                from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
+                self._socket_handler = AsyncSocketModeHandler(self._app, self.app_token)
+                self._task = asyncio.create_task(self._socket_handler.start_async())
+
     async def stop(self) -> None:
+        if self._watcher and not self._watcher.done():
+            self._watcher.cancel()
         if self._socket_handler:
             await self._socket_handler.close_async()
         if self._task and not self._task.done():

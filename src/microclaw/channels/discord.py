@@ -27,6 +27,7 @@ class DiscordChannel(Channel):
         self.allowed_users = set(allowed_users) if allowed_users else set()
         self._client: Any = None
         self._task: asyncio.Task | None = None
+        self._watcher: asyncio.Task | None = None
         self._handler: MessageHandler | None = None
         self._stream_handler: StreamHandler | None = None
 
@@ -109,7 +110,16 @@ class DiscordChannel(Channel):
             logger.info("Discord channel connected: %s", client.user)
             ready_event.set()
 
+        @client.event
+        async def on_disconnect() -> None:
+            logger.warning("Discord disconnected — library will auto-reconnect")
+
+        @client.event
+        async def on_resumed() -> None:
+            logger.info("Discord session resumed")
+
         self._task = asyncio.create_task(client.start(self.token))
+        self._watcher = asyncio.create_task(self._watch_task())
 
         # Wait up to 30 seconds for the bot to connect
         try:
@@ -118,7 +128,22 @@ class DiscordChannel(Channel):
             self._task.cancel()
             raise RuntimeError("Discord bot failed to connect within 30 seconds")
 
+    async def _watch_task(self) -> None:
+        """Monitor the background task; log and restart on crash."""
+        while True:
+            try:
+                await self._task
+                return  # clean exit
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                logger.error("Discord task crashed: %s — restarting in 5s", e)
+                await asyncio.sleep(5)
+                self._task = asyncio.create_task(self._client.start(self.token))
+
     async def stop(self) -> None:
+        if self._watcher and not self._watcher.done():
+            self._watcher.cancel()
         if self._client:
             await self._client.close()
         if self._task and not self._task.done():

@@ -87,6 +87,12 @@ class Gateway:
         from microclaw.tools.web_search import set_search_config
         set_search_config(self.config.search)
 
+        from microclaw.bus import MessageBus
+        from microclaw.tools.delegate import set_delegate_deps
+        self._bus = MessageBus()
+        self._bus_task: asyncio.Task | None = None
+        set_delegate_deps(self.provider, self._bus)
+
         # Init agent
         self.agent = Agent(self.config, self.provider, self.registry, self.store)
 
@@ -135,6 +141,9 @@ class Gateway:
             "Gateway running with %d channel(s) using %s provider",
             len(started_channels), self.provider.name,
         )
+
+        # Start bus consumer for background sub-agent results
+        self._bus_task = asyncio.create_task(self._bus_consumer())
 
         if terminal_coro:
             # Terminal blocks — run it as the main loop
@@ -213,6 +222,28 @@ class Gateway:
             new_id = f"terminal:terminal-user:{uuid.uuid4().hex[:8]}"
             self.agent.conversations._terminal_override = new_id
 
+    async def _bus_consumer(self) -> None:
+        """Consume outbound bus messages and route to channels."""
+        while True:
+            try:
+                msg = await self._bus.consume_outbound()
+                if msg is None:
+                    if self._bus.closed:
+                        return
+                    continue
+                # Find the right channel and deliver
+                for ch in self.channels:
+                    if ch.name == msg.channel:
+                        try:
+                            await ch.send_message(msg.chat_id, msg.content)
+                        except Exception as e:
+                            logger.error("Bus delivery to [%s] failed: %s", ch.name, e)
+                        break
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                logger.error("Bus consumer error: %s", e)
+
     def _create_embedding_provider(self):
         from microclaw.memory.embeddings import LocalEmbedding, NullEmbedding, OllamaEmbedding, OpenAIEmbedding
         cfg = self.config.embedding
@@ -229,6 +260,16 @@ class Gateway:
         return NullEmbedding()
 
     async def stop(self) -> None:
+        # Close bus and consumer
+        if hasattr(self, "_bus"):
+            self._bus.close()
+        if hasattr(self, "_bus_task") and self._bus_task and not self._bus_task.done():
+            self._bus_task.cancel()
+            try:
+                await self._bus_task
+            except asyncio.CancelledError:
+                pass
+
         for channel in self.channels:
             try:
                 await channel.stop()

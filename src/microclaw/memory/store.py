@@ -96,6 +96,31 @@ class MemoryStore:
         await self.db.commit()
         return conv_id
 
+    async def list_conversations(self) -> list[dict]:
+        """Return all conversations with metadata."""
+        async with self.db.execute(
+            "SELECT id, platform, user_id, created_at, updated_at "
+            "FROM conversations ORDER BY updated_at DESC"
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [
+            {"id": r[0], "platform": r[1], "user_id": r[2], "created_at": r[3], "updated_at": r[4]}
+            for r in rows
+        ]
+
+    async def export_messages(self, conversation_id: str) -> list[dict]:
+        """Export all messages for a conversation as plain dicts."""
+        async with self.db.execute(
+            "SELECT role, content, tool_calls, tool_call_id, created_at "
+            "FROM messages WHERE conversation_id = ? ORDER BY id ASC",
+            (conversation_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [
+            {"role": r[0], "content": r[1], "tool_calls": r[2], "tool_call_id": r[3], "created_at": r[4]}
+            for r in rows
+        ]
+
     # --- Messages ---
 
     async def save_message(self, conversation_id: str, message: Message) -> None:
