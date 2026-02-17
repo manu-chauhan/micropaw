@@ -20,8 +20,8 @@
 
 ```bash
 pip install .
-micropaw setup     # pick provider, paste key
-micropaw chat      # start talking
+paw setup     # pick provider, paste key
+paw chat      # start talking
 ```
 
 ---
@@ -126,9 +126,9 @@ micropaw chat      # start talking
 ```
 
 ```bash
-micropaw connect telegram    # guided setup, validates token live
-micropaw connect discord     # auto-generates bot invite URL
-micropaw start               # launch ALL channels at once
+paw connect telegram    # guided setup, validates token live
+paw connect discord     # auto-generates bot invite URL
+paw start               # launch ALL channels at once
 ```
 
 ---
@@ -138,25 +138,27 @@ micropaw start               # launch ALL channels at once
 **Terminal only:**
 ```bash
 pip install .
-micropaw setup && micropaw chat
+paw setup && paw chat
 ```
 
 **Multi-channel:**
 ```bash
 pip install ".[telegram,discord]"
-micropaw setup
-micropaw connect telegram
-micropaw connect discord
-micropaw start
+paw setup
+paw connect telegram
+paw connect discord
+paw start
 ```
 
 **Fully local (no internet):**
 ```bash
 ollama pull llama3.1
 pip install .
-micropaw setup    # select Ollama
-micropaw chat
+paw setup    # select Ollama
+paw chat
 ```
+
+> `micropaw` also works as a command name — both are identical.
 
 ---
 
@@ -319,16 +321,16 @@ MicroPaw > [delegate] "Research quantum computing breakthroughs"
 
 | Command | Description |
 |---------|-------------|
-| `micropaw setup` | Interactive wizard — provider, API key, persona, permissions |
-| `micropaw chat` | Terminal chat session |
-| `micropaw start` | Launch all enabled channels |
-| `micropaw connect <channel>` | Guided channel setup with live token validation |
-| `micropaw test` | Validate provider + all channel tokens |
-| `micropaw config` | Show configuration (secrets redacted) |
-| `micropaw status` | System status overview |
-| `micropaw doctor` | Diagnostics — Python, deps, disk, keys |
-| `micropaw export` | Export conversations (JSON/Markdown) |
-| `micropaw reset` | Delete all config and data |
+| `paw setup` | Interactive wizard — provider, API key, persona, permissions |
+| `paw chat` | Terminal chat session |
+| `paw start` | Launch all enabled channels |
+| `paw connect <channel>` | Guided channel setup with live token validation |
+| `paw test` | Validate provider + all channel tokens |
+| `paw config` | Show configuration (secrets redacted) |
+| `paw status` | System status overview |
+| `paw doctor` | Diagnostics — Python, deps, disk, keys |
+| `paw export` | Export conversations (JSON/Markdown) |
+| `paw reset` | Delete all config and data |
 
 Terminal slash commands: `/help`, `/new`, `/tools`, `/usage`, `/clear`, `/config`, `quit`
 
@@ -466,8 +468,8 @@ mypy src/
 
 Shell completion:
 ```bash
-eval "$(_MICROPAW_COMPLETE=bash_source micropaw)"    # Bash
-eval "$(_MICROPAW_COMPLETE=zsh_source micropaw)"     # Zsh
+eval "$(_PAW_COMPLETE=bash_source paw)"    # Bash
+eval "$(_PAW_COMPLETE=zsh_source paw)"     # Zsh
 ```
 
 ---

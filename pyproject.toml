@@ -58,6 +58,7 @@ dev = [
 ]
 
 [project.scripts]
+paw = "micropaw.cli:main"
 micropaw = "micropaw.cli:main"
 
 [project.urls]
