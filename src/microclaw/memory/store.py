@@ -8,12 +8,15 @@ from pathlib import Path
 
 import aiosqlite
 
+from microclaw.memory.chunker import chunk_text
 from microclaw.memory.embeddings import (
     EmbeddingProvider,
     NullEmbedding,
     cosine_similarity,
     deserialize_embedding,
+    deserialize_embedding_blob,
     serialize_embedding,
+    serialize_embedding_blob,
 )
 from microclaw.providers.base import Message, ToolCall
 
@@ -51,9 +54,21 @@ CREATE TABLE IF NOT EXISTS memories (
     UNIQUE(key, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS document_chunks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    embedding BLOB,
+    user_id TEXT NOT NULL DEFAULT '_global',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(source, chunk_index, user_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_memories_key ON memories(key);
 CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id);
+CREATE INDEX IF NOT EXISTS idx_chunks_source ON document_chunks(source, user_id);
 """
 
 
@@ -233,6 +248,75 @@ class MemoryStore:
         ) as cursor:
             rows = await cursor.fetchall()
         return [{"key": r[0], "value": r[1]} for r in rows]
+
+    # --- Document chunks (RAG) ---
+
+    async def ingest_document(self, source: str, content: str, user_id: str = "_global") -> int:
+        """Chunk a document, embed each chunk, and store for RAG retrieval.
+
+        Returns the number of chunks stored.  Re-ingesting the same source
+        replaces all previous chunks for that source.
+        """
+        chunks = chunk_text(content)
+        if not chunks:
+            return 0
+
+        # Remove old chunks for this source (handles re-reads cleanly)
+        await self.db.execute(
+            "DELETE FROM document_chunks WHERE source = ? AND user_id = ?",
+            (source, user_id),
+        )
+
+        for i, text in enumerate(chunks):
+            embedding = await self.embedder.embed(text)
+            blob = serialize_embedding_blob(embedding)
+            await self.db.execute(
+                "INSERT INTO document_chunks (source, chunk_index, content, embedding, user_id) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (source, i, text, blob, user_id),
+            )
+
+        await self.db.commit()
+        logger.info("RAG: ingested %d chunks from %s", len(chunks), source)
+        return len(chunks)
+
+    async def search_documents(self, query: str, limit: int = 5, user_id: str = "_global") -> list[dict]:
+        """Search document chunks by vector similarity with text fallback."""
+        results: list[dict] = []
+
+        # Vector search if embeddings are active
+        if self.embedder.name != "none":
+            query_embedding = await self.embedder.embed(query)
+            if query_embedding:
+                async with self.db.execute(
+                    "SELECT source, chunk_index, content, embedding FROM document_chunks "
+                    "WHERE user_id = ? AND embedding IS NOT NULL "
+                    "ORDER BY created_at DESC LIMIT 2000",
+                    (user_id,),
+                ) as cursor:
+                    candidates = await cursor.fetchall()
+
+                scored: list[tuple[float, dict]] = []
+                for source, idx, content, emb_blob in candidates:
+                    emb = deserialize_embedding_blob(emb_blob)
+                    if emb:
+                        score = cosine_similarity(query_embedding, emb)
+                        scored.append((score, {"source": source, "chunk": idx, "content": content}))
+
+                scored.sort(key=lambda x: x[0], reverse=True)
+                return [item for _, item in scored[:limit]]
+
+        # Text fallback
+        q = f"%{query.lower()}%"
+        async with self.db.execute(
+            "SELECT source, chunk_index, content FROM document_chunks "
+            "WHERE user_id = ? AND LOWER(content) LIKE ? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (user_id, q, limit),
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+        return [{"source": r[0], "chunk": r[1], "content": r[2]} for r in rows]
 
     async def close(self) -> None:
         if self._db:

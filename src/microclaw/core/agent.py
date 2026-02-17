@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from pathlib import Path
 from typing import Any, Callable, Awaitable
 
 import httpx
@@ -18,6 +20,9 @@ logger = logging.getLogger(__name__)
 
 # Tools that are safe to cache (read-only, no side effects)
 _CACHEABLE_TOOLS = frozenset({"web_search", "web_browse", "file_read", "http_request", "pdf_read", "vision"})
+# Tools whose output should be auto-ingested for RAG
+_INGEST_TOOLS = frozenset({"file_read", "pdf_read"})
+_MIN_INGEST_SIZE = 500  # only ingest results larger than this
 
 
 def _cache_key(tool_name: str, args: dict) -> tuple:
@@ -75,8 +80,13 @@ class Agent:
             confirm_dangerous=self.config.permissions.confirm_dangerous,
         )
 
-    def _build_system_prompt(self, platform: str, recent_memories: list[dict] | None = None) -> str:
-        """Build the system prompt from config + tools + memories."""
+    def _build_system_prompt(
+        self,
+        platform: str,
+        recent_memories: list[dict] | None = None,
+        relevant_docs: list[dict] | None = None,
+    ) -> str:
+        """Build the system prompt from config + tools + memories + RAG context."""
         parts: list[str] = []
 
         # Identity
@@ -111,6 +121,14 @@ class Agent:
             for m in recent_memories:
                 parts.append(f"- {m['key']}: {m['value']}")
 
+        # RAG — relevant document chunks
+        if relevant_docs:
+            parts.append("\nRelevant knowledge from your documents:")
+            for doc in relevant_docs:
+                source = Path(doc["source"]).name if "/" in doc["source"] else doc["source"]
+                content = doc["content"][:500]
+                parts.append(f"- [{source}]: {content}")
+
         # Extra instructions
         if self.config.persona.system_prompt_extra:
             parts.append(f"\n{self.config.persona.system_prompt_extra}")
@@ -136,7 +154,10 @@ class Agent:
         history = await self.conversations.load_history(conv_id, platform, user_id)
         recent_memories = await self.store.get_recent_memories(10, user_id=user_id)
 
-        system_prompt = self._build_system_prompt(platform, recent_memories)
+        # RAG: search ingested documents for relevant chunks
+        relevant_docs = await self.store.search_documents(text, limit=5, user_id=user_id)
+
+        system_prompt = self._build_system_prompt(platform, recent_memories, relevant_docs)
 
         messages: list[Message] = [Message(role="system", content=system_prompt)]
         messages.extend(history)
@@ -284,11 +305,28 @@ class Agent:
                 result = f"Unknown tool: {tc.name}"
                 logger.warning("Unknown tool called: %s", tc.name)
 
+            # RAG: auto-ingest large file/PDF reads in background
+            if (
+                tc.name in _INGEST_TOOLS
+                and len(result) > _MIN_INGEST_SIZE
+                and not result.startswith("Error")
+            ):
+                source = tc.arguments.get("path", "unknown")
+                asyncio.create_task(self._auto_ingest(source, result, tool_context.user_id))
+
             tool_msg = Message(role="tool", content=result, tool_call_id=tc.id)
             messages.append(tool_msg)
             await self.conversations.save_message(conv_id, tool_msg)
 
         return messages
+
+    async def _auto_ingest(self, source: str, content: str, user_id: str) -> None:
+        """Background document ingestion for RAG."""
+        try:
+            count = await self.store.ingest_document(source, content, user_id)
+            logger.info("RAG: auto-ingested %d chunks from %s", count, source)
+        except Exception as e:
+            logger.error("RAG: auto-ingest failed for %s: %s", source, e)
 
 
 def _classify_error(e: Exception) -> str:

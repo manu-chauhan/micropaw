@@ -83,6 +83,8 @@ def _make_agent(provider: AIProvider, tools: list[Tool] | None = None) -> Agent:
     store.get_messages = AsyncMock(return_value=[])
     store.save_message = AsyncMock()
     store.get_recent_memories = AsyncMock(return_value=[])
+    store.search_documents = AsyncMock(return_value=[])
+    store.ingest_document = AsyncMock(return_value=0)
 
     agent = Agent(config, provider, registry, store)
     return agent

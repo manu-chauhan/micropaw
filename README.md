@@ -30,7 +30,7 @@ microclaw chat      # start talking
 
 - **Zero SDK dependencies** — Every AI provider (Claude, GPT-4o, Gemini, Ollama) talks raw HTTP via `httpx`. No `anthropic` package. No `openai` package. No `google-genai`. Switching providers is a config change, not a rewrite.
 
-- **Vector search, auto-configured** — Embeddings activate automatically: probes Ollama at startup, falls back to OpenAI, then sentence-transformers, then text search. Default model: `nomic-embed-text` (768d, 8k context). Zero config required.
+- **RAG out of the box** — Read a PDF on Telegram, ask about it from Discord next week. Documents are auto-chunked, embedded, and searchable across all channels. Embeddings auto-detect: Ollama -> OpenAI -> sentence-transformers. Zero config.
 
 - **Multi-agent delegation** — The main agent spawns sub-agents for parallel tasks. Sub-agents inherit all tools except `delegate` (no recursive spawning). Max 25 LLM rounds per sub-agent, configurable.
 
@@ -156,21 +156,54 @@ Override models: `CLAUDE_MODEL`, `OPENAI_MODEL`, `GEMINI_MODEL`, `OLLAMA_MODEL`
 
 ---
 
-## Memory & Vector Search
+## RAG — Read Once, Ask Anywhere
 
-**SQLite + auto-detected vector embeddings.** Shared across all channels. Persists across restarts.
+**Read a file or PDF on any channel. Ask about it later from any other channel. Zero config.**
 
-Auto-detect priority (zero config):
+<div align="center">
+
 ```
-Ollama (local, free) -> OpenAI (if key exists) -> sentence-transformers (offline) -> text search
+  User (Telegram):  "Read /home/manu/report.pdf"
+
+  MicroClaw:        [pdf_read] → reads text → auto-chunks → embeds in background
+                    "Here's a summary of your report..."
+
+               ╌╌╌  next day, different platform  ╌╌╌
+
+  User (Discord):   "What did the report say about revenue?"
+
+  MicroClaw:        [relevant chunks auto-injected into context]
+                    "According to your report, revenue grew 23% in Q4..."
 ```
 
-Default embedding model: `nomic-embed-text` (768 dims, 8192 token context, MTEB 59.4).
+</div>
 
-Override:
+**How it works:**
+
+1. **Auto-ingest** — When the agent reads a file or PDF (>500 chars), the content is automatically chunked (~2000 chars, 200 char overlap) and embedded in SQLite
+2. **Auto-retrieve** — On every user message, the query is embedded and matched against stored chunks via cosine similarity
+3. **Auto-inject** — Top 5 relevant chunks are injected into the system prompt as context for the LLM
+
+No extra tools, no commands, no user action needed. Just read and ask.
+
+### Embeddings (auto-detected, zero config)
+
+```
+Ollama (local, free) -> OpenAI (if key exists) -> sentence-transformers (offline) -> text search fallback
+```
+
+Default model: `nomic-embed-text` (768 dims, 8k token context). Override:
+
 ```json
 { "embedding": { "provider": "ollama", "model": "snowflake-arctic-embed" } }
 ```
+
+### Memory
+
+- **SQLite** — single file, persists across restarts, shared across all channels
+- **Document chunks** — stored in `document_chunks` table (BLOB embeddings, 5-10x faster than JSON)
+- **User memories** — explicit key-value facts via the `memory` tool, separate from document chunks
+- **Hybrid search** — vector similarity + text fallback when embeddings unavailable
 
 ---
 
@@ -338,7 +371,7 @@ src/microclaw/          6,392 LOC source + 2,632 LOC tests
  providers/             4 providers + failover (raw httpx, retry)
  channels/              6 channels
  tools/                 11 tools
- memory/                SQLite + vectors + embeddings
+ memory/                SQLite + vectors + embeddings + RAG chunker
 ```
 
 Full decision log: [`DECISIONS.md`](DECISIONS.md)

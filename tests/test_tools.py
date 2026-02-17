@@ -593,6 +593,138 @@ class TestDelegateTool:
 
 
 # ---------------------------------------------------------------------------
+# RAG: chunker tests
+# ---------------------------------------------------------------------------
+
+class TestChunker:
+    def test_short_text_single_chunk(self):
+        from microclaw.memory.chunker import chunk_text
+        assert chunk_text("hello world") == ["hello world"]
+
+    def test_empty_returns_empty(self):
+        from microclaw.memory.chunker import chunk_text
+        assert chunk_text("") == []
+        assert chunk_text("   ") == []
+
+    def test_splits_long_text(self):
+        from microclaw.memory.chunker import chunk_text
+        text = "word " * 1000  # ~5000 chars
+        chunks = chunk_text(text, max_chars=500, overlap=50)
+        assert len(chunks) > 1
+        for c in chunks:
+            assert len(c) <= 500
+
+    def test_overlap_preserves_context(self):
+        from microclaw.memory.chunker import chunk_text
+        text = "A" * 200 + " " + "B" * 200 + " " + "C" * 200
+        chunks = chunk_text(text, max_chars=250, overlap=50)
+        assert len(chunks) >= 2
+        # Overlap means end of chunk N appears in start of chunk N+1
+        if len(chunks) >= 2:
+            end_of_first = chunks[0][-30:]
+            assert any(end_of_first[i:i+10] in chunks[1] for i in range(len(end_of_first) - 10))
+
+    def test_prefers_paragraph_breaks(self):
+        from microclaw.memory.chunker import chunk_text
+        text = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph."
+        chunks = chunk_text(text, max_chars=30, overlap=5)
+        assert any("First paragraph." in c for c in chunks)
+
+
+# ---------------------------------------------------------------------------
+# RAG: BLOB serialization tests
+# ---------------------------------------------------------------------------
+
+class TestBlobSerialization:
+    def test_roundtrip(self):
+        from microclaw.memory.embeddings import serialize_embedding_blob, deserialize_embedding_blob
+        original = [0.1, 0.2, 0.3, 0.4, 0.5]
+        blob = serialize_embedding_blob(original)
+        assert isinstance(blob, bytes)
+        result = deserialize_embedding_blob(blob)
+        assert len(result) == len(original)
+        for a, b in zip(original, result):
+            assert abs(a - b) < 1e-6
+
+    def test_empty_embedding(self):
+        from microclaw.memory.embeddings import serialize_embedding_blob, deserialize_embedding_blob
+        assert serialize_embedding_blob([]) is None
+        assert deserialize_embedding_blob(None) == []
+        assert deserialize_embedding_blob(b"") == []
+
+
+# ---------------------------------------------------------------------------
+# RAG: ingest + search roundtrip tests
+# ---------------------------------------------------------------------------
+
+class TestDocumentIngest:
+    @pytest.mark.asyncio
+    async def test_ingest_and_search(self, tmp_path):
+        from microclaw.memory.store import MemoryStore
+        from microclaw.memory.embeddings import NullEmbedding
+
+        store = MemoryStore(str(tmp_path / "test.db"), NullEmbedding())
+        await store.init()
+
+        content = "Revenue grew 23% in Q4.\n\nExpenses were reduced by 10%.\n\nNet profit margin reached 18%."
+        count = await store.ingest_document("/tmp/report.pdf", content, "user1")
+        assert count >= 1
+
+        # Text fallback search (NullEmbedding)
+        results = await store.search_documents("revenue", limit=5, user_id="user1")
+        assert len(results) >= 1
+        assert any("Revenue" in r["content"] for r in results)
+        assert results[0]["source"] == "/tmp/report.pdf"
+
+        await store.close()
+
+    @pytest.mark.asyncio
+    async def test_reingest_replaces_old_chunks(self, tmp_path):
+        from microclaw.memory.store import MemoryStore
+        from microclaw.memory.embeddings import NullEmbedding
+
+        store = MemoryStore(str(tmp_path / "test.db"), NullEmbedding())
+        await store.init()
+
+        await store.ingest_document("/tmp/file.txt", "Old content here", "user1")
+        await store.ingest_document("/tmp/file.txt", "New content replaced", "user1")
+
+        results = await store.search_documents("content", limit=10, user_id="user1")
+        contents = " ".join(r["content"] for r in results)
+        assert "New content replaced" in contents
+        assert "Old content" not in contents
+
+        await store.close()
+
+    @pytest.mark.asyncio
+    async def test_empty_content_not_ingested(self, tmp_path):
+        from microclaw.memory.store import MemoryStore
+        from microclaw.memory.embeddings import NullEmbedding
+
+        store = MemoryStore(str(tmp_path / "test.db"), NullEmbedding())
+        await store.init()
+
+        count = await store.ingest_document("/tmp/empty.txt", "", "user1")
+        assert count == 0
+
+        await store.close()
+
+    @pytest.mark.asyncio
+    async def test_cross_user_isolation(self, tmp_path):
+        from microclaw.memory.store import MemoryStore
+        from microclaw.memory.embeddings import NullEmbedding
+
+        store = MemoryStore(str(tmp_path / "test.db"), NullEmbedding())
+        await store.init()
+
+        await store.ingest_document("/tmp/secret.pdf", "Classified information here", "alice")
+        results = await store.search_documents("classified", limit=5, user_id="bob")
+        assert len(results) == 0
+
+        await store.close()
+
+
+# ---------------------------------------------------------------------------
 # Shell blocking pattern tests
 # ---------------------------------------------------------------------------
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import struct
 from abc import ABC, abstractmethod
 
 import httpx
@@ -150,3 +151,17 @@ def deserialize_embedding(data: str | None) -> list[float]:
     if not data:
         return []
     return json.loads(data)
+
+
+# --- BLOB format (for document_chunks table — 5-10x faster than JSON) ---
+
+def serialize_embedding_blob(embedding: list[float]) -> bytes | None:
+    if not embedding:
+        return None
+    return struct.pack(f"{len(embedding)}f", *embedding)
+
+
+def deserialize_embedding_blob(data: bytes | None) -> list[float]:
+    if not data:
+        return []
+    return list(struct.unpack(f"{len(data) // 4}f", data))
