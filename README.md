@@ -2,319 +2,198 @@
 
 **Your AI. Your machine. Your keys.**
 
-A personal AI assistant that runs on your machine, talks to any LLM, works across **6 messaging platforms simultaneously**, delegates to sub-agents, and does it all in ~6,200 lines of Python with 209 tests. No SDK bloat, no cloud lock-in, no telemetry.
+A personal AI assistant in ~6,200 lines of Python. No SDK bloat, no cloud lock-in, no telemetry.
+
+```
+4 AI providers    Claude, GPT-4o, Gemini, Ollama (local)
+6 channels        Terminal, Telegram, Discord, Slack, WhatsApp, WebChat
+11 tools          Search, browse, files, shell, memory, vision, PDF, delegation
+0 SDK deps        Raw HTTP to every provider via httpx
+227 tests         <1 second
+```
 
 ```bash
 pip install .
-microclaw setup     # pick your AI provider, paste your key
+microclaw setup     # pick your provider, paste your key
 microclaw chat      # start talking
 ```
 
-That's it. You're chatting with an AI that can search the web, browse pages, read/write files, execute shell commands, analyze images, read PDFs, delegate tasks to sub-agents, and remember things across conversations — all from your terminal.
-
-Want the same AI on Telegram? Discord? Slack? All at once?
-
-```bash
-microclaw connect telegram    # guided setup, validates your token live
-microclaw connect discord     # generates bot invite URL for you
-microclaw start               # launch ALL channels simultaneously
-```
-
-**One AI. Every platform. Shared memory.** Your assistant remembers everything — whether you talked to it from your terminal, Telegram, or Discord. Same brain, everywhere.
-
 ---
 
-## At a Glance
+## Why MicroClaw
 
-| | MicroClaw | Typical AI Wrapper | Enterprise AI Platform |
+| | MicroClaw | Typical AI Wrapper | Enterprise Platform |
 |---|---|---|---|
 | **Lines of code** | ~6,200 | ~500 | 200,000+ |
-| **AI providers** | 4 (Claude, GPT, Gemini, Ollama) | 1 | 2-3 |
-| **Channels** | 6 (Terminal, Telegram, Discord, Slack, WhatsApp, WebChat) | 1 | 3-5 |
-| **Tools** | 11 (web, files, shell, memory, vision, PDF, delegation) | 0-2 | 10+ |
-| **Multi-agent** | Yes (sub-agent delegation) | No | Sometimes |
-| **SDK dependencies** | 0 (raw HTTP to every provider) | 1-3 | 10+ |
-| **Local/offline mode** | Yes (Ollama) | No | No |
-| **Your keys stay local** | Yes | Maybe | No |
-| **Failover between providers** | Yes (automatic) | No | Sometimes |
-| **Multi-platform at once** | Yes (all 6 simultaneously) | No | Sometimes |
-| **Self-healing channels** | Yes (auto-restart on crash) | No | Sometimes |
+| **AI providers** | 4 (any model) | 1 | 2-3 |
+| **Channels** | 6 simultaneous | 1 | 3-5 |
+| **Tools** | 11 | 0-2 | 10+ |
+| **SDK dependencies** | 0 | 1-3 | 10+ |
+| **Local/offline** | Yes (Ollama) | No | No |
+| **Multi-agent** | Yes | No | Sometimes |
+| **Failover** | Automatic | No | Sometimes |
+| **Self-healing** | Auto-restart on crash | No | Sometimes |
 | **Setup time** | 2 minutes | 2 minutes | 2 weeks |
 
 ---
 
-## Features
+## Key Features
 
 ### Zero SDK Philosophy
 
-Every AI provider talks raw HTTP via `httpx`. No `anthropic` package. No `openai` package. No `google-genai` package. This means:
-- **Fewer dependencies** — less to install, less to break
-- **Faster startup** — no heavy SDK initialization
-- **Full control** — you see exactly what goes over the wire
-- **Provider-agnostic** — switching providers is a config change, not a rewrite
+Every AI provider talks raw HTTP via `httpx`. No `anthropic` package. No `openai` package. No `google-genai` package.
+
+- Fewer dependencies, fewer breakages
+- Full control over what goes over the wire
+- Switching providers is a config change, not a rewrite
+
+### One AI, Every Platform
+
+Set up once. Your AI runs on **all platforms simultaneously** with shared memory.
+
+```
+Terminal  Telegram  Discord  Slack  WhatsApp  WebChat
+    \        |        |       |       |        /
+     \       |        |       |       |       /
+      +------+--------+-------+-------+------+
+                       |
+                   [Gateway]
+                       |
+              +--------+--------+
+              |        |        |
+           [Agent]  [Tools]  [Memory]
+              |                  |
+         [Provider]         [SQLite + vectors]
+```
+
+```bash
+microclaw connect telegram    # guided setup, validates token live
+microclaw connect discord     # auto-generates bot invite URL
+microclaw start               # launch ALL channels at once
+```
+
+Your assistant remembers a conversation from Telegram when you talk to it from Discord. Same brain, everywhere.
+
+| Channel | Setup | Key Feature |
+|---------|-------|-------------|
+| **Terminal** | Built-in | Streaming, slash commands, tool visibility |
+| **Telegram** | `connect telegram` | Phone + desktop, user whitelist |
+| **Discord** | `connect discord` | Per-server bot, auto invite URL |
+| **Slack** | `connect slack` | Socket Mode, works behind firewalls |
+| **WhatsApp** | `connect whatsapp` | Meta Business API webhook |
+| **WebChat** | `connect webchat` | Raw RFC 6455 WebSocket, real-time streaming |
+
+### 11 Built-In Tools
+
+| Tool | What it does |
+|------|-------------|
+| `web_search` | Brave -> SearXNG -> DuckDuckGo fallback chain |
+| `web_browse` | Full browser automation via Playwright |
+| `http_request` | HTTP requests with SSRF protection per hop |
+| `file_read` | Read files with path security (blocks `/proc`, `.ssh/`, `.env`) |
+| `file_write` | Create and modify files |
+| `shell` | Execute commands (40+ dangerous patterns blocked) |
+| `memory` | Save, search, list, delete facts across sessions |
+| `vision` | Analyze images via provider vision API |
+| `pdf_read` | Extract text from PDFs with page ranges |
+| `sessions` | List and export conversation history |
+| `delegate` | Spin up sub-agents for parallel tasks |
+
+Disable any tool:
+```json
+{ "permissions": { "disabled_tools": ["shell", "file_write"] } }
+```
 
 ### Multi-Agent Delegation
 
-MicroClaw's main agent can spin up independent sub-agents to handle sub-tasks:
+The main agent can delegate sub-tasks to independent sub-agents:
 
 ```
 You > Research quantum computing AND summarize today's AI news
 
-MicroClaw > [delegate] task="Research recent quantum computing breakthroughs"
-            [delegate] task="Summarize today's top AI news"
+MicroClaw > [delegate] "Research quantum computing breakthroughs"
+            [delegate] "Summarize today's top AI news"
 
             Here's what I found on both fronts...
 ```
 
-- **Inline mode** — blocks until the sub-agent finishes, returns result directly
-- **Background mode** — fire-and-forget via the message bus, result delivered when ready
-- **Secure by design** — sub-agents have **NO tool access** (`tools=None` always). They physically cannot read files, execute commands, or access memory
-- **Capped iterations** — max 10 LLM rounds per sub-agent, prevents runaway token burn
+- **Inline** -- blocks until done, returns result
+- **Background** -- fire-and-forget via message bus
+- **Secure** -- sub-agents have **zero tool access** (`tools=None` always)
+- **Capped** -- max 10 LLM rounds per sub-agent
 
-### One AI, Every Platform
+### 4 Providers with Automatic Failover
 
-Set up once — your AI runs on **all your platforms simultaneously** with shared memory and conversation history.
-
-```
-┌──────────┐    ┌──────────┐    ┌──────────┐
-│ Terminal  │    │ Telegram  │    │ Discord  │
-│ (You)     │    │ (Mobile)  │    │ (Server) │
-└────┬──────┘    └─────┬─────┘    └─────┬────┘
-     │                 │                │
-     └────────┬────────┴────────┬───────┘
-              │                 │
-         ┌────▼─────┐    ┌─────▼──────┐
-         │ Gateway  │───→│   Agent    │──→ Sub-Agents
-         │ (Router) │    │  (Brain)   │
-         └──────────┘    └─────┬──────┘
-                               │
-              ┌────────────────┼────────────────┐
-              │                │                │
-        ┌─────▼─────┐  ┌──────▼──────┐  ┌──────▼──────┐
-        │ Provider  │  │   Tools     │  │  Memory     │
-        │ (LLM)    │  │ (11 tools)  │  │ (SQLite)    │
-        └───────────┘  └─────────────┘  └─────────────┘
-```
-
-**How it works:**
-
-1. **Set up your AI once** — pick a provider, paste your API key
-2. **Connect channels** — `microclaw connect telegram`, `microclaw connect discord`, etc.
-3. **Launch everything** — `microclaw start` boots all enabled channels
-4. **Talk from anywhere** — your AI responds on every platform with the same context
-
-Your assistant remembers a conversation you had on Telegram when you later talk to it from Discord. Memory is shared. Conversations persist across restarts.
-
-#### Supported Channels
-
-| Channel | Setup | How It Connects | Key Feature |
-|---------|-------|-----------------|-------------|
-| **Terminal** | Zero config | Built-in REPL | Streaming, slash commands, markdown, tool visibility |
-| **Telegram** | `microclaw connect telegram` | BotFather token, live validated | Works on phone + desktop, user whitelist |
-| **Discord** | `microclaw connect discord` | Auto-generates invite URL | Per-server bot, user whitelist |
-| **Slack** | `microclaw connect slack` | Socket Mode — no public URL | Works behind firewalls, multi-workspace |
-| **WhatsApp** | `microclaw connect whatsapp` | Meta Business API webhook | End-to-end on WhatsApp, phone whitelist |
-| **WebChat** | `microclaw connect webchat` | Raw WebSocket (RFC 6455) | Connect any web frontend, real-time streaming |
-
-Every `microclaw connect` command walks you through setup step-by-step and **validates your tokens live** before saving — no guessing if things work.
-
-#### Self-Healing Channels
-
-Discord and Slack channels run as background tasks. If a channel crashes mid-session, MicroClaw **automatically detects and restarts it** — no manual intervention needed. One crashed channel never takes down the rest.
+| Provider | Type | Streaming | Tools | Vision |
+|----------|------|-----------|-------|--------|
+| **Claude** (Anthropic) | Cloud | Yes | Yes | Yes |
+| **GPT-4o** (OpenAI) | Cloud | Yes | Yes | Yes |
+| **Gemini** (Google) | Cloud | Yes | Yes | Yes |
+| **Ollama** | Local | Yes | Yes | Yes |
 
 ```
-WARN  Discord disconnected — library will auto-reconnect
-INFO  Discord session resumed
+Primary: Claude -> Fallback: GPT-4o -> Fallback: Ollama (local)
 ```
 
-```
-ERROR Slack task crashed: ConnectionError — restarting in 5s
-INFO  Slack channel connected.
-```
+Retries with exponential backoff on 429/503 before switching. If Claude is down, your assistant keeps working.
 
-#### Run All Channels at Once
-
-```bash
-microclaw start
-```
-
-```
-INFO  Gateway running with 4 channel(s) using claude provider
-INFO  Terminal channel ready
-INFO  Telegram bot @YourBot started
-INFO  Discord bot MyAssistant#1234 connected
-INFO  WebChat listening on ws://127.0.0.1:8765
-```
-
-#### Verify Before Launch
-
-```bash
-microclaw test    # validates provider + ALL channel tokens without starting
-```
-
-```
-✓ Claude API key valid (claude-sonnet-4-20250514)
-✓ Telegram bot @YourBot reachable
-✓ Discord bot MyAssistant#1234 reachable
-✗ Slack — invalid bot token
-```
-
-### Tools
-
-MicroClaw is a tool-using AI agent. It doesn't just chat — it acts.
-
-| Tool | Description |
-|------|-------------|
-| `web_search` | Search the web (Brave → SearXNG → DuckDuckGo fallback chain) |
-| `web_browse` | Browse any URL and extract content (Playwright) |
-| `http_request` | Make HTTP requests with SSRF protection |
-| `file_read` | Read any file on your system (with path security) |
-| `file_write` | Write and create files |
-| `shell` | Execute shell commands (sandboxed, 40+ dangerous patterns blocked) |
-| `memory` | Long-term memory — save, search, list, delete facts |
-| `vision` | Analyze images via your AI provider's vision API |
-| `pdf_read` | Read and extract text from PDFs |
-| `sessions` | Manage conversation sessions |
-| `delegate` | Spin up sub-agents to handle independent tasks |
-
-All tools can be individually disabled via config:
-```json
-{
-  "permissions": {
-    "disabled_tools": ["shell", "file_write"]
-  }
-}
-```
+Override models via env vars: `CLAUDE_MODEL`, `OPENAI_MODEL`, `GEMINI_MODEL`, `OLLAMA_MODEL`.
 
 ### Memory & Context
 
-- **Long-term memory** with SQLite + optional vector search — persists across restarts
-- **Shared across all channels** — remember something on Telegram, recall it from Discord
-- **Embeddings**: local sentence-transformers (no API needed), OpenAI, or Ollama
-- **Auto-summarizes** old conversation when context grows large (never deletes history)
-- **Per-user, per-platform** conversation tracking
-- **Export conversations** — `microclaw export` dumps history as JSON or Markdown
+- **SQLite + optional vector search** -- persists across restarts
+- **Shared across all channels** -- remember on Telegram, recall from Discord
+- **Auto-summarizes** old context when conversations grow large
+- **Embeddings**: local sentence-transformers, OpenAI, or Ollama
+- **Export**: `microclaw export` dumps history as JSON or Markdown
 
-### Web Search — Smart Fallback Chain
-
-Multi-backend search with automatic failover:
+### Web Search -- Zero Config
 
 ```
-Brave (if API key set) → SearXNG (3 public instances) → DuckDuckGo (last resort)
+Brave (if API key) -> SearXNG (3 public instances) -> DuckDuckGo (last resort)
 ```
 
-**Zero config** — works out of the box using free SearXNG public instances. No API key needed.
+Works out of the box. No API key needed. Upgrade to Brave for best quality: set `BRAVE_API_KEY`.
 
-| Backend | Quality | Cost | API Key | Notes |
-|---------|---------|------|---------|-------|
-| **Brave Search** | Best | ~1,000 free/month | Yes | Independent 30B+ page index |
-| **SearXNG** | High | Free, unlimited | No | Aggregates Google/Bing/DDG results |
-| **DuckDuckGo** | Low | Free, unlimited | No | Instant answers only, not full results |
+### Self-Healing Channels
 
-Upgrade to Brave (optional): set `BRAVE_API_KEY` env var or add `brave_api_key` to search config.
-
-Self-host SearXNG (optional): `docker run -d -p 8888:8080 searxng/searxng` and set `SEARXNG_URL`.
-
-### Example Session
+Channels run as background tasks. If one crashes, MicroClaw detects and restarts it. Other channels keep running.
 
 ```
-You > Search for the latest Python 3.13 features and summarize them
-
-MicroClaw > [web_search] query="Python 3.13 new features"
-            [web_browse] url="https://docs.python.org/3.13/whatsnew/3.13.html"
-
-            Python 3.13 brings several notable features:
-
-            - **Free-threaded mode** — experimental support for running
-              without the GIL (PEP 703)
-            - **JIT compiler** — experimental copy-and-patch JIT (PEP 744)
-            - **Improved error messages** — better tracebacks with color
-            ...
-
-You > Save that to a file called python313.md
-
-MicroClaw > [file_write] path="python313.md"
-            Done! Saved to python313.md (847 bytes)
-
-You > Remember that I'm interested in Python release notes
-
-MicroClaw > [memory] action="save"
-            Got it — I'll remember that.
-```
-
-Tool calls are visible in the terminal so you always know what your agent is doing.
-
----
-
-## Supported Providers
-
-| Provider | Type | Model | Streaming | Tool Use | Vision |
-|----------|------|-------|-----------|----------|--------|
-| **Claude** (Anthropic) | Cloud | claude-sonnet-4-20250514 | Yes | Yes | Yes |
-| **GPT-4o** (OpenAI) | Cloud | gpt-4o | Yes | Yes | Yes |
-| **Gemini** (Google) | Cloud | gemini-2.5-flash | Yes | Yes | Yes |
-| **Ollama** (Local) | Local | llama3.1 (any model) | Yes | Yes | Yes |
-
-All models are configurable. Failover chain lets you set backup providers:
-```
-Primary: Claude → Fallback 1: GPT-4o → Fallback 2: Ollama (local)
-```
-
-If Claude is down, your assistant keeps working. Failover retries with exponential backoff on transient errors (429, 503) before switching providers.
-
-### Custom API Base URLs
-
-Point any cloud provider at a compatible server (vLLM, LM Studio, Azure OpenAI, etc.):
-```json
-{
-  "provider_config": {
-    "openai": {
-      "base_url": "http://localhost:8000",
-      "api_key": "not-needed",
-      "model": "my-local-model"
-    }
-  }
-}
+ERROR Slack task crashed: ConnectionError -- restarting in 5s
+INFO  Slack channel connected.
 ```
 
 ---
 
 ## Quick Start
 
-### Terminal only (simplest)
-
+**Terminal only:**
 ```bash
 pip install .
-microclaw setup       # pick provider, paste API key
-microclaw chat        # start chatting
+microclaw setup && microclaw chat
 ```
 
-### Multi-channel
-
+**Multi-channel:**
 ```bash
 pip install ".[telegram,discord]"
-microclaw setup                   # pick provider, paste API key
-microclaw connect telegram        # paste BotFather token — validated live
-microclaw connect discord         # paste bot token — invite URL generated
-microclaw test                    # verify everything works
-microclaw start                   # launch all channels at once
+microclaw setup
+microclaw connect telegram
+microclaw connect discord
+microclaw start               # all channels at once
 ```
 
-### Fully local (no API keys, no internet)
-
+**Fully local (no internet):**
 ```bash
-# Install Ollama: https://ollama.com
 ollama pull llama3.1
 pip install .
-microclaw setup                   # select Ollama
-microclaw chat                    # fully offline AI assistant
+microclaw setup               # select Ollama
+microclaw chat
 ```
 
 ---
 
 ## Installation
-
-### From source
 
 ```bash
 git clone https://gitlab.com/MANU-CHAUHAN/microclaw.git
@@ -322,22 +201,20 @@ cd microclaw
 pip install .
 ```
 
-### With extras (install only what you need)
+Install only what you need:
 
 ```bash
 pip install ".[telegram]"      # Telegram bot
 pip install ".[discord]"       # Discord bot
-pip install ".[slack]"         # Slack bot (Socket Mode)
+pip install ".[slack]"         # Slack (Socket Mode)
 pip install ".[whatsapp]"      # WhatsApp (aiohttp webhook)
 pip install ".[browser]"       # Playwright browser automation
 pip install ".[pdf]"           # PDF reading
 pip install ".[embeddings]"    # Local sentence-transformer embeddings
 pip install ".[all]"           # Everything
-playwright install chromium    # Required if using browser tool
 ```
 
-### Docker
-
+**Docker:**
 ```bash
 docker compose run --rm microclaw chat              # Basic
 docker compose --profile browser up                  # + Playwright
@@ -350,64 +227,45 @@ docker compose --profile full up                     # Everything
 
 | Command | Description |
 |---------|-------------|
-| `microclaw setup` | Interactive wizard — provider, API key, persona, permissions, embeddings |
-| `microclaw chat` | Terminal-only chat session (with slash commands) |
-| `microclaw start` | Start gateway with **all enabled channels simultaneously** |
-| `microclaw connect [channel]` | Guided channel setup with **live token validation** |
-| `microclaw test` | Validate provider + all channel tokens (without starting) |
-| `microclaw config` | Show current configuration (secrets redacted) |
+| `microclaw setup` | Interactive wizard -- provider, API key, persona, permissions |
+| `microclaw chat` | Terminal chat session |
+| `microclaw start` | Launch all enabled channels |
+| `microclaw connect [channel]` | Guided channel setup with live token validation |
+| `microclaw test` | Validate provider + all channel tokens |
+| `microclaw config` | Show configuration (secrets redacted) |
 | `microclaw status` | System status overview |
-| `microclaw doctor` | Diagnostics — Python version, dependencies, disk, keys |
-| `microclaw export` | Export conversation history (JSON or Markdown) |
-| `microclaw reset` | Delete all configuration and data |
+| `microclaw doctor` | Diagnostics -- Python, deps, disk, keys |
+| `microclaw export` | Export conversations (JSON/Markdown) |
+| `microclaw reset` | Delete all config and data |
 
-### Terminal Slash Commands
-
-During a chat session:
-
-| Command | Description |
-|---------|-------------|
-| `/help` | Show available commands |
-| `/new` | Start a fresh conversation |
-| `/tools` | List available tools and their status |
-| `/usage` | Show token usage for this session |
-| `/clear` | Clear the screen |
-| `/config` | Show current config summary (redacted) |
-| `quit` | Exit MicroClaw |
+**Terminal slash commands:** `/help`, `/new`, `/tools`, `/usage`, `/clear`, `/config`, `quit`
 
 ---
 
 ## Configuration
 
-Config lives at `~/.microclaw/config.json` with `0600` permissions.
+Config: `~/.microclaw/config.json` (0600 permissions, warns if world-readable).
 
 ### Environment Variables
 
-Environment variables override config file values:
+All config values can be overridden via env vars. See `.env.example` for the full list.
 
-| Variable | Maps to |
+| Variable | Purpose |
 |----------|---------|
-| `MICROCLAW_PROVIDER` | Primary AI provider (`claude`, `openai`, `gemini`, `ollama`) |
+| `MICROCLAW_PROVIDER` | Primary provider (`claude`/`openai`/`gemini`/`ollama`) |
 | `ANTHROPIC_API_KEY` | Claude API key |
 | `OPENAI_API_KEY` | OpenAI API key |
-| `GEMINI_API_KEY` | Google Gemini API key |
+| `GEMINI_API_KEY` | Gemini API key |
 | `OLLAMA_HOST` | Ollama server URL |
-| `TELEGRAM_BOT_TOKEN` | Telegram bot token |
-| `DISCORD_BOT_TOKEN` | Discord bot token |
+| `CLAUDE_MODEL` | Override Claude model |
+| `OPENAI_MODEL` | Override OpenAI model |
+| `GEMINI_MODEL` | Override Gemini model |
+| `OLLAMA_MODEL` | Override Ollama model |
+| `BRAVE_API_KEY` | Brave Search API key |
+| `SEARXNG_URL` | Self-hosted SearXNG URL |
+| `TELEGRAM_BOT_TOKEN` | Telegram token |
+| `DISCORD_BOT_TOKEN` | Discord token |
 | `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` | Slack tokens |
-| `WHATSAPP_TOKEN` / `WHATSAPP_PHONE_ID` | WhatsApp credentials |
-| `WHATSAPP_VERIFY_TOKEN` | WhatsApp webhook verify token |
-| `WEBCHAT_AUTH_TOKEN` | WebChat authentication token |
-| `CLAUDE_MODEL` | Override Claude model (e.g., `claude-opus-4-6`) |
-| `OPENAI_MODEL` | Override OpenAI model (e.g., `gpt-4-turbo`) |
-| `GEMINI_MODEL` | Override Gemini model (e.g., `gemini-pro`) |
-| `OLLAMA_MODEL` | Override Ollama model (e.g., `mistral`) |
-| `BRAVE_API_KEY` | Brave Search API key (optional, best search quality) |
-| `SEARXNG_URL` | Self-hosted SearXNG instance URL |
-| `MICROCLAW_FILE_LOG` | Enable file logging (`1`/`true`/`yes`) |
-| `MICROCLAW_LOG_FILE` | Custom log file path (enables file logging) |
-
-See `.env.example` for the full list.
 
 ### Permissions
 
@@ -423,12 +281,6 @@ See `.env.example` for the full list.
 }
 ```
 
-- `allow_shell` — enable shell command execution
-- `allow_file_write` — enable file creation/modification
-- `allow_web_browse` — enable Playwright browser automation
-- `confirm_dangerous` — require user confirmation for dangerous shell commands
-- `disabled_tools` — list of tool names to completely disable
-
 ### Persona
 
 ```json
@@ -441,111 +293,59 @@ See `.env.example` for the full list.
 }
 ```
 
-### Rate Limiting
+### Custom API Base URLs
 
+Point any provider at a compatible server (vLLM, LM Studio, Azure OpenAI):
 ```json
 {
-  "rate_limit": {
-    "messages_per_minute": 20,
-    "burst_limit": 5
+  "provider_config": {
+    "openai": {
+      "base_url": "http://localhost:8000",
+      "api_key": "not-needed",
+      "model": "my-local-model"
+    }
   }
 }
 ```
 
 ---
 
+## Security
+
+- **Sub-agent isolation** -- `tools=None` always, cannot read files or execute commands
+- **Shell blocking** -- 40+ regex patterns block reverse shells, `rm -rf /`, env leaks, eval/exec, download-and-execute
+- **Dangerous command confirmation** -- `rm`, `sudo`, `git push` require explicit confirmation
+- **Path security** -- blocks `/proc`, `/sys`, `.ssh/`, `.env`, symlinks, path traversal
+- **SSRF protection** -- blocks localhost, private IPs, metadata endpoints, DNS rebinding
+- **Auth** -- timing-safe `secrets.compare_digest()` for all token comparisons
+- **WebSocket limits** -- 1MB max frame, 50 max headers, outbound truncation
+- **Rate limiting** -- per-user sliding window + burst detection
+- **Config protection** -- 0600 permissions, world-readable warning on load
+- **Cross-origin redirect safety** -- strips Authorization headers on host change
+- **No telemetry** -- nothing phones home, ever
+
+---
+
 ## Architecture
 
 ```
-src/microclaw/          ~6,200 LOC source + ~2,200 LOC tests
-├── cli.py              # Click CLI (11 commands)
-├── config.py           # Single Pydantic config model
-├── connector.py        # Guided channel setup + live token validation
-├── gateway.py          # Central coordinator + rate limiter + bus consumer
-├── bus.py              # Async message bus (bounded queues, backpressure)
-├── security.py         # SSRF + path security + DNS resolution checks
-├── setup_wizard.py     # Interactive setup with Ollama validation + model picker
-├── core/
-│   ├── agent.py        # Agent loop (streaming + tool calls + error classification)
-│   ├── subagent.py     # Sub-agent loop (no tools, capped iterations)
-│   ├── context.py      # Context compaction + auto-summarization
-│   └── conversation.py # Conversation history + session management
-├── providers/          # 4 providers + failover (all raw httpx, retry w/ backoff)
-├── channels/           # 6 channels (terminal, web, telegram, discord, slack, whatsapp)
-├── tools/              # 11 tools (web, files, shell, memory, vision, pdf, sessions, delegate)
-├── memory/             # SQLite + vector search + embeddings (local/OpenAI/Ollama)
-└── utils/
-    └── logger.py       # Rich console + rotating file logging
+src/microclaw/          ~6,240 LOC source + ~2,450 LOC tests
+ cli.py                 Click CLI (11 commands)
+ config.py              Single Pydantic config model
+ connector.py           Guided channel setup + live validation
+ gateway.py             Central coordinator + rate limiter + bus
+ bus.py                 Async message bus (bounded queues)
+ security.py            SSRF + path security + DNS checks
+ core/
+   agent.py             Agent loop (streaming, tools, caching, errors)
+   subagent.py          Sub-agent loop (no tools, capped)
+   context.py           Context compaction + auto-summarization
+   conversation.py      History + session management
+ providers/             4 providers + failover (raw httpx, retry)
+ channels/              6 channels
+ tools/                 11 tools
+ memory/                SQLite + vectors + embeddings
 ```
-
-### Key Design Decisions
-
-- **All providers use raw `httpx`** — no AI SDK packages installed
-- **WebChat uses raw TCP + RFC 6455 framing** — no web framework dependency
-- **Sub-agents have zero tool access** — `tools=None` always, secure by design
-- **Failover** fallbacks use non-streaming to prevent partial content leaks
-- **Retry with exponential backoff** on transient errors (429, 503) with Retry-After header support
-- **Channel dependencies are optional extras** — install only what you need
-- **Self-healing channels** — background task monitoring with automatic crash restart
-- **Message bus** — bounded queues (maxsize=100) with backpressure for sub-agent delivery
-- **Graceful HTTP client cleanup** — all providers implement `close()` for proper connection pool teardown
-- **SQLite busy_timeout** — 5-second timeout prevents "database is locked" errors
-- **Message size validation** — configurable max message size prevents memory exhaustion
-- **Context compaction is safe** — if summarization fails, all original messages are preserved
-- **Tool result caching** — per-message cache for read-only tools, avoids duplicate API calls within a conversation turn
-- **Channel failure isolation** — one channel crashing doesn't take down the rest
-
-Full decision log: [`DECISIONS.md`](DECISIONS.md)
-
----
-
-## Security
-
-MicroClaw takes security seriously:
-
-- **Sub-agent isolation** — sub-agents pass `tools=None`, physically cannot call tools, read files, or execute shell commands
-- **Shell command blocking** — 40+ regex patterns block `rm -rf /`, reverse shells, env var leaks, `eval`/`source`/`exec`, download-and-execute, data exfiltration
-- **Dangerous command confirmation** — `rm`, `sudo`, `git push`, `pip install` require explicit user confirmation
-- **Path security** — blocks `/proc`, `/sys`, `/etc/shadow`, `/etc/passwd`, `.ssh/`, `.env`, path traversal (`../`)
-- **SSRF protection** — blocks `localhost`, `127.0.0.1`, `169.254.x.x`, `10.x.x.x`, `192.168.x.x`, `.internal`/`.local` domains, DNS resolution failures
-- **Timing-safe auth** — `secrets.compare_digest()` for all token comparisons
-- **WebSocket limits** — 1MB max frame size, 50 max headers to prevent DoS
-- **Rate limiting** — per-user sliding window + burst detection at the gateway level
-- **Config permissions** — `~/.microclaw/config.json` is `0600` (owner-only read/write)
-- **No telemetry** — nothing phones home, ever
-
----
-
-## Shell Completion
-
-```bash
-eval "$(_MICROCLAW_COMPLETE=bash_source microclaw)"    # Bash
-eval "$(_MICROCLAW_COMPLETE=zsh_source microclaw)"     # Zsh
-eval "$(_MICROCLAW_COMPLETE=fish_source microclaw)"    # Fish
-```
-
----
-
-## Roadmap
-
-### v0.2.0 — Harden & Polish (complete)
-
-| # | Feature | Status |
-|---|---------|--------|
-| 1 | **209 tests** (was 125) | Agent loop, caching, error classification, gateway, WebChat, providers, conversations |
-| 2 | **Gemini token tracking** | Parse `usageMetadata` from streaming chunks — `/usage` works for all providers |
-| 3 | **Model env var overrides** | `CLAUDE_MODEL`, `OPENAI_MODEL`, `GEMINI_MODEL`, `OLLAMA_MODEL` |
-| 4 | **WebChat origin checking** | `allowed_origins` config wired into WebSocket handshake |
-| 5 | **Smart context compaction** | LLM summarization of old messages — already in v0.1.0 |
-| 6 | **Tool result caching** | Per-message cache for read-only tools (web_search, file_read, web_browse, etc.) |
-| 7 | **Channel streaming** | Telegram/Discord/Slack edit-in-place with throttling — already in v0.1.0 |
-
-### Future (v0.3.0+)
-
-- MCP (Model Context Protocol) support — external tool servers
-- A2UI — agent-generated UIs over WebSocket
-- Plugin system — user-defined tools from `~/.microclaw/plugins/`
-- Multi-user auth for shared deployments
 
 Full decision log: [`DECISIONS.md`](DECISIONS.md)
 
@@ -555,9 +355,15 @@ Full decision log: [`DECISIONS.md`](DECISIONS.md)
 
 ```bash
 pip install ".[dev]"
-pytest                 # 209 tests, <1s
-ruff check src/        # Linting
-mypy src/              # Type checking
+pytest                 # 227 tests, <1s
+ruff check src/
+mypy src/
+```
+
+Shell completion:
+```bash
+eval "$(_MICROCLAW_COMPLETE=bash_source microclaw)"    # Bash
+eval "$(_MICROCLAW_COMPLETE=zsh_source microclaw)"     # Zsh
 ```
 
 ---
