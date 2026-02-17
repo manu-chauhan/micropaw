@@ -26,6 +26,14 @@ paw setup     # pick provider, paste key
 paw chat      # start talking
 ```
 
+**Or from source:**
+```bash
+git clone https://github.com/manu-chauhan/micropaw.git
+cd micropaw
+pip install .
+paw setup && paw chat
+```
+
 ---
 
 ## Highlights
