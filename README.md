@@ -93,7 +93,7 @@ paw chat      # start talking
 | | **MicroPaw** | **OpenClaw** | **NanoClaw** | **PicoClaw** | **MimiClaw** |
 |---|---|---|---|---|---|
 | **Language** | Python | TypeScript | TypeScript | Go | C |
-| **Codebase** | ~7,100 LOC | ~430k LOC | ~500 LOC | ~4k LOC | ~15k LOC |
+| **Codebase** | ~7,700 LOC | ~430k LOC | ~500 LOC | ~4k LOC | ~15k LOC |
 | **Channels** | 6 | 15+ | 1 (WhatsApp) | 5 | 3 |
 | **Tools** | 14 | 25 + 53 skills | SDK-dependent | 6 | 6 |
 | **AI SDKs** | None — raw httpx | Internal framework | Anthropic SDK | None — raw HTTP | None — raw HTTP |
