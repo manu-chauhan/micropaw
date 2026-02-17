@@ -10,6 +10,7 @@
 
 6 channels. 4 providers. 11 tools. Shared memory everywhere. ~6,900 lines of Python. Zero SDK dependencies.
 
+[![PyPI](https://img.shields.io/pypi/v/micropaw)](https://pypi.org/project/micropaw/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
 [![Tests](https://img.shields.io/badge/tests-268%20passed-brightgreen)]()
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -20,7 +21,7 @@
 ---
 
 ```bash
-pip install .
+pip install micropaw
 paw setup     # pick provider, paste key
 paw chat      # start talking
 ```
@@ -155,13 +156,13 @@ paw start               # launch ALL channels at once
 
 **Terminal only:**
 ```bash
-pip install .
+pip install micropaw
 paw setup && paw chat
 ```
 
 **Multi-channel:**
 ```bash
-pip install ".[telegram,discord]"
+pip install "micropaw[telegram,discord]"
 paw setup
 paw connect telegram
 paw connect discord
@@ -171,7 +172,7 @@ paw start
 **Fully local (no internet):**
 ```bash
 ollama pull llama3.1
-pip install .
+pip install micropaw
 paw setup    # select Ollama
 paw chat
 ```
@@ -421,6 +422,11 @@ Point any provider at a compatible server (vLLM, LM Studio, Azure OpenAI):
 <summary><strong>Installation Options</strong></summary>
 
 ```bash
+pip install micropaw
+```
+
+**From source:**
+```bash
 git clone https://github.com/manu-chauhan/micropaw.git
 cd micropaw
 pip install .
@@ -428,14 +434,14 @@ pip install .
 
 Install only what you need:
 ```bash
-pip install ".[telegram]"      # Telegram bot
-pip install ".[discord]"       # Discord bot
-pip install ".[slack]"         # Slack (Socket Mode)
-pip install ".[whatsapp]"      # WhatsApp (aiohttp webhook)
-pip install ".[browser]"       # Playwright browser automation
-pip install ".[pdf]"           # PDF reading
-pip install ".[embeddings]"    # Local sentence-transformers (if no Ollama/OpenAI)
-pip install ".[all]"           # Everything
+pip install "micropaw[telegram]"      # Telegram bot
+pip install "micropaw[discord]"       # Discord bot
+pip install "micropaw[slack]"         # Slack (Socket Mode)
+pip install "micropaw[whatsapp]"      # WhatsApp (aiohttp webhook)
+pip install "micropaw[browser]"       # Playwright browser automation
+pip install "micropaw[pdf]"           # PDF reading
+pip install "micropaw[embeddings]"    # Local sentence-transformers (if no Ollama/OpenAI)
+pip install "micropaw[all]"           # Everything
 ```
 
 Docker:
