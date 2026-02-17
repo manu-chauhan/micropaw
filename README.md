@@ -1,61 +1,53 @@
+<div align="center">
+
 # MicroClaw
 
 **Your AI. Your machine. Your keys.**
 
-A personal AI assistant in ~6,200 lines of Python. No SDK bloat, no cloud lock-in, no telemetry.
+A personal AI assistant that runs everywhere — Terminal, Telegram, Discord, Slack, WhatsApp, WebChat — with shared memory across all platforms. Built in ~6,400 lines of Python with zero SDK dependencies.
 
-```
-4 AI providers    Claude, GPT-4o, Gemini, Ollama (local)
-6 channels        Terminal, Telegram, Discord, Slack, WhatsApp, WebChat
-11 tools          Search, browse, files, shell, memory, vision, PDF, delegation
-0 SDK deps        Raw HTTP to every provider via httpx
-227 tests         <1 second
-```
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
+[![Tests](https://img.shields.io/badge/tests-238%20passed-brightgreen)]()
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+</div>
+
+---
 
 ```bash
 pip install .
-microclaw setup     # pick your provider, paste your key
+microclaw setup     # pick provider, paste key
 microclaw chat      # start talking
 ```
 
 ---
 
-## Why MicroClaw
+## Highlights
 
-| | MicroClaw | Typical AI Wrapper | Enterprise Platform |
-|---|---|---|---|
-| **Lines of code** | ~6,200 | ~500 | 200,000+ |
-| **AI providers** | 4 (any model) | 1 | 2-3 |
-| **Channels** | 6 simultaneous | 1 | 3-5 |
-| **Tools** | 11 | 0-2 | 10+ |
-| **SDK dependencies** | 0 | 1-3 | 10+ |
-| **Local/offline** | Yes (Ollama) | No | No |
-| **Multi-agent** | Yes | No | Sometimes |
-| **Failover** | Automatic | No | Sometimes |
-| **Self-healing** | Auto-restart on crash | No | Sometimes |
-| **Setup time** | 2 minutes | 2 minutes | 2 weeks |
+- **Same brain, everywhere** — Talk on Telegram, continue on Discord, ask from WhatsApp. One memory, one personality, six platforms running simultaneously. Your assistant remembers everything across all channels.
+
+- **Zero SDK dependencies** — Every AI provider (Claude, GPT-4o, Gemini, Ollama) talks raw HTTP via `httpx`. No `anthropic` package. No `openai` package. No `google-genai`. Switching providers is a config change, not a rewrite.
+
+- **Vector search, auto-configured** — Embeddings activate automatically: probes Ollama at startup, falls back to OpenAI, then sentence-transformers, then text search. Default model: `nomic-embed-text` (768d, 8k context). Zero config required.
+
+- **Multi-agent delegation** — The main agent spawns sub-agents for parallel tasks. Sub-agents inherit all tools except `delegate` (no recursive spawning). Max 25 LLM rounds per sub-agent, configurable.
+
+- **Automatic failover** — Provider chain with exponential backoff. If Claude is down, your assistant switches to GPT-4o, then Ollama. Keeps working no matter what.
+
+- **Self-healing channels** — If a channel crashes, MicroClaw detects it and restarts automatically. Other channels keep running.
+
+- **11 built-in tools** — Web search (3-backend fallback), browser automation, file I/O, shell execution, memory, vision, PDF reading, HTTP requests, session export, and delegation — all with security guardrails.
+
+- **Fully local option** — Run entirely offline with Ollama. No data leaves your machine. No telemetry, ever.
 
 ---
 
-## Key Features
-
-### Zero SDK Philosophy
-
-Every AI provider talks raw HTTP via `httpx`. No `anthropic` package. No `openai` package. No `google-genai` package.
-
-- Fewer dependencies, fewer breakages
-- Full control over what goes over the wire
-- Switching providers is a config change, not a rewrite
-
-### One AI, Every Platform
-
-Set up once. Your AI runs on **all platforms simultaneously** with shared memory.
+## One AI, Every Platform
 
 ```
 Terminal  Telegram  Discord  Slack  WhatsApp  WebChat
     \        |        |       |       |        /
-     \       |        |       |       |       /
-      +------+--------+-------+-------+------+
+     +-------+--------+-------+-------+------+
                        |
                    [Gateway]
                        |
@@ -63,117 +55,16 @@ Terminal  Telegram  Discord  Slack  WhatsApp  WebChat
               |        |        |
            [Agent]  [Tools]  [Memory]
               |                  |
-         [Provider]         [SQLite + vectors]
+         [Provider]       [SQLite + vectors]
 ```
+
+> **Talk on Telegram during the day. Switch to Discord at night. Ask from WhatsApp on the go.**
+> Your assistant carries the full conversation and memory across every channel — same personality, same knowledge, same context.
 
 ```bash
 microclaw connect telegram    # guided setup, validates token live
 microclaw connect discord     # auto-generates bot invite URL
 microclaw start               # launch ALL channels at once
-```
-
-Your assistant remembers a conversation from Telegram when you talk to it from Discord. Same brain, everywhere.
-
-| Channel | Setup | Key Feature |
-|---------|-------|-------------|
-| **Terminal** | Built-in | Streaming, slash commands, tool visibility |
-| **Telegram** | `connect telegram` | Phone + desktop, user whitelist |
-| **Discord** | `connect discord` | Per-server bot, auto invite URL |
-| **Slack** | `connect slack` | Socket Mode, works behind firewalls |
-| **WhatsApp** | `connect whatsapp` | Meta Business API webhook |
-| **WebChat** | `connect webchat` | Raw RFC 6455 WebSocket, real-time streaming |
-
-### 11 Built-In Tools
-
-| Tool | What it does |
-|------|-------------|
-| `web_search` | Brave -> SearXNG -> DuckDuckGo fallback chain |
-| `web_browse` | Full browser automation via Playwright |
-| `http_request` | HTTP requests with SSRF protection per hop |
-| `file_read` | Read files with path security (blocks `/proc`, `.ssh/`, `.env`) |
-| `file_write` | Create and modify files |
-| `shell` | Execute commands (40+ dangerous patterns blocked) |
-| `memory` | Save, search, list, delete facts across sessions |
-| `vision` | Analyze images via provider vision API |
-| `pdf_read` | Extract text from PDFs with page ranges |
-| `sessions` | List and export conversation history |
-| `delegate` | Spin up sub-agents for parallel tasks |
-
-Disable any tool:
-```json
-{ "permissions": { "disabled_tools": ["shell", "file_write"] } }
-```
-
-### Multi-Agent Delegation
-
-The main agent can delegate sub-tasks to independent sub-agents:
-
-```
-You > Research quantum computing AND summarize today's AI news
-
-MicroClaw > [delegate] "Research quantum computing breakthroughs"
-            [delegate] "Summarize today's top AI news"
-
-            Here's what I found on both fronts...
-```
-
-- **Full tool access** -- sub-agents inherit all tools (search, browse, files, etc.)
-- **No recursive spawning** -- `delegate` tool is excluded from sub-agents, preventing infinite loops
-- **Inline** -- blocks until done, returns result
-- **Background** -- fire-and-forget via message bus, result delivered asynchronously
-- **Configurable** -- max 25 LLM rounds per sub-agent (adjustable via `context.max_subagent_iterations`)
-
-### 4 Providers with Automatic Failover
-
-| Provider | Type | Streaming | Tools | Vision |
-|----------|------|-----------|-------|--------|
-| **Claude** (Anthropic) | Cloud | Yes | Yes | Yes |
-| **GPT-4o** (OpenAI) | Cloud | Yes | Yes | Yes |
-| **Gemini** (Google) | Cloud | Yes | Yes | Yes |
-| **Ollama** | Local | Yes | Yes | Yes |
-
-```
-Primary: Claude -> Fallback: GPT-4o -> Fallback: Ollama (local)
-```
-
-Retries with exponential backoff on 429/503 before switching. If Claude is down, your assistant keeps working.
-
-Override models via env vars: `CLAUDE_MODEL`, `OPENAI_MODEL`, `GEMINI_MODEL`, `OLLAMA_MODEL`.
-
-### Memory & Vector Search
-
-- **SQLite + auto-detected vector search** -- persists across restarts
-- **Shared across all channels** -- remember on Telegram, recall from Discord
-- **Auto-summarizes** old context when conversations grow large
-- **Export**: `microclaw export` dumps history as JSON or Markdown
-
-Embedding auto-detect priority (zero config):
-
-```
-Ollama (local, free) -> OpenAI (if key exists) -> sentence-transformers (offline) -> text search fallback
-```
-
-Default model: `nomic-embed-text` (768 dims, 8192 token context, MTEB 59.4). Override in config:
-
-```json
-{ "embedding": { "provider": "ollama", "model": "snowflake-arctic-embed" } }
-```
-
-### Web Search -- Zero Config
-
-```
-Brave (if API key) -> SearXNG (3 public instances) -> DuckDuckGo (last resort)
-```
-
-Works out of the box. No API key needed. Upgrade to Brave for best quality: set `BRAVE_API_KEY`.
-
-### Self-Healing Channels
-
-Channels run as background tasks. If one crashes, MicroClaw detects and restarts it. Other channels keep running.
-
-```
-ERROR Slack task crashed: ConnectionError -- restarting in 5s
-INFO  Slack channel connected.
 ```
 
 ---
@@ -192,46 +83,107 @@ pip install ".[telegram,discord]"
 microclaw setup
 microclaw connect telegram
 microclaw connect discord
-microclaw start               # all channels at once
+microclaw start
 ```
 
 **Fully local (no internet):**
 ```bash
 ollama pull llama3.1
 pip install .
-microclaw setup               # select Ollama
+microclaw setup    # select Ollama
 microclaw chat
 ```
 
 ---
 
-## Installation
+## Tools
 
-```bash
-git clone https://gitlab.com/MANU-CHAUHAN/microclaw.git
-cd microclaw
-pip install .
+| Tool | What it does |
+|------|-------------|
+| `web_search` | Brave -> SearXNG -> DuckDuckGo fallback chain |
+| `web_browse` | Full browser automation via Playwright |
+| `http_request` | HTTP requests with SSRF protection per hop |
+| `file_read` | Read files with path traversal protection |
+| `file_write` | Create and modify files |
+| `shell` | Execute commands (40+ dangerous patterns blocked) |
+| `memory` | Save, search, list, delete facts across sessions |
+| `vision` | Analyze images via provider vision API |
+| `pdf_read` | Extract text from PDFs with page ranges |
+| `sessions` | List and export conversation history |
+| `delegate` | Spin up sub-agents for parallel tasks |
+
+Disable any tool:
+```json
+{ "permissions": { "disabled_tools": ["shell", "file_write"] } }
 ```
 
-Install only what you need:
+---
 
-```bash
-pip install ".[telegram]"      # Telegram bot
-pip install ".[discord]"       # Discord bot
-pip install ".[slack]"         # Slack (Socket Mode)
-pip install ".[whatsapp]"      # WhatsApp (aiohttp webhook)
-pip install ".[browser]"       # Playwright browser automation
-pip install ".[pdf]"           # PDF reading
-pip install ".[embeddings]"    # Local sentence-transformer embeddings (auto-detected if Ollama/OpenAI unavailable)
-pip install ".[all]"           # Everything
+## Providers
+
+| Provider | Type | Streaming | Tools | Vision |
+|----------|------|-----------|-------|--------|
+| **Claude** | Cloud | Yes | Yes | Yes |
+| **GPT-4o** | Cloud | Yes | Yes | Yes |
+| **Gemini** | Cloud | Yes | Yes | Yes |
+| **Ollama** | Local | Yes | Yes | Yes |
+
+```
+Primary: Claude -> Fallback: GPT-4o -> Fallback: Ollama
 ```
 
-**Docker:**
-```bash
-docker compose run --rm microclaw chat              # Basic
-docker compose --profile browser up                  # + Playwright
-docker compose --profile full up                     # Everything
+Override models: `CLAUDE_MODEL`, `OPENAI_MODEL`, `GEMINI_MODEL`, `OLLAMA_MODEL`
+
+---
+
+## Memory & Vector Search
+
+**SQLite + auto-detected vector embeddings.** Shared across all channels. Persists across restarts.
+
+Auto-detect priority (zero config):
 ```
+Ollama (local, free) -> OpenAI (if key exists) -> sentence-transformers (offline) -> text search
+```
+
+Default embedding model: `nomic-embed-text` (768 dims, 8192 token context, MTEB 59.4).
+
+Override:
+```json
+{ "embedding": { "provider": "ollama", "model": "snowflake-arctic-embed" } }
+```
+
+---
+
+## Multi-Agent Delegation
+
+```
+You > Research quantum computing AND summarize today's AI news
+
+MicroClaw > [delegate] "Research quantum computing breakthroughs"
+            [delegate] "Summarize today's top AI news"
+
+            Here's what I found on both fronts...
+```
+
+- **Full tool access** — sub-agents inherit all tools (search, browse, files, etc.)
+- **No recursive spawning** — `delegate` is excluded from sub-agents, preventing infinite loops
+- **Inline or background** — block for result, or fire-and-forget via message bus
+- **Configurable** — max 25 LLM rounds (adjust via `context.max_subagent_iterations`)
+
+---
+
+## Security
+
+- **Sub-agent isolation** — inherits tools but `delegate` always excluded (no recursive spawning)
+- **Shell blocking** — 40+ patterns block reverse shells, `rm -rf /`, env leaks, eval/exec
+- **Path security** — blocks `/proc`, `/sys`, `.ssh/`, `.env`, symlinks, path traversal
+- **SSRF protection** — blocks localhost, private IPs, metadata endpoints, DNS rebinding
+- **Auth** — timing-safe `secrets.compare_digest()` for all token comparisons
+- **WebSocket limits** — 1MB max frame, 50 max headers, outbound truncation
+- **Rate limiting** — per-user sliding window + burst detection
+- **Config protection** — 0600 permissions, world-readable warning on load
+- **Cross-origin safety** — strips Authorization headers on host change
+- **No telemetry** — nothing phones home, ever
 
 ---
 
@@ -239,28 +191,27 @@ docker compose --profile full up                     # Everything
 
 | Command | Description |
 |---------|-------------|
-| `microclaw setup` | Interactive wizard -- provider, API key, persona, permissions |
+| `microclaw setup` | Interactive wizard — provider, API key, persona, permissions |
 | `microclaw chat` | Terminal chat session |
 | `microclaw start` | Launch all enabled channels |
-| `microclaw connect [channel]` | Guided channel setup with live token validation |
+| `microclaw connect <channel>` | Guided channel setup with live token validation |
 | `microclaw test` | Validate provider + all channel tokens |
 | `microclaw config` | Show configuration (secrets redacted) |
 | `microclaw status` | System status overview |
-| `microclaw doctor` | Diagnostics -- Python, deps, disk, keys |
+| `microclaw doctor` | Diagnostics — Python, deps, disk, keys |
 | `microclaw export` | Export conversations (JSON/Markdown) |
 | `microclaw reset` | Delete all config and data |
 
-**Terminal slash commands:** `/help`, `/new`, `/tools`, `/usage`, `/clear`, `/config`, `quit`
+Terminal slash commands: `/help`, `/new`, `/tools`, `/usage`, `/clear`, `/config`, `quit`
 
 ---
 
-## Configuration
+<details>
+<summary><strong>Configuration</strong></summary>
 
-Config: `~/.microclaw/config.json` (0600 permissions, warns if world-readable).
+Config file: `~/.microclaw/config.json` (0600 permissions).
 
 ### Environment Variables
-
-All config values can be overridden via env vars. See `.env.example` for the full list.
 
 | Variable | Purpose |
 |----------|---------|
@@ -269,10 +220,6 @@ All config values can be overridden via env vars. See `.env.example` for the ful
 | `OPENAI_API_KEY` | OpenAI API key |
 | `GEMINI_API_KEY` | Gemini API key |
 | `OLLAMA_HOST` | Ollama server URL |
-| `CLAUDE_MODEL` | Override Claude model |
-| `OPENAI_MODEL` | Override OpenAI model |
-| `GEMINI_MODEL` | Override Gemini model |
-| `OLLAMA_MODEL` | Override Ollama model |
 | `BRAVE_API_KEY` | Brave Search API key |
 | `SEARXNG_URL` | Self-hosted SearXNG URL |
 | `TELEGRAM_BOT_TOKEN` | Telegram token |
@@ -320,28 +267,43 @@ Point any provider at a compatible server (vLLM, LM Studio, Azure OpenAI):
 }
 ```
 
----
+</details>
 
-## Security
+<details>
+<summary><strong>Installation Options</strong></summary>
 
-- **Sub-agent isolation** -- inherits tools but `delegate` is always excluded (no recursive spawning)
-- **Shell blocking** -- 40+ regex patterns block reverse shells, `rm -rf /`, env leaks, eval/exec, download-and-execute
-- **Dangerous command confirmation** -- `rm`, `sudo`, `git push` require explicit confirmation
-- **Path security** -- blocks `/proc`, `/sys`, `.ssh/`, `.env`, symlinks, path traversal
-- **SSRF protection** -- blocks localhost, private IPs, metadata endpoints, DNS rebinding
-- **Auth** -- timing-safe `secrets.compare_digest()` for all token comparisons
-- **WebSocket limits** -- 1MB max frame, 50 max headers, outbound truncation
-- **Rate limiting** -- per-user sliding window + burst detection
-- **Config protection** -- 0600 permissions, world-readable warning on load
-- **Cross-origin redirect safety** -- strips Authorization headers on host change
-- **No telemetry** -- nothing phones home, ever
+```bash
+git clone https://gitlab.com/MANU-CHAUHAN/microclaw.git
+cd microclaw
+pip install .
+```
 
----
+Install only what you need:
+```bash
+pip install ".[telegram]"      # Telegram bot
+pip install ".[discord]"       # Discord bot
+pip install ".[slack]"         # Slack (Socket Mode)
+pip install ".[whatsapp]"      # WhatsApp (aiohttp webhook)
+pip install ".[browser]"       # Playwright browser automation
+pip install ".[pdf]"           # PDF reading
+pip install ".[embeddings]"    # Local sentence-transformers (if no Ollama/OpenAI)
+pip install ".[all]"           # Everything
+```
 
-## Architecture
+Docker:
+```bash
+docker compose run --rm microclaw chat              # Basic
+docker compose --profile browser up                  # + Playwright
+docker compose --profile full up                     # Everything
+```
+
+</details>
+
+<details>
+<summary><strong>Architecture</strong></summary>
 
 ```
-src/microclaw/          ~6,240 LOC source + ~2,450 LOC tests
+src/microclaw/          6,392 LOC source + 2,632 LOC tests
  cli.py                 Click CLI (11 commands)
  config.py              Single Pydantic config model
  connector.py           Guided channel setup + live validation
@@ -361,13 +323,15 @@ src/microclaw/          ~6,240 LOC source + ~2,450 LOC tests
 
 Full decision log: [`DECISIONS.md`](DECISIONS.md)
 
+</details>
+
 ---
 
 ## Development
 
 ```bash
 pip install ".[dev]"
-pytest                 # 227 tests, <1s
+pytest                 # 238 tests, <1s
 ruff check src/
 mypy src/
 ```
