@@ -28,7 +28,7 @@ microclaw chat      # start talking
 
 ### Intelligence
 
-- **Same brain, everywhere** — Talk on Telegram, continue on Discord, ask from WhatsApp. One memory, one personality, six platforms running simultaneously.
+- **Same brain, everywhere** — Start a conversation on Telegram, pick it up on Discord, ask from WhatsApp. Everything stays on your machine.
 
 - **RAG out of the box** — Read a PDF, paste a YouTube URL, or browse a web page. Documents are auto-chunked, embedded, and searchable across all channels. Ask about them days later from any platform.
 
