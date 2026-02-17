@@ -19,7 +19,7 @@ _BACKUP_COUNT = 3
 
 
 def setup_logging(level: str = "INFO") -> None:
-    """Configure logging with Rich output + optional file logging. Call once at startup."""
+    """Configure logging with Rich output + file logging. Call once at startup."""
     global _configured
     if _configured:
         return
@@ -39,25 +39,22 @@ def setup_logging(level: str = "INFO") -> None:
 
     handlers: list[logging.Handler] = [handler]
 
-    # File logging: enabled via MICROPAW_LOG_FILE env var or defaults to ~/.micropaw/logs/
+    # File logging: always enabled (users need it for debugging)
     log_file = os.getenv("MICROPAW_LOG_FILE")
-    enable_file_log = log_file or os.getenv("MICROPAW_FILE_LOG", "").lower() in ("1", "true", "yes")
-
-    if enable_file_log:
-        log_path = Path(log_file) if log_file else _LOG_FILE
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = RotatingFileHandler(
-            str(log_path),
-            maxBytes=_MAX_LOG_SIZE,
-            backupCount=_BACKUP_COUNT,
-            encoding="utf-8",
-        )
-        file_handler.setFormatter(logging.Formatter(
-            "%(asctime)s %(levelname)-8s %(name)s — %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        ))
-        file_handler.setLevel(log_level)
-        handlers.append(file_handler)
+    log_path = Path(log_file) if log_file else _LOG_FILE
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    file_handler = RotatingFileHandler(
+        str(log_path),
+        maxBytes=_MAX_LOG_SIZE,
+        backupCount=_BACKUP_COUNT,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)-8s %(name)s — %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    file_handler.setLevel(log_level)
+    handlers.append(file_handler)
 
     logging.basicConfig(
         level=log_level,
@@ -68,3 +65,14 @@ def setup_logging(level: str = "INFO") -> None:
     # Quiet noisy libraries
     for name in ("httpx", "httpcore", "asyncio", "hpack"):
         logging.getLogger(name).setLevel(logging.WARNING)
+
+
+def quiet_console() -> None:
+    """Suppress console log output to WARNING+ (for interactive chat/start modes).
+
+    INFO and DEBUG still go to the log file at ~/.micropaw/logs/micropaw.log.
+    """
+    for handler in logging.root.handlers:
+        if isinstance(handler, RichHandler):
+            handler.setLevel(logging.WARNING)
+            break

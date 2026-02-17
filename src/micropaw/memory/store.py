@@ -109,14 +109,18 @@ class MemoryStore:
         """Load the sqlite-vec extension. Falls back gracefully if unavailable."""
         try:
             import sqlite_vec
-            # Safe during init() — no concurrent DB operations yet
-            self._db._conn.enable_load_extension(True)
-            sqlite_vec.load(self._db._conn)
-            self._db._conn.enable_load_extension(False)
-            return True
         except ImportError:
             logger.info("sqlite-vec not installed — falling back to brute-force cosine search")
             return False
+        try:
+            # Must run on aiosqlite's background thread (where _conn was created)
+            def _load(conn):
+                conn.enable_load_extension(True)
+                sqlite_vec.load(conn)
+                conn.enable_load_extension(False)
+
+            await self._db._execute(_load, self._db._conn)
+            return True
         except Exception as e:
             logger.warning("Failed to load sqlite-vec: %s", e)
             return False

@@ -119,10 +119,22 @@ def run_setup() -> None:
             config.embedding.model = "nomic-embed-text"
             console.print("[dim]Using Ollama embeddings (nomic-embed-text). Pull it with: ollama pull nomic-embed-text[/dim]")
         else:
+            # Check if sentence-transformers is available
+            _has_st = False
+            try:
+                import sentence_transformers  # noqa: F401
+                _has_st = True
+            except ImportError:
+                pass
+
+            local_label = "Local (sentence-transformers, no API key)"
+            if not _has_st:
+                local_label += " [NOT INSTALLED]"
+
             emb_choice = questionary.select(
                 "Embedding provider:",
                 choices=[
-                    questionary.Choice("Local (sentence-transformers, no API key)", value="local"),
+                    questionary.Choice(local_label, value="local"),
                     questionary.Choice("OpenAI (text-embedding-3-small)", value="openai"),
                     questionary.Choice("Ollama (nomic-embed-text)", value="ollama"),
                 ],
@@ -131,6 +143,10 @@ def run_setup() -> None:
                 config.embedding.provider = emb_choice
                 if emb_choice == "local":
                     config.embedding.model = "BAAI/bge-small-en-v1.5"
+                    if not _has_st:
+                        console.print("[yellow]Warning: sentence-transformers not installed. "
+                                      "Install with: pip install sentence-transformers[/yellow]")
+                        console.print("[dim]Vector search will be disabled until installed.[/dim]")
                 elif emb_choice == "openai":
                     config.embedding.model = "text-embedding-3-small"
                 elif emb_choice == "ollama":

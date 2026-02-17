@@ -256,13 +256,15 @@ class TestWebSearch:
     async def test_duckduckgo_always_returns_string(self):
         from micropaw.tools.web_search import _search_duckduckgo
 
+        # DDG Lite returns HTML with result-link and result-snippet classes
+        html = (
+            '<a href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fen.wikipedia.org%2Fwiki%2FPython" '
+            "class='result-link'>Python (programming language)</a>"
+            "<td class='result-snippet'>Python is a high-level programming language.</td>"
+        )
         mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "AbstractText": "Python is a programming language.",
-            "Heading": "Python",
-            "AbstractURL": "https://en.wikipedia.org/wiki/Python",
-            "RelatedTopics": [],
-        }
+        mock_response.text = html
+        mock_response.status_code = 200
         mock_response.raise_for_status = MagicMock()
 
         mock_client = AsyncMock()
@@ -280,8 +282,10 @@ class TestWebSearch:
     async def test_duckduckgo_returns_no_results_message(self):
         from micropaw.tools.web_search import _search_duckduckgo
 
+        # Empty HTML page — no result-link elements
         mock_response = MagicMock()
-        mock_response.json.return_value = {"RelatedTopics": []}
+        mock_response.text = "<html><body>No results</body></html>"
+        mock_response.status_code = 200
         mock_response.raise_for_status = MagicMock()
 
         mock_client = AsyncMock()

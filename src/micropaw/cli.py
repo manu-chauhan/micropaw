@@ -22,7 +22,7 @@ from micropaw.config import (
     display_config,
     load_config,
 )
-from micropaw.utils.logger import setup_logging
+from micropaw.utils.logger import quiet_console, setup_logging
 
 console = Console()
 
@@ -179,6 +179,7 @@ def setup():
 @main.command()
 def chat():
     """Start a terminal-only chat session."""
+    quiet_console()  # suppress INFO logs — details go to ~/.micropaw/logs/
     config = load_config()
     config.channels.terminal.enabled = True
     config.channels.telegram.enabled = False
@@ -199,6 +200,7 @@ def chat():
 @main.command()
 def start():
     """Start the gateway with all enabled channels."""
+    quiet_console()  # suppress INFO logs — details go to ~/.micropaw/logs/
     if not config_exists():
         console.print("[yellow]No config found. Running setup wizard first...[/yellow]\n")
         from micropaw.setup_wizard import run_setup

@@ -313,6 +313,14 @@ class Gateway:
             _DEFAULT_LOCAL_MODEL, _DEFAULT_OLLAMA_MODEL,
         )
         if cfg.provider == "local":
+            try:
+                import sentence_transformers  # noqa: F401
+            except ImportError:
+                logger.warning(
+                    "Embeddings: local selected but sentence-transformers not installed; "
+                    "falling back to disabled. Install with: pip install sentence-transformers"
+                )
+                return NullEmbedding()
             return LocalEmbedding(cfg.model or _DEFAULT_LOCAL_MODEL)
         elif cfg.provider == "openai":
             api_key = self.config.provider_config.openai.api_key
@@ -350,7 +358,9 @@ class Gateway:
 
         for channel in self.channels:
             try:
-                await channel.stop()
+                await asyncio.wait_for(channel.stop(), timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.warning("Channel [%s] stop timed out", channel.name)
             except Exception as e:
                 logger.error("Error stopping [%s]: %s", channel.name, e)
 
@@ -362,14 +372,18 @@ class Gateway:
 
         # Close AI provider HTTP clients
         try:
-            await self.provider.close()
+            await asyncio.wait_for(self.provider.close(), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning("Provider close timed out")
         except Exception as e:
             logger.error("Error closing provider: %s", e)
 
         # Close embedding provider HTTP client if applicable
         if self.store and hasattr(self.store.embedder, "close"):
             try:
-                await self.store.embedder.close()
+                await asyncio.wait_for(self.store.embedder.close(), timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.warning("Embedding provider close timed out")
             except Exception as e:
                 logger.error("Error closing embedding provider: %s", e)
 

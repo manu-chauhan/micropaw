@@ -135,32 +135,45 @@ async def _search_brave(query: str, max_results: int, api_key: str) -> str | Non
 
 
 async def _search_duckduckgo(query: str, max_results: int) -> str:
-    """Search via DuckDuckGo Instant Answer API. Always returns a string (never None)."""
+    """Search via DuckDuckGo Lite (HTML). Always returns a string (never None)."""
+    import re
+    from urllib.parse import unquote, urlparse, parse_qs
+
     try:
-        async with httpx.AsyncClient(timeout=_DDG_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=_DDG_TIMEOUT, follow_redirects=True) as client:
             resp = await client.get(
-                "https://api.duckduckgo.com/",
-                params={"q": query, "format": "json", "no_html": "1", "skip_disambig": "1"},
+                "https://lite.duckduckgo.com/lite/",
+                params={"q": query},
+                headers={"User-Agent": "Mozilla/5.0"},
             )
             resp.raise_for_status()
-            data = resp.json()
+
+        text = resp.text
+        titles = re.findall(r"class='result-link'>([^<]+)</a>", text)
+        raw_urls = re.findall(r'href="([^"]+)"[^>]*class=[\'"]result-link', text)
+        snippets = re.findall(r"class='result-snippet'>([^<]*(?:<b>[^<]*</b>[^<]*)*)", text)
 
         results = []
+        for i in range(min(max_results, len(titles))):
+            title = titles[i].strip()
+            # Extract real URL from DDG redirect
+            url = ""
+            if i < len(raw_urls):
+                parsed = parse_qs(urlparse(raw_urls[i]).query)
+                url = unquote(parsed.get("uddg", [""])[0])
+            snippet = re.sub(r"<[^>]+>", "", snippets[i]).strip() if i < len(snippets) else ""
+            if title:
+                entry = f"- **{title}**"
+                if url:
+                    entry += f"\n  {url}"
+                if snippet:
+                    entry += f"\n  {snippet}"
+                results.append(entry)
 
-        if data.get("AbstractText"):
-            results.append(f"**{data.get('Heading', 'Summary')}**: {data['AbstractText']}\n  Source: {data.get('AbstractURL', '')}")
+        if results:
+            return f"Search results for '{query}' (via DuckDuckGo):\n\n" + "\n\n".join(results)
 
-        if data.get("Answer"):
-            results.append(f"**Answer**: {data['Answer']}")
-
-        for topic in data.get("RelatedTopics", [])[:max_results]:
-            if "Text" in topic and "FirstURL" in topic:
-                results.append(f"- {topic['Text']}\n  {topic['FirstURL']}")
-
-        if not results:
-            return f"No results found for: {query}"
-
-        return f"Search results for '{query}' (via DuckDuckGo):\n\n" + "\n\n".join(results)
+        return f"No results found for: {query}"
 
     except Exception as e:
         return f"Search error: {e}"
