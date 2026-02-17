@@ -350,6 +350,12 @@
 **Design:** Drop-in replacement in `LocalEmbedding` class. `fastembed.TextEmbedding` replaces `SentenceTransformer`. Same lazy loading, same thread pool execution. Core dependency in pyproject.toml.
 **Impact:** ~40x smaller install. No PyTorch. Same embedding quality. Same model.
 
+### Bug Fixes (Batch 5 — Cross-Channel)
+
+6. **Memories isolated per channel** — Memory tool used `context.user_id` (Telegram numeric ID vs `"terminal-user"`) to scope all save/search/list/delete operations. A memory saved on Telegram was invisible from terminal and vice versa. For a personal assistant with one owner, memories must be global.
+   - **Fix:** Memory tool, agent `_prepare()` (recent memories + RAG search), and `_auto_ingest()` all now use `"_global"` as user_id instead of the channel-specific user ID. Conversations remain per-channel (correct — separate chat histories), but knowledge is unified across all channels.
+   - **Files:** `tools/memory_tool.py`, `core/agent.py`
+
 ### Metrics (v0.3.0-dev)
 - Source LOC: ~7,100
 - Test LOC: ~3,400

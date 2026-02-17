@@ -171,10 +171,11 @@ class Agent:
 
         conv_id = self.conversations.get_conversation_id(platform, user_id, channel_id)
         history = await self.conversations.load_history(conv_id, platform, user_id)
-        recent_memories = await self.store.get_recent_memories(10, user_id=user_id)
+        # Memories and RAG are global — shared across all channels
+        recent_memories = await self.store.get_recent_memories(10, user_id="_global")
 
         # RAG: search ingested documents for relevant chunks
-        relevant_docs = await self.store.search_documents(text, limit=5, user_id=user_id)
+        relevant_docs = await self.store.search_documents(text, limit=5, user_id="_global")
 
         system_prompt = self._build_system_prompt(platform, recent_memories, relevant_docs)
 
@@ -331,7 +332,7 @@ class Agent:
                 and not result.startswith("Error")
             ):
                 source = tc.arguments.get("path") or tc.arguments.get("url") or "unknown"
-                asyncio.create_task(self._auto_ingest(source, result, tool_context.user_id))
+                asyncio.create_task(self._auto_ingest(source, result, "_global"))
 
             tool_msg = Message(role="tool", content=result, tool_call_id=tc.id)
             messages.append(tool_msg)

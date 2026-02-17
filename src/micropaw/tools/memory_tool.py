@@ -50,7 +50,9 @@ class MemoryTool(Tool):
             return "Error: Memory store not initialized."
 
         action = args["action"]
-        user_id = context.user_id
+        # Memories are global — shared across all channels and users.
+        # Conversations are per-channel, but knowledge should be unified.
+        user_id = "_global"
 
         if action == "save":
             key = args.get("key", "")
