@@ -1,7 +1,8 @@
 """Embedding providers for vector memory search.
 
-Supports local sentence-transformers (BAAI/bge-small-en-v1.5), OpenAI, and
-Ollama via httpx (no SDK dependencies), plus a null fallback.
+Supports local sentence-transformers (nomic-ai/nomic-embed-text-v1.5), OpenAI, and
+Ollama via httpx (no SDK dependencies), plus a null fallback.  Auto-detect picks
+the best available provider at startup.
 """
 
 from __future__ import annotations
@@ -15,7 +16,8 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_LOCAL_MODEL = "BAAI/bge-small-en-v1.5"
+_DEFAULT_LOCAL_MODEL = "nomic-ai/nomic-embed-text-v1.5"
+_DEFAULT_OLLAMA_MODEL = "nomic-embed-text"
 
 
 class EmbeddingProvider(ABC):
@@ -76,7 +78,7 @@ class OllamaEmbedding(EmbeddingProvider):
 class LocalEmbedding(EmbeddingProvider):
     """Local embeddings via sentence-transformers — no API key, runs on CPU."""
     name = "local"
-    dimensions = 384  # bge-small-en-v1.5
+    dimensions = 768  # nomic-embed-text-v1.5
 
     def __init__(self, model: str = _DEFAULT_LOCAL_MODEL) -> None:
         self.model_name = model
@@ -112,6 +114,18 @@ class NullEmbedding(EmbeddingProvider):
 
     async def embed(self, text: str) -> list[float]:
         return []
+
+
+async def probe_ollama(host: str, model: str = _DEFAULT_OLLAMA_MODEL) -> bool:
+    """Check if Ollama is running and has the specified embedding model pulled."""
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(f"{host.rstrip('/')}/api/tags")
+            resp.raise_for_status()
+            models = resp.json().get("models", [])
+            return any(m.get("name", "").startswith(model) for m in models)
+    except Exception:
+        return False
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:

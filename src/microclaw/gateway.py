@@ -65,10 +65,8 @@ class Gateway:
 
     async def start(self) -> None:
         """Initialize everything and start all channels."""
-        # Create embedding provider
-        embedding_provider = None
-        if self.config.embedding.enabled:
-            embedding_provider = self._create_embedding_provider()
+        # Create embedding provider (auto-detect or explicit)
+        embedding_provider = await self._create_embedding_provider()
 
         # Init database
         self.store = MemoryStore(str(DB_FILE), embedding_provider=embedding_provider)
@@ -91,7 +89,11 @@ class Gateway:
         from microclaw.tools.delegate import set_delegate_deps
         self._bus = MessageBus()
         self._bus_task: asyncio.Task | None = None
-        set_delegate_deps(self.provider, self._bus)
+        set_delegate_deps(
+            self.provider, self._bus,
+            registry=self.registry,
+            max_iterations=self.config.context.max_subagent_iterations,
+        )
 
         # Init agent
         self.agent = Agent(self.config, self.provider, self.registry, self.store)
@@ -243,19 +245,71 @@ class Gateway:
             except Exception as e:
                 logger.error("Bus consumer error: %s", e)
 
-    def _create_embedding_provider(self):
-        from microclaw.memory.embeddings import LocalEmbedding, NullEmbedding, OllamaEmbedding, OpenAIEmbedding
+    async def _create_embedding_provider(self):
+        from microclaw.memory.embeddings import (
+            LocalEmbedding, NullEmbedding, OllamaEmbedding, OpenAIEmbedding,
+            probe_ollama, _DEFAULT_LOCAL_MODEL, _DEFAULT_OLLAMA_MODEL,
+        )
         cfg = self.config.embedding
+
+        if cfg.enabled == "false":
+            return NullEmbedding()
+
+        # Explicit provider (user set provider != auto, or enabled == "true")
+        if cfg.provider != "auto":
+            return self._create_explicit_provider(cfg)
+
+        # Auto-detect: probe available providers
+        ollama_host = self.config.provider_config.ollama.host
+        ollama_model = cfg.model or _DEFAULT_OLLAMA_MODEL
+
+        # 1. Ollama — zero extra deps, local, fast
+        if await probe_ollama(ollama_host, ollama_model):
+            logger.info("Embeddings: auto-detected Ollama (%s)", ollama_model)
+            return OllamaEmbedding(ollama_host, ollama_model)
+        else:
+            logger.debug(
+                "Ollama not available or missing %s; "
+                "run 'ollama pull %s' for local vector search",
+                ollama_model, ollama_model,
+            )
+
+        # 2. OpenAI — zero extra deps, uses existing key
+        openai_key = self.config.provider_config.openai.api_key
+        if openai_key:
+            model = cfg.model or "text-embedding-3-small"
+            logger.info("Embeddings: auto-detected OpenAI (%s)", model)
+            return OpenAIEmbedding(openai_key, model)
+
+        # 3. Local sentence-transformers — fully offline
+        try:
+            import sentence_transformers  # noqa: F401
+            model = cfg.model or _DEFAULT_LOCAL_MODEL
+            logger.info("Embeddings: auto-detected local (%s)", model)
+            return LocalEmbedding(model)
+        except ImportError:
+            pass
+
+        # 4. Nothing available
+        logger.info("Embeddings: no provider available; text search still works")
+        return NullEmbedding()
+
+    def _create_explicit_provider(self, cfg):
+        from microclaw.memory.embeddings import (
+            LocalEmbedding, NullEmbedding, OllamaEmbedding, OpenAIEmbedding,
+            _DEFAULT_LOCAL_MODEL, _DEFAULT_OLLAMA_MODEL,
+        )
         if cfg.provider == "local":
-            return LocalEmbedding(cfg.model)
+            return LocalEmbedding(cfg.model or _DEFAULT_LOCAL_MODEL)
         elif cfg.provider == "openai":
             api_key = self.config.provider_config.openai.api_key
             if not api_key:
-                logger.warning("Embeddings enabled but no OpenAI API key; disabling vector search")
+                logger.warning("Embeddings: OpenAI selected but no API key; disabling")
                 return NullEmbedding()
-            return OpenAIEmbedding(api_key, cfg.model)
+            return OpenAIEmbedding(api_key, cfg.model or "text-embedding-3-small")
         elif cfg.provider == "ollama":
-            return OllamaEmbedding(self.config.provider_config.ollama.host, cfg.model)
+            host = self.config.provider_config.ollama.host
+            return OllamaEmbedding(host, cfg.model or _DEFAULT_OLLAMA_MODEL)
         return NullEmbedding()
 
     async def stop(self) -> None:

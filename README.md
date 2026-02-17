@@ -117,10 +117,11 @@ MicroClaw > [delegate] "Research quantum computing breakthroughs"
             Here's what I found on both fronts...
 ```
 
+- **Full tool access** -- sub-agents inherit all tools (search, browse, files, etc.)
+- **No recursive spawning** -- `delegate` tool is excluded from sub-agents, preventing infinite loops
 - **Inline** -- blocks until done, returns result
-- **Background** -- fire-and-forget via message bus
-- **Secure** -- sub-agents have **zero tool access** (`tools=None` always)
-- **Capped** -- max 10 LLM rounds per sub-agent
+- **Background** -- fire-and-forget via message bus, result delivered asynchronously
+- **Configurable** -- max 25 LLM rounds per sub-agent (adjustable via `context.max_subagent_iterations`)
 
 ### 4 Providers with Automatic Failover
 
@@ -139,13 +140,24 @@ Retries with exponential backoff on 429/503 before switching. If Claude is down,
 
 Override models via env vars: `CLAUDE_MODEL`, `OPENAI_MODEL`, `GEMINI_MODEL`, `OLLAMA_MODEL`.
 
-### Memory & Context
+### Memory & Vector Search
 
-- **SQLite + optional vector search** -- persists across restarts
+- **SQLite + auto-detected vector search** -- persists across restarts
 - **Shared across all channels** -- remember on Telegram, recall from Discord
 - **Auto-summarizes** old context when conversations grow large
-- **Embeddings**: local sentence-transformers, OpenAI, or Ollama
 - **Export**: `microclaw export` dumps history as JSON or Markdown
+
+Embedding auto-detect priority (zero config):
+
+```
+Ollama (local, free) -> OpenAI (if key exists) -> sentence-transformers (offline) -> text search fallback
+```
+
+Default model: `nomic-embed-text` (768 dims, 8192 token context, MTEB 59.4). Override in config:
+
+```json
+{ "embedding": { "provider": "ollama", "model": "snowflake-arctic-embed" } }
+```
 
 ### Web Search -- Zero Config
 
@@ -210,7 +222,7 @@ pip install ".[slack]"         # Slack (Socket Mode)
 pip install ".[whatsapp]"      # WhatsApp (aiohttp webhook)
 pip install ".[browser]"       # Playwright browser automation
 pip install ".[pdf]"           # PDF reading
-pip install ".[embeddings]"    # Local sentence-transformer embeddings
+pip install ".[embeddings]"    # Local sentence-transformer embeddings (auto-detected if Ollama/OpenAI unavailable)
 pip install ".[all]"           # Everything
 ```
 
@@ -312,7 +324,7 @@ Point any provider at a compatible server (vLLM, LM Studio, Azure OpenAI):
 
 ## Security
 
-- **Sub-agent isolation** -- `tools=None` always, cannot read files or execute commands
+- **Sub-agent isolation** -- inherits tools but `delegate` is always excluded (no recursive spawning)
 - **Shell blocking** -- 40+ regex patterns block reverse shells, `rm -rf /`, env leaks, eval/exec, download-and-execute
 - **Dangerous command confirmation** -- `rm`, `sudo`, `git push` require explicit confirmation
 - **Path security** -- blocks `/proc`, `/sys`, `.ssh/`, `.env`, symlinks, path traversal
@@ -338,7 +350,7 @@ src/microclaw/          ~6,240 LOC source + ~2,450 LOC tests
  security.py            SSRF + path security + DNS checks
  core/
    agent.py             Agent loop (streaming, tools, caching, errors)
-   subagent.py          Sub-agent loop (no tools, capped)
+   subagent.py          Sub-agent loop (tools minus delegate, configurable cap)
    context.py           Context compaction + auto-summarization
    conversation.py      History + session management
  providers/             4 providers + failover (raw httpx, retry)

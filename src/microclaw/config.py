@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 load_dotenv()
 
@@ -132,9 +132,16 @@ class RateLimitConfig(BaseModel):
 
 
 class EmbeddingConfig(BaseModel):
-    enabled: bool = False
-    provider: Literal["local", "openai", "ollama"] = "local"
-    model: str = "BAAI/bge-small-en-v1.5"
+    enabled: str = "auto"  # "auto", "true", "false"
+    provider: Literal["auto", "local", "openai", "ollama"] = "auto"
+    model: str = ""  # empty = auto-select best model for provider
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _coerce_enabled(cls, v):
+        if isinstance(v, bool):
+            return "true" if v else "false"
+        return str(v).lower()
 
 
 class SearchConfig(BaseModel):
@@ -147,6 +154,7 @@ class ContextConfig(BaseModel):
     max_history_messages: int = 50
     compaction_threshold: int = 30
     max_tool_iterations: int = 15
+    max_subagent_iterations: int = 25
     max_message_size: int = 100_000  # max input message size in characters
 
 

@@ -9,27 +9,36 @@ from typing import Any
 from microclaw.bus import MessageBus, OutboundMessage
 from microclaw.core.subagent import SubAgent
 from microclaw.providers.base import AIProvider
-from microclaw.tools.base import Tool, ToolContext
+from microclaw.tools.base import Tool, ToolContext, ToolRegistry
 
 logger = logging.getLogger(__name__)
 
 # Injected at startup
 _provider: AIProvider | None = None
 _bus: MessageBus | None = None
+_registry: ToolRegistry | None = None
+_max_iterations: int = 25
 
 
-def set_delegate_deps(provider: AIProvider, bus: MessageBus | None = None) -> None:
-    global _provider, _bus
+def set_delegate_deps(
+    provider: AIProvider,
+    bus: MessageBus | None = None,
+    registry: ToolRegistry | None = None,
+    max_iterations: int = 25,
+) -> None:
+    global _provider, _bus, _registry, _max_iterations
     _provider = provider
     _bus = bus
+    _registry = registry
+    _max_iterations = max_iterations
 
 
 class DelegateTool(Tool):
     name = "delegate"
     description = (
-        "Delegate a sub-task to an independent AI agent. The sub-agent has no tool access "
-        "and works purely with text. Use 'inline' mode for immediate results or 'background' "
-        "to run asynchronously."
+        "Delegate a sub-task to an independent AI agent. The sub-agent can use all tools "
+        "except delegate (no recursive spawning). Use 'inline' mode for immediate results "
+        "or 'background' to run asynchronously."
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -60,7 +69,13 @@ class DelegateTool(Tool):
         mode = args.get("mode", "inline")
         system_prompt = args.get("system_prompt")
 
-        agent = SubAgent(_provider, system_prompt=system_prompt)
+        agent = SubAgent(
+            _provider,
+            system_prompt=system_prompt,
+            registry=_registry,
+            tool_context=context,
+            max_iterations=_max_iterations,
+        )
 
         if mode == "background":
             if _bus is None:
