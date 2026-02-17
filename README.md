@@ -102,17 +102,25 @@ microclaw chat      # start talking
 </div>
 
 ```
-         Telegram  Discord  Slack  WhatsApp  WebChat
-              \       |       |       |        /
-               +------+-------+-------+------+
-                              |
-    Terminal  ───────  [  Gateway  ]
-                              |
-                     +--------+--------+
-                     |        |        |
-                  [Agent]  [Tools]  [Memory ── SQLite + vectors]
-                     |
-                [Provider ── Claude / GPT-4o / Gemini / Ollama]
+        Telegram     Discord     Slack     WhatsApp     WebChat
+            \           |          |          |           /
+             \          |          |          |          /
+              +---------+----------+----------+---------+
+                                   |
+                                   |
+   Terminal  ─────────────  [  Gateway  ]
+                                   |
+                                   |
+                        +----------+----------+
+                        |          |          |
+                        |          |          |
+                     [Agent]    [Tools]    [Memory]
+                        |                     |
+                        |               SQLite + vectors
+                        |
+                   [ Provider ]
+                        |
+          Claude / GPT-4o / Gemini / Ollama
 ```
 
 ```bash
