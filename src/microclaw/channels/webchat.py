@@ -130,10 +130,12 @@ class WebChatChannel(Channel):
         host: str = "127.0.0.1",
         port: int = 8765,
         auth_token: str = "",
+        allowed_origins: list[str] | None = None,
     ) -> None:
         self.host = host
         self.port = port
         self.auth_token = auth_token or secrets.token_urlsafe(32)
+        self.allowed_origins = allowed_origins or []
         self._handler: MessageHandler | None = None
         self._stream_handler: StreamHandler | None = None
         self._server: asyncio.Server | None = None
@@ -209,6 +211,16 @@ class WebChatChannel(Channel):
             await writer.drain()
             writer.close()
             return
+
+        # Origin check
+        if self.allowed_origins:
+            origin = headers.get("origin", "")
+            if origin not in self.allowed_origins:
+                logger.warning("WebChat rejected origin: %s", origin)
+                writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+                await writer.drain()
+                writer.close()
+                return
 
         # Connection limit
         if len(self._connections) >= MAX_CONNECTIONS:

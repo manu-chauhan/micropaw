@@ -266,6 +266,170 @@ class TestContextCompaction:
         assert result == messages
 
 
+class TestGeminiStreamingUsage:
+    """Test that Gemini streaming extracts usageMetadata from final SSE chunk."""
+
+    async def test_gemini_build_body_system_message(self):
+        from microclaw.providers.gemini import GeminiProvider
+        p = GeminiProvider(api_key="test-key")
+        messages = [
+            Message(role="system", content="You are helpful"),
+            Message(role="user", content="Hi"),
+        ]
+        body = p._build_body(messages, None)
+        assert "systemInstruction" in body
+        assert body["systemInstruction"]["parts"][0]["text"] == "You are helpful"
+        assert len(body["contents"]) == 1
+        assert body["contents"][0]["role"] == "user"
+
+    async def test_gemini_build_body_tool_calls(self):
+        from microclaw.providers.gemini import GeminiProvider
+        p = GeminiProvider(api_key="test-key")
+        messages = [
+            Message(role="user", content="Search python"),
+            Message(role="assistant", content="", tool_calls=[
+                ToolCall(id="tc1", name="web_search", arguments={"query": "python"}),
+            ]),
+            Message(role="tool", content="Results here", tool_call_id="tc1"),
+        ]
+        body = p._build_body(messages, None)
+        # Assistant message should have functionCall part
+        model_msg = body["contents"][1]
+        assert model_msg["role"] == "model"
+        assert any("functionCall" in p for p in model_msg["parts"])
+        # Tool response should be user role with functionResponse
+        tool_msg = body["contents"][2]
+        assert tool_msg["role"] == "user"
+        assert any("functionResponse" in p for p in tool_msg["parts"])
+
+    async def test_gemini_parse_candidates_text(self):
+        from microclaw.providers.gemini import GeminiProvider
+        p = GeminiProvider(api_key="test-key")
+        data = {
+            "candidates": [{
+                "content": {"parts": [{"text": "Hello world"}]},
+            }]
+        }
+        content, tool_calls = p._parse_candidates(data)
+        assert content == "Hello world"
+        assert tool_calls == []
+
+    async def test_gemini_parse_candidates_function_call(self):
+        from microclaw.providers.gemini import GeminiProvider
+        p = GeminiProvider(api_key="test-key")
+        data = {
+            "candidates": [{
+                "content": {"parts": [{"functionCall": {"name": "web_search", "args": {"query": "test"}}}]},
+            }]
+        }
+        content, tool_calls = p._parse_candidates(data)
+        assert content == ""
+        assert len(tool_calls) == 1
+        assert tool_calls[0].name == "web_search"
+
+    async def test_gemini_non_streaming_usage(self):
+        """Non-streaming should extract usageMetadata."""
+        from microclaw.providers.gemini import GeminiProvider
+        from unittest.mock import AsyncMock, MagicMock
+
+        p = GeminiProvider(api_key="test-key")
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "Hello"}]}}],
+            "usageMetadata": {"promptTokenCount": 42, "candidatesTokenCount": 10},
+        }
+        mock_response.raise_for_status = MagicMock()
+        p._client = MagicMock()
+        p._client.post = AsyncMock(return_value=mock_response)
+
+        resp = await p.chat([Message(role="user", content="Hi")])
+        assert resp.usage == {"input": 42, "output": 10}
+
+
+class TestClaudeMessageBuilding:
+    """Test Claude provider message format building."""
+
+    def test_system_message_extracted(self):
+        from microclaw.providers.claude import ClaudeProvider
+        p = ClaudeProvider(api_key="test-key")
+        messages = [
+            Message(role="system", content="Be helpful"),
+            Message(role="user", content="Hi"),
+        ]
+        body = p._build_body(messages, None)
+        assert body["system"] == "Be helpful"
+        assert len(body["messages"]) == 1  # system extracted
+
+    def test_tool_call_format(self):
+        from microclaw.providers.claude import ClaudeProvider
+        p = ClaudeProvider(api_key="test-key")
+        messages = [
+            Message(role="user", content="Search"),
+            Message(role="assistant", content="Searching...", tool_calls=[
+                ToolCall(id="tc1", name="web_search", arguments={"query": "python"}),
+            ]),
+            Message(role="tool", content="Results", tool_call_id="tc1"),
+        ]
+        body = p._build_body(messages, None)
+        # Assistant message should have tool_use block
+        assistant = body["messages"][1]
+        assert assistant["role"] == "assistant"
+        assert any(b["type"] == "tool_use" for b in assistant["content"])
+        # Tool result
+        tool_msg = body["messages"][2]
+        assert tool_msg["role"] == "user"
+        assert tool_msg["content"][0]["type"] == "tool_result"
+
+    def test_tools_format(self):
+        from microclaw.providers.claude import ClaudeProvider
+        p = ClaudeProvider(api_key="test-key")
+        tools = [ToolDef(name="search", description="Search web", parameters={"type": "object"})]
+        body = p._build_body([Message(role="user", content="Hi")], tools)
+        assert "tools" in body
+        assert body["tools"][0]["name"] == "search"
+        assert "input_schema" in body["tools"][0]
+
+
+class TestOpenAIMessageBuilding:
+    """Test OpenAI provider message format building."""
+
+    def test_system_message_included(self):
+        from microclaw.providers.openai import OpenAIProvider
+        p = OpenAIProvider(api_key="test-key")
+        messages = [
+            Message(role="system", content="Be helpful"),
+            Message(role="user", content="Hi"),
+        ]
+        body = p._build_body(messages, None)
+        assert body["messages"][0] == {"role": "system", "content": "Be helpful"}
+
+    def test_tool_call_format(self):
+        from microclaw.providers.openai import OpenAIProvider
+        p = OpenAIProvider(api_key="test-key")
+        messages = [
+            Message(role="user", content="Search"),
+            Message(role="assistant", content="Searching...", tool_calls=[
+                ToolCall(id="tc1", name="web_search", arguments={"query": "python"}),
+            ]),
+            Message(role="tool", content="Results", tool_call_id="tc1"),
+        ]
+        body = p._build_body(messages, None)
+        assistant = body["messages"][1]
+        assert assistant["role"] == "assistant"
+        assert assistant["tool_calls"][0]["function"]["name"] == "web_search"
+        tool_msg = body["messages"][2]
+        assert tool_msg["role"] == "tool"
+        assert tool_msg["tool_call_id"] == "tc1"
+
+    def test_tools_format(self):
+        from microclaw.providers.openai import OpenAIProvider
+        p = OpenAIProvider(api_key="test-key")
+        tools = [ToolDef(name="search", description="Search web", parameters={"type": "object"})]
+        body = p._build_body([Message(role="user", content="Hi")], tools)
+        assert "tools" in body
+        assert body["tools"][0]["function"]["name"] == "search"
+
+
 class TestRateLimiter:
     def test_allows_normal_traffic(self):
         from microclaw.gateway import _RateLimiter

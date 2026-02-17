@@ -117,6 +117,7 @@ class GeminiProvider(AIProvider):
 
         content = ""
         tool_calls: list[ToolCall] = []
+        usage_meta: dict = {}
 
         async with self._client.stream("POST", self._url(streaming=True), headers={"Content-Type": "application/json"}, json=body) as resp:
             resp.raise_for_status()
@@ -132,8 +133,14 @@ class GeminiProvider(AIProvider):
                     content += chunk_content
                     yield chunk_content
                 tool_calls.extend(chunk_tools)
+                if "usageMetadata" in chunk:
+                    usage_meta = chunk["usageMetadata"]
 
-        yield AIResponse(content=content, tool_calls=tool_calls, usage={})
+        yield AIResponse(
+            content=content,
+            tool_calls=tool_calls,
+            usage={"input": usage_meta.get("promptTokenCount", 0), "output": usage_meta.get("candidatesTokenCount", 0)},
+        )
 
     async def close(self) -> None:
         await self._client.aclose()

@@ -99,6 +99,41 @@ class TestEnvOverrides:
             _apply_env_overrides(raw)
         assert raw["search"]["brave_api_key"] == "BSA-test-key"
 
+    def test_apply_claude_model(self):
+        raw: dict = {}
+        with patch.dict(os.environ, {"CLAUDE_MODEL": "claude-opus-4-6"}, clear=False):
+            _apply_env_overrides(raw)
+        assert raw["provider_config"]["claude"]["model"] == "claude-opus-4-6"
+
+    def test_apply_openai_model(self):
+        raw: dict = {}
+        with patch.dict(os.environ, {"OPENAI_MODEL": "gpt-4-turbo"}, clear=False):
+            _apply_env_overrides(raw)
+        assert raw["provider_config"]["openai"]["model"] == "gpt-4-turbo"
+
+    def test_apply_gemini_model(self):
+        raw: dict = {}
+        with patch.dict(os.environ, {"GEMINI_MODEL": "gemini-pro"}, clear=False):
+            _apply_env_overrides(raw)
+        assert raw["provider_config"]["gemini"]["model"] == "gemini-pro"
+
+    def test_apply_ollama_model(self):
+        raw: dict = {}
+        with patch.dict(os.environ, {"OLLAMA_MODEL": "mistral"}, clear=False):
+            _apply_env_overrides(raw)
+        assert raw["provider_config"]["ollama"]["model"] == "mistral"
+
+    def test_model_override_in_loaded_config(self, tmp_path: Path):
+        """Model env var should appear in the final loaded Config."""
+        config_file = tmp_path / "config.json"
+        config_file.write_text("{}")
+        with (
+            patch("microclaw.config.CONFIG_FILE", config_file),
+            patch.dict(os.environ, {"CLAUDE_MODEL": "claude-opus-4-6"}, clear=False),
+        ):
+            c = load_config()
+        assert c.provider_config.claude.model == "claude-opus-4-6"
+
 
 class TestRedaction:
     """Tests for secret redaction."""

@@ -2,7 +2,7 @@
 
 **Your AI. Your machine. Your keys.**
 
-A personal AI assistant that runs on your machine, talks to any LLM, works across **6 messaging platforms simultaneously**, delegates to sub-agents, and does it all in ~6,200 lines of Python. No SDK bloat, no cloud lock-in, no telemetry.
+A personal AI assistant that runs on your machine, talks to any LLM, works across **6 messaging platforms simultaneously**, delegates to sub-agents, and does it all in ~6,200 lines of Python with 209 tests. No SDK bloat, no cloud lock-in, no telemetry.
 
 ```bash
 pip install .
@@ -398,6 +398,10 @@ Environment variables override config file values:
 | `WHATSAPP_TOKEN` / `WHATSAPP_PHONE_ID` | WhatsApp credentials |
 | `WHATSAPP_VERIFY_TOKEN` | WhatsApp webhook verify token |
 | `WEBCHAT_AUTH_TOKEN` | WebChat authentication token |
+| `CLAUDE_MODEL` | Override Claude model (e.g., `claude-opus-4-6`) |
+| `OPENAI_MODEL` | Override OpenAI model (e.g., `gpt-4-turbo`) |
+| `GEMINI_MODEL` | Override Gemini model (e.g., `gemini-pro`) |
+| `OLLAMA_MODEL` | Override Ollama model (e.g., `mistral`) |
 | `BRAVE_API_KEY` | Brave Search API key (optional, best search quality) |
 | `SEARXNG_URL` | Self-hosted SearXNG instance URL |
 | `MICROCLAW_FILE_LOG` | Enable file logging (`1`/`true`/`yes`) |
@@ -453,7 +457,7 @@ See `.env.example` for the full list.
 ## Architecture
 
 ```
-src/microclaw/          48 files, ~6,200 LOC
+src/microclaw/          ~6,200 LOC source + ~2,200 LOC tests
 ├── cli.py              # Click CLI (11 commands)
 ├── config.py           # Single Pydantic config model
 ├── connector.py        # Guided channel setup + live token validation
@@ -488,6 +492,7 @@ src/microclaw/          48 files, ~6,200 LOC
 - **SQLite busy_timeout** — 5-second timeout prevents "database is locked" errors
 - **Message size validation** — configurable max message size prevents memory exhaustion
 - **Context compaction is safe** — if summarization fails, all original messages are preserved
+- **Tool result caching** — per-message cache for read-only tools, avoids duplicate API calls within a conversation turn
 - **Channel failure isolation** — one channel crashing doesn't take down the rest
 
 Full decision log: [`DECISIONS.md`](DECISIONS.md)
@@ -521,11 +526,36 @@ eval "$(_MICROCLAW_COMPLETE=fish_source microclaw)"    # Fish
 
 ---
 
+## Roadmap
+
+### v0.2.0 — Harden & Polish (complete)
+
+| # | Feature | Status |
+|---|---------|--------|
+| 1 | **209 tests** (was 125) | Agent loop, caching, error classification, gateway, WebChat, providers, conversations |
+| 2 | **Gemini token tracking** | Parse `usageMetadata` from streaming chunks — `/usage` works for all providers |
+| 3 | **Model env var overrides** | `CLAUDE_MODEL`, `OPENAI_MODEL`, `GEMINI_MODEL`, `OLLAMA_MODEL` |
+| 4 | **WebChat origin checking** | `allowed_origins` config wired into WebSocket handshake |
+| 5 | **Smart context compaction** | LLM summarization of old messages — already in v0.1.0 |
+| 6 | **Tool result caching** | Per-message cache for read-only tools (web_search, file_read, web_browse, etc.) |
+| 7 | **Channel streaming** | Telegram/Discord/Slack edit-in-place with throttling — already in v0.1.0 |
+
+### Future (v0.3.0+)
+
+- MCP (Model Context Protocol) support — external tool servers
+- A2UI — agent-generated UIs over WebSocket
+- Plugin system — user-defined tools from `~/.microclaw/plugins/`
+- Multi-user auth for shared deployments
+
+Full decision log: [`DECISIONS.md`](DECISIONS.md)
+
+---
+
 ## Development
 
 ```bash
 pip install ".[dev]"
-pytest                 # 125 tests, <0.5s
+pytest                 # 209 tests, <1s
 ruff check src/        # Linting
 mypy src/              # Type checking
 ```

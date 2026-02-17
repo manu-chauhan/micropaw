@@ -154,11 +154,11 @@
 - `sessions.py` bypassed store abstraction with raw SQL — now uses `store.list_conversations()` and `store.export_messages()`
 - Gateway accessed `conversations._terminal_override` private attribute — added public `reset_terminal_session()` method
 
-## File Count & LOC (actual, as of v0.1.0+hardening)
-- Source files: 48 Python files (41 source + 7 test)
-- Source LOC: ~6,150
-- Test LOC: ~1,170
-- Tests: 125 passing
+## File Count & LOC (actual, as of v0.2.0)
+- Source files: 52 Python files (41 source + 11 test)
+- Source LOC: ~6,200
+- Test LOC: ~2,200
+- Tests: 209 passing
 - Dependencies: 7 core, 7 optional extras
 
 ### Web Search Enhancement
@@ -191,3 +191,59 @@
 **Rationale:** Bus module existed but was unwired (D3). Now wired specifically for background sub-agent result delivery — NOT replacing handler callbacks for regular messages.
 **Design:** Gateway creates MessageBus, injects via `set_delegate_deps()`. Background `_bus_consumer()` task consumes outbound messages and routes to appropriate channel's `send_message()`. Cleaned up in `stop()`.
 **Impact:** Background sub-agent results delivered to users via their original channel.
+
+---
+
+## v0.2.0 Roadmap
+
+**Decided:** 2026-02-17
+**Goal:** Harden, complete, and polish. No new features — fix gaps, expand coverage, unlock config flexibility.
+
+| # | Feature | Status |
+|---|---------|--------|
+| 1 | Test coverage expansion (125 → 209 tests) | ✅ Complete |
+| 2 | Gemini streaming token tracking | ✅ Complete |
+| 3 | Model env var overrides | ✅ Complete |
+| 4 | Wire `allowed_origins` into WebChat | ✅ Complete |
+| 5 | Smarter context compaction (summarize old messages) | ✅ Already implemented in v0.1.0 |
+| 6 | Tool result caching | ✅ Complete |
+| 7 | Streaming for Telegram/Discord/Slack | ✅ Already implemented in v0.1.0 |
+
+### D18: Test Coverage Expansion
+**Decided:** 2026-02-17
+**Rationale:** 125 tests cover config, bus, security, tools, providers (mocked), embeddings, sub-agent, delegate. But agent loop, all 6 channels, provider HTTP calls, context compaction, and most tools have zero test coverage. ~30% estimated coverage.
+**Goal:** Reach 70%+ coverage. Prioritize: agent loop (handle_message, tool call loop, error classification), provider response parsing, channel message routing, context compaction, gateway message handling.
+**Approach:** Mock httpx responses and asyncio infrastructure. No integration tests yet — unit tests only. Use `pytest-asyncio` for async tests.
+
+### D19: Gemini Streaming Token Tracking
+**Decided:** 2026-02-17
+**Rationale:** Gemini streaming yields `usage={}` — token tracking shows 0 for Gemini. The Gemini streaming API returns usage metadata in the final chunk's `usageMetadata` field, but the provider's SSE parser ignores it.
+**Fix:** Parse `usageMetadata` from the final streaming chunk (`promptTokenCount`, `candidatesTokenCount`). Map to standard `{input, output}` format.
+
+### D20: Model Env Var Overrides
+**Decided:** 2026-02-17
+**Rationale:** Users can override provider and API keys via env vars (`ANTHROPIC_API_KEY`, etc.) but not the model. Switching models requires editing `~/.microclaw/config.json`. For quick testing or CI, env var overrides are cleaner.
+**Design:** Add to env var mapping table in `config.py`:
+- `CLAUDE_MODEL` → `provider_config.claude.model`
+- `OPENAI_MODEL` → `provider_config.openai.model`
+- `GEMINI_MODEL` → `provider_config.gemini.model`
+- `OLLAMA_MODEL` → `provider_config.ollama.model`
+
+### D21: Wire `allowed_origins` into WebChat
+**Decided:** 2026-02-17
+**Rationale:** `WebChatConfig.allowed_origins` exists in the Pydantic config model but the WebChat channel never checks it during the WebSocket handshake. Any origin can connect — security gap for public deployments.
+**Fix:** During WebSocket upgrade, parse the `Origin` header and reject connections not in `allowed_origins` (when the list is non-empty). Empty list = allow all (default, backwards-compatible).
+
+### D22: Smarter Context Compaction
+**Decided:** 2026-02-17
+**Status:** Already implemented in v0.1.0 (`core/context.py`). The `ContextManager.compact()` method already summarizes old messages via the LLM and preserves the last 10 messages intact. Falls back to keeping full history if summarization fails or returns empty. No changes needed.
+
+### D23: Tool Result Caching
+**Decided:** 2026-02-17
+**Rationale:** Within a single conversation turn, the agent may call `web_search` with the same query multiple times, or `file_read` on the same path. Each call burns tokens and adds latency. Caching identical tool calls within a conversation avoids this waste.
+**Design:** Per-conversation LRU cache (maxsize=32) keyed on `(tool_name, sorted_args_tuple)`. TTL: `web_search`/`web_browse`/`http_request` = 5 minutes, `file_read` = 2 minutes, `memory`/`sessions` = 0 (never cache). Cache cleared on `/new`. Implemented in the agent's tool dispatch loop — no changes to individual tools.
+**Constraint:** Only cache read-only tools. Tools with side effects (`file_write`, `shell`, `memory` save/delete, `delegate`) are never cached.
+
+### D24: Streaming for Telegram/Discord/Slack
+**Decided:** 2026-02-17
+**Status:** Already implemented in v0.1.0. All three channels already have streaming with placeholder message → `on_chunk` closure → throttled `edit_message` → final edit with full response. Throttle intervals: Telegram 0.5s, Discord 0.8s, Slack 1.0s. No changes needed.

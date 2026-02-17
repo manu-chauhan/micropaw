@@ -180,6 +180,11 @@ _ENV_OVERRIDES: list[tuple[str, list[str]]] = [
     ("OPENAI_API_KEY", ["provider_config", "openai", "api_key"]),
     ("GEMINI_API_KEY", ["provider_config", "gemini", "api_key"]),
     ("OLLAMA_HOST", ["provider_config", "ollama", "host"]),
+    # Model overrides
+    ("CLAUDE_MODEL", ["provider_config", "claude", "model"]),
+    ("OPENAI_MODEL", ["provider_config", "openai", "model"]),
+    ("GEMINI_MODEL", ["provider_config", "gemini", "model"]),
+    ("OLLAMA_MODEL", ["provider_config", "ollama", "model"]),
     # Channel tokens
     ("TELEGRAM_BOT_TOKEN", ["channels", "telegram", "token"]),
     ("DISCORD_BOT_TOKEN", ["channels", "discord", "token"]),

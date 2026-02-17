@@ -16,6 +16,20 @@ from microclaw.tools.base import ToolContext, ToolRegistry
 
 logger = logging.getLogger(__name__)
 
+# Tools that are safe to cache (read-only, no side effects)
+_CACHEABLE_TOOLS = frozenset({"web_search", "web_browse", "file_read", "http_request", "pdf_read", "vision"})
+
+
+def _cache_key(tool_name: str, args: dict) -> tuple:
+    """Build a hashable cache key from tool name and arguments."""
+    def _freeze(obj):
+        if isinstance(obj, dict):
+            return tuple(sorted((k, _freeze(v)) for k, v in obj.items()))
+        if isinstance(obj, (list, tuple)):
+            return tuple(_freeze(v) for v in obj)
+        return obj
+    return (tool_name, _freeze(args))
+
 
 class Agent:
     """Core agent loop: chat with the LLM, execute tools, repeat until done."""
@@ -38,10 +52,12 @@ class Agent:
         )
         self.max_tool_iterations = config.context.max_tool_iterations
         self.last_usage: dict[str, int] = {"input": 0, "output": 0}
+        self._tool_cache: dict[tuple, str] = {}
 
     def _reset_usage(self) -> None:
-        """Reset per-message usage counter."""
+        """Reset per-message usage counter and tool cache."""
         self.last_usage = {"input": 0, "output": 0}
+        self._tool_cache.clear()
 
     def _accumulate_usage(self, usage: dict) -> None:
         """Accumulate token usage from the latest response."""
@@ -251,11 +267,19 @@ class Agent:
             tool = self.registry.get(tc.name)
             if tool:
                 logger.info("[%s] %s", tc.name, _summarize_args(tc.arguments))
-                try:
-                    result = await tool.execute(tc.arguments, tool_context)
-                except Exception as e:
-                    result = f"Tool error: {e}"
-                    logger.error("[%s] %s", tc.name, e)
+                # Check cache for read-only tools
+                ck = _cache_key(tc.name, tc.arguments) if tc.name in _CACHEABLE_TOOLS else None
+                if ck and ck in self._tool_cache:
+                    result = self._tool_cache[ck]
+                    logger.debug("[%s] cache hit", tc.name)
+                else:
+                    try:
+                        result = await tool.execute(tc.arguments, tool_context)
+                    except Exception as e:
+                        result = f"Tool error: {e}"
+                        logger.error("[%s] %s", tc.name, e)
+                    if ck and not result.startswith("Tool error:"):
+                        self._tool_cache[ck] = result
             else:
                 result = f"Unknown tool: {tc.name}"
                 logger.warning("Unknown tool called: %s", tc.name)

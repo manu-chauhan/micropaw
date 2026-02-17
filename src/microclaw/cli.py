@@ -151,6 +151,7 @@ def _create_channels(config: Config) -> list:
             host=config.channels.webchat.host,
             port=config.channels.webchat.port,
             auth_token=config.channels.webchat.auth_token,
+            allowed_origins=config.channels.webchat.allowed_origins,
         ))
 
     return channels
