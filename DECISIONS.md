@@ -305,3 +305,45 @@
 - Test LOC: ~3,101
 - Tests: 268 passing
 - Dependencies: 8 core (added sqlite-vec), 7 optional extras
+
+---
+
+## v0.3.0 — Scheduler, Persona, and Runtime Fixes
+
+**Decided:** 2026-02-17
+
+### D29: Cron/Scheduled Tasks
+**Rationale:** Gap analysis vs PicoClaw/MimiClaw showed both have cron scheduling. MicroPaw had no way to run recurring or delayed tasks.
+**Design:** Interval-based (not crontab syntax — no `croniter` dependency). Both recurring and one-shot jobs. Dual interface: CLI (`paw cron add/list/remove`) and LLM tool (`cron` with action parameter). Single SQLite table `cron_jobs` in existing DB. Scheduler is an async loop inside Gateway alongside the bus consumer, checks DB every 60s. 50 job max to prevent runaway scheduling.
+**New files:** `scheduler.py` (~60 LOC), `tools/cron_tool.py` (~30 LOC)
+**Modified:** `gateway.py` (start/stop scheduler), `cli.py` (cron subgroup + CronTool registration), `config.py` (SchedulerConfig)
+
+### D30: HEARTBEAT.md Proactive Mode
+**Rationale:** PicoClaw and MimiClaw both have proactive task execution. Users want the agent to do things without being asked.
+**Design:** Built into scheduler (not a DB cron job). Reads `~/.micropaw/HEARTBEAT.md` every 30min (configurable). Finds unchecked `- [ ]` items, sends each through the agent. Delivery: terminal first, then first active channel. Config: `scheduler.heartbeat_interval` (default 1800s).
+**Impact:** ~20 LOC added to scheduler.py. Zero new files or dependencies.
+
+### D31: Structured Persona Files (SOUL.md / USER.md)
+**Rationale:** Both PicoClaw and MimiClaw support structured persona customization. MicroPaw only had `PersonaConfig` with a single personality string.
+**Design:** Optional files in `~/.micropaw/`: `SOUL.md` replaces default personality if present, `USER.md` injects "About the user:" context. 2KB cap each. Read on every message (allows live editing). File presence is the config — no config changes needed.
+**Modified:** `core/agent.py` (`_build_system_prompt()`)
+**Impact:** ~15 LOC. No new files, no config changes, no dependencies.
+
+### Bug Fixes (Batch 4 — Runtime Testing)
+
+1. **Embedding provider crash** — `_create_explicit_provider()` created `LocalEmbedding` without checking if sentence-transformers was installed. Setup wizard offered "local" without checking. Fix: import check with NullEmbedding fallback in gateway.py, `[NOT INSTALLED]` label in setup wizard.
+
+2. **sqlite-vec threading error** — `_try_load_vec()` accessed `self._db._conn` from the main thread but aiosqlite creates it on a background thread. Fix: run extension loading via `self._db._execute()` on aiosqlite's internal thread.
+
+3. **Gateway shutdown hang** — `channel.stop()` for Telegram blocked indefinitely during event loop teardown. Fix: `asyncio.wait_for(timeout=5.0)` on all channel/provider/embedder cleanup.
+
+4. **Terminal log noise** — INFO log lines interleaved with chat conversation output. Fix: `quiet_console()` suppresses console handler to WARNING+ during chat/start. File logging always enabled at `~/.micropaw/logs/micropaw.log`.
+
+5. **Web search returning empty/generic answers** — All 5 SearXNG public instances dead (429/403). DDG Instant Answer API only returns knowledge base lookups, not web results. Fix: replaced with DDG Lite HTML parser that returns real search results with titles, URLs, and snippets.
+
+### Metrics (v0.3.0-dev)
+- Source LOC: ~7,100
+- Test LOC: ~3,400
+- Tests: 303 passing
+- Tools: 12 (added cron)
+- Dependencies: 8 core, 7 optional extras
