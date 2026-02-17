@@ -13,6 +13,7 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
 [![Tests](https://img.shields.io/badge/tests-268%20passed-brightgreen)]()
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=flat&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/manuchauhan)
 
 </div>
 
@@ -75,6 +76,23 @@ paw chat      # start talking
 - **Fully local option** — Run entirely offline with Ollama. No data leaves your machine. No telemetry. No phone home. Ever.
 
 - **Docker ready** — Multi-stage Dockerfile (base / browser / full). `docker compose up` with profiles. Named volume for persistence.
+
+---
+
+## Why MicroPaw?
+
+| | **MicroPaw** | **OpenClaw** | **NanoClaw** | **PicoClaw** | **MimiClaw** |
+|---|---|---|---|---|---|
+| **Language** | Python | TypeScript | TypeScript | Go | C |
+| **Codebase** | ~6,900 LOC | ~430k LOC | ~500 LOC | ~4k LOC | ~15k LOC |
+| **Channels** | 6 | 15+ | 1 (WhatsApp) | 5 | 3 |
+| **Tools** | 11 | 25 + 53 skills | SDK-dependent | 6 | 6 |
+| **AI SDKs** | None — raw httpx | Internal framework | Anthropic SDK | None — raw HTTP | None — raw HTTP |
+| **RAG / Vectors** | sqlite-vec ANN + fallback | sqlite-vec + BM25 | No | No | No |
+| **Telemetry** | None, ever | Local JSONL (opt-out) | None | None | None |
+| **License** | MIT | MIT | MIT | MIT | MIT |
+
+**MicroPaw sits in the sweet spot** — full-featured like OpenClaw (RAG, 6 channels, 11 tools, multi-agent delegation) but lightweight like PicoClaw (~6,900 LOC, zero SDK dependencies). No telemetry, no bloat, no wrappers.
 
 ---
 
