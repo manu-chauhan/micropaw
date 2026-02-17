@@ -356,6 +356,10 @@
    - **Fix:** Memory tool, agent `_prepare()` (recent memories + RAG search), and `_auto_ingest()` all now use `"_global"` as user_id instead of the channel-specific user ID. Conversations remain per-channel (correct — separate chat histories), but knowledge is unified across all channels.
    - **Files:** `tools/memory_tool.py`, `core/agent.py`
 
+7. **YouTube transcript extraction returning empty** — `fetch_youtube_transcript()` returned metadata but empty transcript text. YouTube changed their caption XML format: text now lives inside `<s>` (segment) children of `<p>` tags, not as direct text content. The parser only read `elem.text` which is empty when children exist.
+   - **Fix:** Parser now checks for direct text first, then falls back to joining text from `<s>` child elements. Both old and new XML formats are handled.
+   - **Files:** `tools/web_browse.py`
+
 ### Metrics (v0.3.0-dev)
 - Source LOC: ~7,100
 - Test LOC: ~3,400

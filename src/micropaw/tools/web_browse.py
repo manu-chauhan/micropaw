@@ -104,9 +104,14 @@ async def fetch_youtube_transcript(video_id: str) -> str:
         segments: list[str] = []
         for tag in ("p", "text"):  # manual captions use <p>, auto-gen uses <text>
             for elem in root.iter(tag):
-                text = unescape(elem.text or "").replace("\n", " ").strip()
-                if text:
-                    segments.append(text)
+                # Text may be direct (old format) or inside <s> children (new format)
+                direct = unescape(elem.text or "").replace("\n", " ").strip()
+                if direct:
+                    segments.append(direct)
+                else:
+                    parts = [unescape(s.text or "").strip() for s in elem.iter("s") if s.text]
+                    if parts:
+                        segments.append(" ".join(parts))
             if segments:
                 break
 
