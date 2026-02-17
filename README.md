@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="puppy.png" width="120" alt="MicroPaw">
+<img src="https://gitlab.com/MANU-CHAUHAN/micropaw/-/raw/master/puppy.png" width="120" alt="MicroPaw">
 
 # 🐾 MicroPaw
 

@@ -66,6 +66,9 @@ Homepage = "https://gitlab.com/MANU-CHAUHAN/micropaw"
 Repository = "https://gitlab.com/MANU-CHAUHAN/micropaw"
 Issues = "https://gitlab.com/MANU-CHAUHAN/micropaw/-/issues"
 
+[tool.hatch.build.targets.sdist]
+exclude = ["DECISIONS.md", "tests/", ".env.example", "Dockerfile", "docker-compose.yml", "*.Identifier"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/micropaw"]
 
