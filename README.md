@@ -293,7 +293,7 @@ No extra tools, no commands, no user action needed. Just read, browse, or paste 
 ### Embeddings (auto-detected, zero config)
 
 ```
-Ollama (local, free) → OpenAI (if key exists) → sentence-transformers (offline) → text search fallback
+Ollama (local, free) → OpenAI (if key exists) → fastembed/ONNX (offline) → text search fallback
 ```
 
 Default model: `nomic-embed-text` (768 dims, 8k token context). Override in config:
@@ -455,7 +455,7 @@ pip install "micropaw[slack]"         # Slack (Socket Mode)
 pip install "micropaw[whatsapp]"      # WhatsApp (aiohttp webhook)
 pip install "micropaw[browser]"       # Playwright browser automation
 pip install "micropaw[pdf]"           # PDF reading
-pip install "micropaw[embeddings]"    # Local sentence-transformers (if no Ollama/OpenAI)
+pip install "micropaw[embeddings]"    # Local fastembed/ONNX (included in core deps)
 pip install "micropaw[all]"           # Everything
 ```
 

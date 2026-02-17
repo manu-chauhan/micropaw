@@ -31,7 +31,7 @@ dependencies = [
     "aiosqlite>=0.20",
     "sqlite-vec>=0.1",
     "questionary>=2.0",
-    "sentence-transformers>=3.0",
+    "fastembed>=0.4",
 ]
 
 [project.optional-dependencies]
@@ -41,7 +41,7 @@ slack = ["slack-bolt>=1.18"]
 whatsapp = ["aiohttp>=3.9"]
 browser = ["playwright>=1.40"]
 pdf = ["pypdf>=4.0"]
-embeddings = []  # included in core deps
+embeddings = []  # fastembed included in core deps
 all = [
     "python-telegram-bot>=21.0",
     "discord.py>=2.3",

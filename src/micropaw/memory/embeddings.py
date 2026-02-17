@@ -1,6 +1,6 @@
 """Embedding providers for vector memory search.
 
-Supports local sentence-transformers (nomic-ai/nomic-embed-text-v1.5), OpenAI, and
+Supports local fastembed/ONNX (nomic-ai/nomic-embed-text-v1.5), OpenAI, and
 Ollama via httpx (no SDK dependencies), plus a null fallback.  Auto-detect picks
 the best available provider at startup.
 """
@@ -77,7 +77,7 @@ class OllamaEmbedding(EmbeddingProvider):
 
 
 class LocalEmbedding(EmbeddingProvider):
-    """Local embeddings via sentence-transformers — no API key, runs on CPU."""
+    """Local embeddings via fastembed/ONNX — no API key, runs on CPU, no PyTorch."""
     name = "local"
     dimensions = 768  # nomic-embed-text-v1.5
 
@@ -88,24 +88,25 @@ class LocalEmbedding(EmbeddingProvider):
     def _load(self):
         if self._model is None:
             try:
-                from sentence_transformers import SentenceTransformer
+                from fastembed import TextEmbedding
             except ImportError:
                 raise RuntimeError(
-                    "sentence-transformers not installed. "
-                    "Install with: pip install sentence-transformers"
+                    "fastembed not installed. "
+                    "Install with: pip install fastembed"
                 )
             logger.info("Loading embedding model: %s", self.model_name)
-            self._model = SentenceTransformer(self.model_name)
-            self.dimensions = self._model.get_sentence_embedding_dimension()
+            self._model = TextEmbedding(model_name=self.model_name)
         return self._model
 
     async def embed(self, text: str) -> list[float]:
         import asyncio
         model = self._load()
-        # Run in thread pool — model.encode is CPU-bound
+        # Run in thread pool — model.embed is CPU-bound
         loop = asyncio.get_running_loop()
-        vec = await loop.run_in_executor(None, lambda: model.encode(text, normalize_embeddings=True))
-        return vec.tolist()
+        vec = await loop.run_in_executor(
+            None, lambda: list(model.embed([text]))[0].tolist()
+        )
+        return vec
 
 
 class NullEmbedding(EmbeddingProvider):

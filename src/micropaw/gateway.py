@@ -294,9 +294,9 @@ class Gateway:
             logger.info("Embeddings: auto-detected OpenAI (%s)", model)
             return OpenAIEmbedding(openai_key, model)
 
-        # 3. Local sentence-transformers — fully offline
+        # 3. Local fastembed/ONNX — fully offline, no PyTorch
         try:
-            import sentence_transformers  # noqa: F401
+            import fastembed  # noqa: F401
             model = cfg.model or _DEFAULT_LOCAL_MODEL
             logger.info("Embeddings: auto-detected local (%s)", model)
             return LocalEmbedding(model)
@@ -314,11 +314,11 @@ class Gateway:
         )
         if cfg.provider == "local":
             try:
-                import sentence_transformers  # noqa: F401
+                import fastembed  # noqa: F401
             except ImportError:
                 logger.warning(
-                    "Embeddings: local selected but sentence-transformers not installed; "
-                    "falling back to disabled. Install with: pip install sentence-transformers"
+                    "Embeddings: local selected but fastembed not installed; "
+                    "falling back to disabled. Install with: pip install fastembed"
                 )
                 return NullEmbedding()
             return LocalEmbedding(cfg.model or _DEFAULT_LOCAL_MODEL)

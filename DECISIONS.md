@@ -341,9 +341,18 @@
 
 5. **Web search returning empty/generic answers** — All 5 SearXNG public instances dead (429/403). DDG Instant Answer API only returns knowledge base lookups, not web results. Fix: replaced with DDG Lite HTML parser that returns real search results with titles, URLs, and snippets.
 
+### D32: Replace sentence-transformers with fastembed
+**Decided:** 2026-02-17
+**Rationale:** sentence-transformers pulls in PyTorch (~2GB installed). This conflicts with MicroPaw's lightweight philosophy. fastembed by Qdrant uses ONNX Runtime instead — same models (nomic-ai/nomic-embed-text-v1.5, 768 dims), near-identical retrieval quality (~99% of sentence-transformers on MTEB), ~50MB install vs ~2GB, ~3x faster inference on CPU.
+**Alternatives considered:**
+- **model2vec** (~7MB, 500x faster) — rejected due to ~20% retrieval quality drop (33.5 vs 41.9 MTEB retrieval), which matters for RAG.
+- **Ollama embeddings** — already supported as auto-detect option, but requires Ollama running.
+**Design:** Drop-in replacement in `LocalEmbedding` class. `fastembed.TextEmbedding` replaces `SentenceTransformer`. Same lazy loading, same thread pool execution. Core dependency in pyproject.toml.
+**Impact:** ~40x smaller install. No PyTorch. Same embedding quality. Same model.
+
 ### Metrics (v0.3.0-dev)
 - Source LOC: ~7,100
 - Test LOC: ~3,400
 - Tests: 303 passing
 - Tools: 12 (added cron)
-- Dependencies: 8 core, 7 optional extras
+- Dependencies: 8 core (sentence-transformers → fastembed), 7 optional extras
