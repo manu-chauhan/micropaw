@@ -226,14 +226,26 @@ def config_exists() -> bool:
 def load_config() -> Config:
     """Load config from ~/.microclaw/config.json with env var overrides."""
     raw: dict = {}
+    _logger = logging.getLogger(__name__)
 
     if CONFIG_FILE.exists():
+        # Warn if config is world-readable (contains API keys)
+        try:
+            mode = CONFIG_FILE.stat().st_mode
+            if mode & 0o044:  # group or other readable
+                _logger.warning(
+                    "Config file %s is world-readable (mode %o). Run: chmod 600 %s",
+                    CONFIG_FILE, mode & 0o777, CONFIG_FILE,
+                )
+        except OSError:
+            pass
+
         try:
             raw = json.loads(CONFIG_FILE.read_text())
         except json.JSONDecodeError as e:
-            logging.getLogger(__name__).warning("Config file corrupt, using defaults: %s", e)
+            _logger.warning("Config file corrupt, using defaults: %s", e)
         except OSError as e:
-            logging.getLogger(__name__).warning("Config file unreadable, using defaults: %s", e)
+            _logger.warning("Config file unreadable, using defaults: %s", e)
 
     _apply_env_overrides(raw)
     raw.pop("config_version", None)

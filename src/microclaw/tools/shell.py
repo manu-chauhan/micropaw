@@ -63,10 +63,14 @@ BLOCKED_PATTERNS = [
     r"echo\s+.*\$[A-Z_]", r"printf\s+.*\$[A-Z_]",
     r"\bset\s*$", r"\bset\s*\|",
     r"\$\(", r"`",  # subshell / backtick execution bypass
-    r"base64\s+.*\|\s*(ba)?sh", r"base64\s+-d\s+.*\|\s*(ba)?sh",
+    r"base64\b.*\|\s*(ba)?sh",
     r"xargs\s+.*sh\b",
+    # Hex/octal decode to shell
+    r"xxd\b.*\|\s*(ba)?sh", r"printf\s+.*\\x[0-9a-f].*\|\s*(ba)?sh",
     # Shell builtins that execute arbitrary code
     r"\beval\s+", r"\bsource\s+", r"\bexec\s+",
+    # Process substitution
+    r"<\(",
 ]
 
 _BLOCKED_RE = [re.compile(p, re.IGNORECASE) for p in BLOCKED_PATTERNS]

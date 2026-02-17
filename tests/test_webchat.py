@@ -105,6 +105,16 @@ class TestWebChatTokenCheck:
         assert ch._check_token(f"/ws?token={ch.auth_token}") is True
 
 
+class TestWsOutboundTruncation:
+    def test_oversized_payload_truncated(self):
+        from microclaw.channels.webchat import MAX_FRAME_SIZE
+        huge = "x" * (MAX_FRAME_SIZE + 1000)
+        frame = _ws_text(huge)
+        # Frame should be smaller than the original payload + overhead
+        assert len(frame) < MAX_FRAME_SIZE + 20
+        assert frame.endswith(b"...(truncated)")
+
+
 class TestWebChatChannel:
     def test_name(self):
         ch = WebChatChannel()

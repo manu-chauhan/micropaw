@@ -146,8 +146,11 @@ class MemoryStore:
         for role, content, tool_calls_json, tool_call_id in reversed(rows):
             tool_calls = []
             if tool_calls_json:
-                for tc in json.loads(tool_calls_json):
-                    tool_calls.append(ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"]))
+                try:
+                    for tc in json.loads(tool_calls_json):
+                        tool_calls.append(ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"]))
+                except (json.JSONDecodeError, KeyError, TypeError) as e:
+                    logger.warning("Corrupt tool_calls JSON in conversation %s: %s", conversation_id, e)
             messages.append(Message(role=role, content=content, tool_calls=tool_calls, tool_call_id=tool_call_id))
         return messages
 

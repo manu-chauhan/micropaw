@@ -67,6 +67,8 @@ class PdfReadTool(Tool):
 
             if pages_spec:
                 page_indices = _parse_pages(pages_spec, total)
+                if not page_indices:
+                    return f"Error: No valid pages in range '{pages_spec}'. PDF has {total} page(s)."
             else:
                 page_indices = list(range(total))
 

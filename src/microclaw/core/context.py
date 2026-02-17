@@ -69,11 +69,11 @@ class ContextManager:
             ])
             summary = summary_response.content
             if not summary or not summary.strip():
-                logger.warning("Context compaction returned empty summary. Keeping full history.")
-                return messages
+                logger.warning("Context compaction returned empty summary, falling back to truncation.")
+                return system_msgs + to_keep
         except Exception as e:
-            logger.warning("Context compaction failed: %s. Keeping full history (no messages deleted).", e)
-            return messages
+            logger.warning("Context compaction failed: %s — falling back to truncation.", e)
+            return system_msgs + to_keep
 
         logger.info("Compacted %d messages into summary (%d chars)", len(to_summarize), len(summary))
 

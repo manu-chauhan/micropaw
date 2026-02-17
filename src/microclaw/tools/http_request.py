@@ -62,7 +62,18 @@ class HttpRequestTool(Tool):
 
                     # 301/302/303 change to GET, 307/308 preserve method
                     redirect_method = "GET" if response.status_code in (301, 302, 303) else method
-                    response = await client.request(redirect_method, location, headers=headers, content=body if redirect_method != "GET" else None)
+
+                    # Strip sensitive headers on cross-origin redirect
+                    redirect_headers = dict(headers)
+                    if urlparse(location).netloc != urlparse(url).netloc:
+                        redirect_headers.pop("authorization", None)
+                        redirect_headers.pop("Authorization", None)
+
+                    response = await client.request(
+                        redirect_method, location,
+                        headers=redirect_headers,
+                        content=body if redirect_method != "GET" else None,
+                    )
                     url = location
                     redirects += 1
 

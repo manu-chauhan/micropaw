@@ -180,8 +180,8 @@ class TestRetryOnTransient:
 class TestContextCompaction:
     """Tests for context manager — history must never be deleted on failure."""
 
-    async def test_compaction_preserves_history_on_provider_failure(self):
-        """If the summarization LLM call fails, ALL original messages must be returned."""
+    async def test_compaction_short_history_returns_unchanged(self):
+        """When non-system messages < KEEP_RECENT, nothing to summarize — returns unchanged."""
         from microclaw.core.context import ContextManager
 
         failing_provider = MockProvider(fail=True)
@@ -199,31 +199,43 @@ class TestContextCompaction:
         ]
 
         result = await ctx.compact(messages, failing_provider)
-        # All original messages must be preserved — nothing deleted
+        # 7 non-system < KEEP_RECENT(10), so to_summarize is empty → returns unchanged
         assert len(result) == len(messages)
         assert result == messages
 
-    async def test_compaction_preserves_history_on_empty_summary(self):
-        """If the LLM returns an empty summary, keep original messages."""
-        from microclaw.core.context import ContextManager
+    async def test_compaction_fallback_truncation_on_provider_failure(self):
+        """If the summarization provider fails, fall back to truncation (system + recent)."""
+        from microclaw.core.context import ContextManager, KEEP_RECENT
+
+        failing_provider = MockProvider(fail=True)
+        ctx = ContextManager(max_history=50, compaction_threshold=3)
+
+        messages = [Message(role="system", content="You are helpful.")]
+        for i in range(20):
+            messages.append(Message(role="user", content=f"msg{i}"))
+            messages.append(Message(role="assistant", content=f"reply{i}"))
+
+        result = await ctx.compact(messages, failing_provider)
+        # Fallback: system_msgs + to_keep (last KEEP_RECENT)
+        assert len(result) == 1 + KEEP_RECENT  # 1 system + 10 recent
+        assert result[0].content == "You are helpful."
+        assert result[-1].content == "reply19"
+
+    async def test_compaction_fallback_truncation_on_empty_summary(self):
+        """If the LLM returns an empty summary, fall back to truncation."""
+        from microclaw.core.context import ContextManager, KEEP_RECENT
 
         empty_provider = MockProvider(response="")
-        ctx = ContextManager(max_history=5, compaction_threshold=3)
+        ctx = ContextManager(max_history=50, compaction_threshold=3)
 
-        messages = [
-            Message(role="system", content="You are helpful."),
-            Message(role="user", content="msg1"),
-            Message(role="assistant", content="reply1"),
-            Message(role="user", content="msg2"),
-            Message(role="assistant", content="reply2"),
-            Message(role="user", content="msg3"),
-            Message(role="assistant", content="reply3"),
-            Message(role="user", content="msg4"),
-        ]
+        messages = [Message(role="system", content="You are helpful.")]
+        for i in range(20):
+            messages.append(Message(role="user", content=f"msg{i}"))
+            messages.append(Message(role="assistant", content=f"reply{i}"))
 
         result = await ctx.compact(messages, empty_provider)
-        assert len(result) == len(messages)
-        assert result == messages
+        assert len(result) == 1 + KEEP_RECENT
+        assert result[-1].content == "reply19"
 
     async def test_compaction_works_when_provider_succeeds(self):
         """When summarization succeeds, messages should be compacted."""

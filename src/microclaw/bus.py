@@ -87,7 +87,9 @@ class MessageBus:
         logger.debug("inbound enqueued channel=%s chat=%s qsize=%d", msg.channel, msg.chat_id, self._inbound.qsize())
 
     async def consume_inbound(self) -> InboundMessage | None:
-        """Dequeue next inbound message, or None on timeout."""
+        """Dequeue next inbound message, or None on timeout/closed."""
+        if self._closed:
+            return None
         try:
             return await asyncio.wait_for(self._inbound.get(), timeout=self._timeout)
         except asyncio.TimeoutError:
@@ -102,7 +104,9 @@ class MessageBus:
         logger.debug("outbound enqueued channel=%s chat=%s qsize=%d", msg.channel, msg.chat_id, self._outbound.qsize())
 
     async def consume_outbound(self) -> OutboundMessage | None:
-        """Dequeue next outbound message, or None on timeout."""
+        """Dequeue next outbound message, or None on timeout/closed."""
+        if self._closed:
+            return None
         try:
             return await asyncio.wait_for(self._outbound.get(), timeout=self._timeout)
         except asyncio.TimeoutError:

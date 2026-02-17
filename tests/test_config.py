@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -183,3 +183,21 @@ class TestSaveLoad:
             with patch.dict(os.environ, {}, clear=True):
                 c = load_config()
             assert c.provider == "claude"
+
+    def test_warns_world_readable_config(self, tmp_path: Path):
+        """Config file with group/other read bits should produce a warning."""
+        import logging
+        config_file = tmp_path / "config.json"
+        config_file.write_text("{}")
+        config_file.chmod(0o644)  # World-readable
+
+        with (
+            patch("microclaw.config.CONFIG_FILE", config_file),
+            patch("microclaw.config.logging") as mock_logging,
+        ):
+            mock_logger = MagicMock()
+            mock_logging.getLogger.return_value = mock_logger
+            load_config()
+
+        # The warning should mention world-readable or chmod
+        assert mock_logger.warning.called

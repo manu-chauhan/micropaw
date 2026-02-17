@@ -66,7 +66,7 @@ class DelegateTool(Tool):
             if _bus is None:
                 return "Error: Background mode requires message bus (not available)."
             chat_id = f"{context.platform}:{context.conversation_id}"
-            asyncio.create_task(_run_background(agent, task, chat_id))
+            asyncio.create_task(_run_background(agent, task, context.platform, chat_id))
             return f"Task delegated in background: {task[:80]}"
 
         # Inline: block until done
@@ -74,13 +74,13 @@ class DelegateTool(Tool):
         return result
 
 
-async def _run_background(agent: SubAgent, task: str, chat_id: str) -> None:
+async def _run_background(agent: SubAgent, task: str, channel: str, chat_id: str) -> None:
     """Run a sub-agent in the background and publish result to bus."""
     try:
         result = await agent.run(task)
         if _bus and not _bus.closed:
             await _bus.publish_outbound(OutboundMessage(
-                channel=chat_id.split(":")[0],
+                channel=channel,
                 chat_id=chat_id,
                 content=f"[Background task complete]\n{result}",
             ))

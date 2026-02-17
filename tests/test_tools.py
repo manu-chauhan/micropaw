@@ -338,6 +338,47 @@ class TestWebSearch:
         assert result == "Brave results"
         mock_brave.assert_called_once_with("test", 5, "BSA-test-key")
 
+    @pytest.mark.asyncio
+    async def test_searxng_source_uses_safe_parsing(self):
+        """Source name should be extracted safely even with unusual URLs."""
+        from microclaw.tools.web_search import _search_searxng
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "results": [{"title": "Test", "url": "https://example.com", "content": "result"}]
+        }
+        mock_response.raise_for_status = MagicMock()
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("microclaw.tools.web_search.httpx.AsyncClient", return_value=mock_client):
+            result = await _search_searxng("test", 5, base_url="https://search.example.com")
+
+        assert result is not None
+        assert "search.example.com" in result
+
+    @pytest.mark.asyncio
+    async def test_max_results_clamped_to_20(self):
+        """max_results should be capped at 20 even if LLM requests more."""
+        from microclaw.tools.web_search import WebSearchTool, set_search_config
+
+        mock_config = MagicMock()
+        mock_config.provider = "duckduckgo"
+        mock_config.brave_api_key = ""
+        mock_config.searxng_url = ""
+        set_search_config(mock_config)
+
+        tool = WebSearchTool()
+        ctx = ToolContext(conversation_id="conv1", user_id="u1", platform="test")
+
+        with patch("microclaw.tools.web_search._search_duckduckgo", AsyncMock(return_value="results")) as mock_ddg:
+            await tool.execute({"query": "test", "max_results": 1000}, ctx)
+
+        # Verify max_results was clamped to 20
+        mock_ddg.assert_called_once_with("test", 20)
+
 
 # ---------------------------------------------------------------------------
 # Sub-agent tests
@@ -424,3 +465,172 @@ class TestDelegateTool:
 
         assert "error" in result.lower()
         assert "bus" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_background_passes_channel_directly(self):
+        """Background delegation should pass platform as channel name, not parse from chat_id."""
+        from microclaw.providers.base import AIResponse
+        from microclaw.tools.delegate import DelegateTool, set_delegate_deps, _run_background
+        from microclaw.bus import MessageBus
+
+        mock_provider = AsyncMock()
+        mock_provider.chat = AsyncMock(return_value=AIResponse(
+            content="Done", tool_calls=[], usage={"input": 5, "output": 5},
+        ))
+
+        bus = MessageBus()
+        set_delegate_deps(mock_provider, bus)
+
+        from microclaw.core.subagent import SubAgent
+        agent = SubAgent(mock_provider)
+        await _run_background(agent, "test task", "discord", "discord:channel:123")
+
+        msg = await bus.consume_outbound()
+        assert msg is not None
+        assert msg.channel == "discord"
+        assert msg.chat_id == "discord:channel:123"
+        bus.close()
+
+
+# ---------------------------------------------------------------------------
+# Shell blocking pattern tests
+# ---------------------------------------------------------------------------
+
+class TestShellBlocking:
+    def test_base64_pipe_to_shell_blocked(self):
+        from microclaw.tools.shell import _BLOCKED_RE
+        assert any(p.search("base64 -d payload.txt|bash") for p in _BLOCKED_RE)
+        assert any(p.search("base64 -d payload.txt | sh") for p in _BLOCKED_RE)
+
+    def test_xxd_pipe_to_shell_blocked(self):
+        from microclaw.tools.shell import _BLOCKED_RE
+        assert any(p.search("xxd -r -p payload.hex|bash") for p in _BLOCKED_RE)
+
+    def test_process_substitution_blocked(self):
+        from microclaw.tools.shell import _BLOCKED_RE
+        assert any(p.search("diff <(cat /etc/shadow) <(echo)") for p in _BLOCKED_RE)
+
+    def test_safe_commands_allowed(self):
+        from microclaw.tools.shell import _BLOCKED_RE
+        safe = ["ls -la", "cat README.md", "python3 main.py", "git status", "pip list"]
+        for cmd in safe:
+            assert not any(p.search(cmd) for p in _BLOCKED_RE), f"False positive: {cmd}"
+
+
+# ---------------------------------------------------------------------------
+# PDF out-of-bounds tests
+# ---------------------------------------------------------------------------
+
+class TestPdfParsing:
+    def test_parse_pages_empty_on_out_of_bounds(self):
+        from microclaw.tools.pdf_read import _parse_pages
+        # PDF has 5 pages; request page 100
+        pages = _parse_pages("100", 5)
+        assert pages == []
+
+    def test_parse_pages_valid(self):
+        from microclaw.tools.pdf_read import _parse_pages
+        pages = _parse_pages("1-3", 10)
+        assert pages == [0, 1, 2]
+
+    def test_parse_pages_mixed(self):
+        from microclaw.tools.pdf_read import _parse_pages
+        pages = _parse_pages("1,3,5", 10)
+        assert pages == [0, 2, 4]
+
+
+# ---------------------------------------------------------------------------
+# Message bus tests
+# ---------------------------------------------------------------------------
+
+class TestMessageBus:
+    @pytest.mark.asyncio
+    async def test_closed_bus_consume_returns_none(self):
+        from microclaw.bus import MessageBus
+        bus = MessageBus()
+        bus.close()
+        assert await bus.consume_outbound() is None
+        assert await bus.consume_inbound() is None
+
+    @pytest.mark.asyncio
+    async def test_publish_on_closed_bus_raises(self):
+        from microclaw.bus import MessageBus, InboundMessage
+        bus = MessageBus()
+        bus.close()
+        with pytest.raises(RuntimeError, match="closed"):
+            await bus.publish_inbound(InboundMessage(
+                channel="test", sender_id="u1", chat_id="c1",
+                content="hi", session_key="test:c1",
+            ))
+
+    @pytest.mark.asyncio
+    async def test_publish_and_consume_roundtrip(self):
+        from microclaw.bus import MessageBus, OutboundMessage
+        bus = MessageBus()
+        await bus.publish_outbound(OutboundMessage(channel="discord", chat_id="ch1", content="hello"))
+        msg = await bus.consume_outbound()
+        assert msg is not None
+        assert msg.channel == "discord"
+        assert msg.content == "hello"
+        bus.close()
+
+
+# ---------------------------------------------------------------------------
+# Store corrupt JSON tests
+# ---------------------------------------------------------------------------
+
+class TestStoreCorruptJson:
+    @pytest.mark.asyncio
+    async def test_corrupt_tool_calls_returns_empty_tools(self, tmp_path):
+        import aiosqlite
+        from microclaw.memory.store import MemoryStore
+
+        db_path = tmp_path / "test.db"
+        store = MemoryStore(str(db_path))
+        await store.init()
+
+        # Insert a message with corrupt tool_calls JSON directly
+        await store.db.execute(
+            "INSERT INTO conversations (id, platform, user_id) VALUES (?, ?, ?)",
+            ("conv1", "test", "user1"),
+        )
+        await store.db.execute(
+            "INSERT INTO messages (conversation_id, role, content, tool_calls) VALUES (?, ?, ?, ?)",
+            ("conv1", "assistant", "test", "{corrupt json!!!}"),
+        )
+        await store.db.commit()
+
+        messages = await store.get_messages("conv1")
+        assert len(messages) == 1
+        assert messages[0].content == "test"
+        assert messages[0].tool_calls == []  # Corrupt JSON → empty list, no crash
+
+        await store.close()
+
+    @pytest.mark.asyncio
+    async def test_valid_tool_calls_loaded(self, tmp_path):
+        import json
+        import aiosqlite
+        from microclaw.memory.store import MemoryStore
+
+        db_path = tmp_path / "test.db"
+        store = MemoryStore(str(db_path))
+        await store.init()
+
+        await store.db.execute(
+            "INSERT INTO conversations (id, platform, user_id) VALUES (?, ?, ?)",
+            ("conv1", "test", "user1"),
+        )
+        tool_calls_json = json.dumps([{"id": "tc1", "name": "web_search", "arguments": {"query": "test"}}])
+        await store.db.execute(
+            "INSERT INTO messages (conversation_id, role, content, tool_calls) VALUES (?, ?, ?, ?)",
+            ("conv1", "assistant", "searching", tool_calls_json),
+        )
+        await store.db.commit()
+
+        messages = await store.get_messages("conv1")
+        assert len(messages) == 1
+        assert len(messages[0].tool_calls) == 1
+        assert messages[0].tool_calls[0].name == "web_search"
+
+        await store.close()

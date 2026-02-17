@@ -78,7 +78,10 @@ async def _ws_read_frame(reader: asyncio.StreamReader) -> tuple[int, bytes] | No
 
 
 def _ws_text(data: str) -> bytes:
-    return _ws_encode_frame(0x1, data.encode())
+    payload = data.encode()
+    if len(payload) > MAX_FRAME_SIZE:
+        payload = payload[:MAX_FRAME_SIZE - 100] + b"\n...(truncated)"
+    return _ws_encode_frame(0x1, payload)
 
 
 def _ws_close() -> bytes:

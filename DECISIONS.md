@@ -154,11 +154,11 @@
 - `sessions.py` bypassed store abstraction with raw SQL — now uses `store.list_conversations()` and `store.export_messages()`
 - Gateway accessed `conversations._terminal_override` private attribute — added public `reset_terminal_session()` method
 
-## File Count & LOC (actual, as of v0.2.0)
-- Source files: 52 Python files (41 source + 11 test)
-- Source LOC: ~6,200
-- Test LOC: ~2,200
-- Tests: 209 passing
+## File Count & LOC (actual, as of v0.2.1)
+- Source files: 59 Python files (48 source + 11 test)
+- Source LOC: ~6,240
+- Test LOC: ~2,450
+- Tests: 227 passing
 - Dependencies: 7 core, 7 optional extras
 
 ### Web Search Enhancement
@@ -247,3 +247,29 @@
 ### D24: Streaming for Telegram/Discord/Slack
 **Decided:** 2026-02-17
 **Status:** Already implemented in v0.1.0. All three channels already have streaming with placeholder message → `on_chunk` closure → throttled `edit_message` → final edit with full response. Throttle intervals: Telegram 0.5s, Discord 0.8s, Slack 1.0s. No changes needed.
+
+---
+
+## v0.2.1 Security Hardening
+
+**Decided:** 2026-02-17
+**Goal:** Comprehensive security audit and fix pass. 11 fixes across 11 files, 227 tests.
+
+### Bug Fixes (Batch 3 — Security Hardening)
+
+**Critical:**
+- `delegate.py` — background sub-agent parsed channel from `chat_id.split(":")[0]`; crashes if conversation_id contains colons. Now passes channel name directly.
+- `web_search.py` — SearXNG source name extracted via `url.split("//")[1]`; crashes on malformed URLs. Replaced with `urlparse().hostname`.
+- `store.py` — `json.loads(tool_calls_json)` in `get_messages()` crashed on corrupt data, losing the entire conversation. Now catches `JSONDecodeError`/`KeyError`/`TypeError` and returns empty tool_calls for that message.
+
+**High:**
+- `context.py` — compaction returned full history when summarization failed, allowing unbounded context growth. Now falls back to truncation (system + last KEEP_RECENT messages).
+- `http_request.py` — redirect following leaked `Authorization` header to cross-origin hosts. Now strips sensitive headers when redirect target has a different netloc.
+- `shell.py` — blocking patterns missed `base64|sh` (no space), `xxd|sh`, process substitution `<(...)`. Added 4 new patterns.
+- `bus.py` — `consume_inbound()`/`consume_outbound()` spun at 1Hz on closed bus until timeout. Now check `_closed` flag before blocking.
+
+**Medium:**
+- `config.py` — no warning when `config.json` is world-readable (contains API keys). Now logs a warning with `chmod 600` instructions.
+- `web_search.py` — `max_results` parameter unclamped; LLM could request 1000 results. Clamped to 20.
+- `webchat.py` — outbound WebSocket frames not validated against `MAX_FRAME_SIZE`. Now truncates oversized payloads.
+- `pdf_read.py` — silently returned empty content when all requested pages were out of bounds. Now returns an explicit error message.

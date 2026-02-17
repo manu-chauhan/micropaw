@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -76,7 +77,7 @@ async def _search_searxng(query: str, max_results: int, base_url: str | None = N
                     results.append(entry)
 
             if results:
-                source = url.split("//")[1].split("/")[0]
+                source = urlparse(url).hostname or url
                 return f"Search results for '{query}' (via {source}):\n\n" + "\n\n".join(results)
 
             # Got a response but no results — try next instance
@@ -183,7 +184,7 @@ class WebSearchTool(Tool):
 
     async def execute(self, args: dict[str, Any], context: ToolContext) -> str:
         query = args["query"]
-        max_results = args.get("max_results", 5)
+        max_results = min(args.get("max_results", 5), 20)
 
         # Read search config (injected at startup)
         cfg = _search_config
