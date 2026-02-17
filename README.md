@@ -32,7 +32,7 @@ microclaw chat      # start talking
 
 - **RAG out of the box** — Read a PDF, paste a YouTube URL, or browse a web page. Documents are auto-chunked, embedded, and searchable across all channels. Ask about them days later from any platform.
 
-- **YouTube transcripts** — Paste a YouTube link and MicroClaw fetches the full transcript via InnerTube API. No API key, no Playwright — raw httpx. Auto-indexed for RAG.
+- **YouTube transcripts** — Paste a YouTube link and MicroClaw extracts the full transcript automatically. No API key, no extra dependency. Auto-indexed for RAG.
 
 - **sqlite-vec ANN search** — Vector search powered by [sqlite-vec](https://github.com/asg017/sqlite-vec) directly inside SQLite. Scales to tens of thousands of chunks. Falls back to brute-force cosine if removed.
 
@@ -222,11 +222,8 @@ Override models: `CLAUDE_MODEL`, `OPENAI_MODEL`, `GEMINI_MODEL`, `OLLAMA_MODEL`
 
 ### YouTube Transcripts — Zero Config
 
-Paste a YouTube URL → MicroClaw fetches the transcript directly via YouTube's InnerTube API. No API key, no Playwright, no extra dependency — just raw httpx.
-
 - Supports `youtube.com/watch`, `youtu.be`, and `youtube.com/shorts` URLs
 - Prefers manual English captions, falls back to auto-generated
-- Works on residential IPs (your machine) — aligns perfectly with local-first philosophy
 - If transcript unavailable, falls back to normal Playwright page rendering
 
 **How it works — fully automatic, zero config:**
