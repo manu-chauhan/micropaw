@@ -62,9 +62,9 @@ paw = "micropaw.cli:main"
 micropaw = "micropaw.cli:main"
 
 [project.urls]
-Homepage = "https://gitlab.com/MANU-CHAUHAN/micropaw"
-Repository = "https://gitlab.com/MANU-CHAUHAN/micropaw"
-Issues = "https://gitlab.com/MANU-CHAUHAN/micropaw/-/issues"
+Homepage = "https://github.com/manu-chauhan/micropaw"
+Repository = "https://github.com/manu-chauhan/micropaw"
+Issues = "https://github.com/manu-chauhan/micropaw/issues"
 
 [tool.hatch.build.targets.sdist]
 exclude = ["DECISIONS.md", "tests/", ".env.example", "Dockerfile", "docker-compose.yml", "*.Identifier"]

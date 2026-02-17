@@ -421,7 +421,7 @@ Point any provider at a compatible server (vLLM, LM Studio, Azure OpenAI):
 <summary><strong>Installation Options</strong></summary>
 
 ```bash
-git clone https://gitlab.com/MANU-CHAUHAN/micropaw.git
+git clone https://github.com/manu-chauhan/micropaw.git
 cd micropaw
 pip install .
 ```
