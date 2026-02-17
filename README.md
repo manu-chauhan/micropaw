@@ -2,9 +2,11 @@
 
 # MicroClaw
 
+### A local-first AI agent that runs on your machine, talks on every platform, and keeps your keys to yourself.
+
 **Your AI. Your machine. Your keys.**
 
-A personal AI assistant that runs everywhere — Terminal, Telegram, Discord, Slack, WhatsApp, WebChat — with shared memory across all platforms. Built in ~6,400 lines of Python with zero SDK dependencies.
+6 channels. 4 providers. 11 tools. Shared memory everywhere. ~6,400 lines of Python. Zero SDK dependencies.
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
 [![Tests](https://img.shields.io/badge/tests-238%20passed-brightgreen)]()
