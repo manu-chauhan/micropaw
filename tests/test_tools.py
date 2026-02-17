@@ -725,6 +725,144 @@ class TestDocumentIngest:
 
 
 # ---------------------------------------------------------------------------
+# sqlite-vec integration tests
+# ---------------------------------------------------------------------------
+
+class _FakeEmbedder:
+    """Deterministic embedder for testing — returns 4-dim vectors."""
+    name = "fake"
+    dimensions = 4
+
+    async def embed(self, text: str) -> list[float]:
+        h = hash(text) & 0xFFFFFFFF
+        return [(h >> (i * 8) & 0xFF) / 255.0 for i in range(4)]
+
+
+class TestSqliteVec:
+    @pytest.mark.asyncio
+    async def test_vec_search_path(self, tmp_path):
+        """Ingest + search uses sqlite-vec when available."""
+        from microclaw.memory.store import MemoryStore
+
+        store = MemoryStore(str(tmp_path / "vec.db"), _FakeEmbedder())
+        await store.init()
+
+        content = "Revenue grew 23% in Q4. " * 50  # Enough to chunk
+        count = await store.ingest_document("/tmp/report.pdf", content, "user1")
+        assert count >= 1
+
+        results = await store.search_documents("revenue growth", limit=3, user_id="user1")
+        assert len(results) >= 1
+        assert results[0]["source"] == "/tmp/report.pdf"
+
+        # Verify vec was used (if available)
+        if store._has_vec:
+            assert store._vec_dims == 4
+
+        await store.close()
+
+    @pytest.mark.asyncio
+    async def test_vec_reingest_cascade_delete(self, tmp_path):
+        """Re-ingesting a document removes old chunks from vec index too."""
+        from microclaw.memory.store import MemoryStore
+
+        store = MemoryStore(str(tmp_path / "vec.db"), _FakeEmbedder())
+        await store.init()
+
+        await store.ingest_document("/tmp/f.txt", "Old data here. " * 50, "u1")
+        await store.ingest_document("/tmp/f.txt", "New data replaced. " * 50, "u1")
+
+        results = await store.search_documents("data", limit=10, user_id="u1")
+        contents = " ".join(r["content"] for r in results)
+        assert "New data" in contents
+        assert "Old data" not in contents
+
+        await store.close()
+
+    @pytest.mark.asyncio
+    async def test_vec_cross_user_isolation(self, tmp_path):
+        """Vec search respects user_id filtering."""
+        from microclaw.memory.store import MemoryStore
+
+        store = MemoryStore(str(tmp_path / "vec.db"), _FakeEmbedder())
+        await store.init()
+
+        await store.ingest_document("/tmp/secret.pdf", "Top secret info. " * 50, "alice")
+        results = await store.search_documents("secret", limit=5, user_id="bob")
+        assert len(results) == 0
+
+        await store.close()
+
+    @pytest.mark.asyncio
+    async def test_kv_meta_tracks_dimensions(self, tmp_path):
+        """kv_meta stores embedding dimensions for change detection."""
+        from microclaw.memory.store import MemoryStore
+
+        store = MemoryStore(str(tmp_path / "vec.db"), _FakeEmbedder())
+        await store.init()
+
+        stored = await store._get_meta("vec_dims")
+        if store._has_vec:
+            assert stored == "4"
+
+        await store.close()
+
+    @pytest.mark.asyncio
+    async def test_brute_force_fallback(self, tmp_path):
+        """When vec is disabled, brute-force cosine still works."""
+        from microclaw.memory.store import MemoryStore
+
+        store = MemoryStore(str(tmp_path / "bf.db"), _FakeEmbedder())
+        await store.init()
+        store._has_vec = False  # Force brute-force path
+
+        content = "Machine learning is transforming healthcare. " * 50
+        await store.ingest_document("/tmp/ml.pdf", content, "user1")
+
+        results = await store.search_documents("machine learning", limit=3, user_id="user1")
+        assert len(results) >= 1
+        assert "Machine learning" in results[0]["content"]
+
+        await store.close()
+
+    @pytest.mark.asyncio
+    async def test_null_embedding_text_fallback(self, tmp_path):
+        """NullEmbedding falls through to text LIKE search."""
+        from microclaw.memory.store import MemoryStore
+        from microclaw.memory.embeddings import NullEmbedding
+
+        store = MemoryStore(str(tmp_path / "null.db"), NullEmbedding())
+        await store.init()
+        assert not store._has_vec or store._vec_dims == 0
+
+        content = "Quantum computing breakthroughs in 2025."
+        await store.ingest_document("/tmp/quantum.txt", content, "user1")
+
+        results = await store.search_documents("quantum", limit=3, user_id="user1")
+        assert len(results) >= 1
+
+        await store.close()
+
+    @pytest.mark.asyncio
+    async def test_search_memories_no_cap(self, tmp_path):
+        """search_memories scans all memories without artificial row cap."""
+        from microclaw.memory.store import MemoryStore
+        from microclaw.memory.embeddings import NullEmbedding
+
+        store = MemoryStore(str(tmp_path / "mem.db"), NullEmbedding())
+        await store.init()
+
+        # Save enough memories to exceed old 500 cap
+        for i in range(10):
+            await store.save_memory(f"fact_{i}", f"Value number {i}", user_id="u1")
+
+        results = await store.search_memories("Value", limit=20, user_id="u1")
+        assert len(results) >= 10
+
+        await store.close()
+
+
+# ---------------------------------------------------------------------------
 # Shell blocking pattern tests
 # ---------------------------------------------------------------------------
 

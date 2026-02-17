@@ -29,6 +29,7 @@ dependencies = [
     "click>=8.1",
     "rich>=13.0",
     "aiosqlite>=0.20",
+    "sqlite-vec>=0.1",
     "questionary>=2.0",
 ]
 

@@ -6,10 +6,10 @@
 
 **Your AI. Your machine. Your keys.**
 
-6 channels. 4 providers. 11 tools. Shared memory everywhere. ~6,400 lines of Python. Zero SDK dependencies.
+6 channels. 4 providers. 11 tools. Shared memory everywhere. ~6,800 lines of Python. Zero SDK dependencies.
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
-[![Tests](https://img.shields.io/badge/tests-238%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-256%20passed-brightgreen)]()
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 </div>
@@ -178,21 +178,39 @@ Override models: `CLAUDE_MODEL`, `OPENAI_MODEL`, `GEMINI_MODEL`, `OLLAMA_MODEL`
 
 </div>
 
-**How it works:**
+**How it works — fully automatic, zero config:**
 
-1. **Auto-ingest** — When the agent reads a file or PDF (>500 chars), the content is automatically chunked (~2000 chars, 200 char overlap) and embedded in SQLite
-2. **Auto-retrieve** — On every user message, the query is embedded and matched against stored chunks via cosine similarity
-3. **Auto-inject** — Top 5 relevant chunks are injected into the system prompt as context for the LLM
+| Step | What happens |
+|------|-------------|
+| **Auto-ingest** | File or PDF read (>500 chars) → recursive chunking (~2k chars, 200 overlap) → embed → store in SQLite |
+| **Auto-retrieve** | Every user message → embed query → ANN vector search against all stored chunks |
+| **Auto-inject** | Top 5 relevant chunks injected into system prompt as LLM context |
 
 No extra tools, no commands, no user action needed. Just read and ask.
+
+### Under the hood
+
+| Feature | Detail |
+|---------|--------|
+| **sqlite-vec ANN search** | [sqlite-vec](https://github.com/asg017/sqlite-vec) for fast approximate nearest neighbor search — no separate vector DB |
+| **Three-path search** | sqlite-vec ANN → brute-force cosine → text LIKE fallback |
+| **BLOB embeddings** | float32 binary storage, 5-10x faster than JSON serialization |
+| **Dual-write ingest** | Every chunk written to both `document_chunks` and `vec_chunks` atomically |
+| **Cascade delete** | Re-reading a file replaces all old chunks cleanly (both tables) |
+| **Dimension tracking** | `kv_meta` table tracks embedding dimensions across model changes |
+| **Safe model switching** | Change embedding model → embeddings cleared, text preserved, background re-index |
+| **No row caps** | Memory and document search scan all entries — no artificial limits |
+| **Cross-user isolation** | Each user's documents and memories are strictly separated |
+
+> **Graceful fallback:** If you remove `sqlite-vec`, MicroClaw falls back to brute-force cosine similarity in pure Python. Slower on large collections, but fully functional.
 
 ### Embeddings (auto-detected, zero config)
 
 ```
-Ollama (local, free) -> OpenAI (if key exists) -> sentence-transformers (offline) -> text search fallback
+Ollama (local, free) → OpenAI (if key exists) → sentence-transformers (offline) → text search fallback
 ```
 
-Default model: `nomic-embed-text` (768 dims, 8k token context). Override:
+Default model: `nomic-embed-text` (768 dims, 8k token context). Override in config:
 
 ```json
 { "embedding": { "provider": "ollama", "model": "snowflake-arctic-embed" } }
@@ -200,10 +218,9 @@ Default model: `nomic-embed-text` (768 dims, 8k token context). Override:
 
 ### Memory
 
-- **SQLite** — single file, persists across restarts, shared across all channels
-- **Document chunks** — stored in `document_chunks` table (BLOB embeddings, 5-10x faster than JSON)
+- **SQLite + sqlite-vec** — single file, persists across restarts, shared across all channels
+- **Document chunks** — BLOB embeddings indexed by sqlite-vec for ANN search
 - **User memories** — explicit key-value facts via the `memory` tool, separate from document chunks
-- **Hybrid search** — vector similarity + text fallback when embeddings unavailable
 
 ---
 
@@ -356,7 +373,7 @@ docker compose --profile full up                     # Everything
 <summary><strong>Architecture</strong></summary>
 
 ```
-src/microclaw/          6,392 LOC source + 2,632 LOC tests
+src/microclaw/          6,775 LOC source + 2,904 LOC tests
  cli.py                 Click CLI (11 commands)
  config.py              Single Pydantic config model
  connector.py           Guided channel setup + live validation
@@ -384,7 +401,7 @@ Full decision log: [`DECISIONS.md`](DECISIONS.md)
 
 ```bash
 pip install ".[dev]"
-pytest                 # 238 tests, <1s
+pytest                 # 256 tests, ~1s
 ruff check src/
 mypy src/
 ```

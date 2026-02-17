@@ -1,7 +1,8 @@
-"""SQLite persistence layer with optional vector search."""
+"""SQLite persistence layer with sqlite-vec accelerated vector search."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -65,6 +66,11 @@ CREATE TABLE IF NOT EXISTS document_chunks (
     UNIQUE(source, chunk_index, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS kv_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_memories_key ON memories(key);
 CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id);
@@ -77,16 +83,143 @@ class MemoryStore:
         self.db_path = str(db_path)
         self._db: aiosqlite.Connection | None = None
         self.embedder: EmbeddingProvider = embedding_provider or NullEmbedding()
+        self._has_vec: bool = False
+        self._vec_dims: int = 0
 
     async def init(self) -> None:
-        """Initialize database and create tables."""
+        """Initialize database, load sqlite-vec, create/sync vector index."""
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._db = await aiosqlite.connect(self.db_path)
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA busy_timeout=5000")
         await self._db.executescript(_SCHEMA)
         await self._db.commit()
-        logger.info("Database initialized at %s (embeddings: %s)", self.db_path, self.embedder.name)
+
+        self._has_vec = await self._try_load_vec()
+
+        if self._has_vec and self.embedder.dimensions > 0:
+            await self._ensure_vec_table()
+
+        logger.info(
+            "Database initialized at %s (embeddings: %s, sqlite-vec: %s)",
+            self.db_path, self.embedder.name, self._has_vec,
+        )
+
+    async def _try_load_vec(self) -> bool:
+        """Load the sqlite-vec extension. Falls back gracefully if unavailable."""
+        try:
+            import sqlite_vec
+            # Safe during init() — no concurrent DB operations yet
+            self._db._conn.enable_load_extension(True)
+            sqlite_vec.load(self._db._conn)
+            self._db._conn.enable_load_extension(False)
+            return True
+        except ImportError:
+            logger.info("sqlite-vec not installed — falling back to brute-force cosine search")
+            return False
+        except Exception as e:
+            logger.warning("Failed to load sqlite-vec: %s", e)
+            return False
+
+    async def _get_meta(self, key: str) -> str | None:
+        async with self.db.execute("SELECT value FROM kv_meta WHERE key = ?", (key,)) as cur:
+            row = await cur.fetchone()
+        return row[0] if row else None
+
+    async def _set_meta(self, key: str, value: str) -> None:
+        await self.db.execute(
+            "INSERT INTO kv_meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = ?",
+            (key, value, value),
+        )
+        await self.db.commit()
+
+    async def _ensure_vec_table(self) -> None:
+        """Create or recreate vec_chunks for current embedding dimensions."""
+        dims = self.embedder.dimensions
+        stored = await self._get_meta("vec_dims")
+
+        if stored and int(stored) == dims:
+            self._vec_dims = dims
+            return
+
+        if stored and int(stored) != dims:
+            logger.warning(
+                "Embedding dimensions changed (%s → %d) — clearing embeddings for re-index",
+                stored, dims,
+            )
+            await self.db.execute("UPDATE document_chunks SET embedding = NULL")
+            await self.db.execute("UPDATE memories SET embedding = NULL")
+            try:
+                await self.db.execute("DROP TABLE IF EXISTS vec_chunks")
+            except Exception:
+                pass
+
+        await self.db.execute(
+            f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0("
+            f"chunk_id INTEGER PRIMARY KEY, "
+            f"embedding float[{dims}] distance_metric=cosine"
+            f")"
+        )
+        await self._set_meta("vec_dims", str(dims))
+        await self.db.commit()
+        self._vec_dims = dims
+
+        asyncio.create_task(self._sync_vec_index())
+
+    async def _sync_vec_index(self) -> None:
+        """Populate vec_chunks from existing document_chunks (background)."""
+        try:
+            # Insert existing embeddings into vec index
+            async with self.db.execute(
+                "SELECT id, embedding FROM document_chunks WHERE embedding IS NOT NULL"
+            ) as cursor:
+                rows = await cursor.fetchall()
+
+            count = 0
+            for chunk_id, emb_blob in rows:
+                if emb_blob and len(emb_blob) // 4 == self._vec_dims:
+                    try:
+                        await self.db.execute(
+                            "INSERT INTO vec_chunks(chunk_id, embedding) VALUES (?, ?)",
+                            (chunk_id, emb_blob),
+                        )
+                        count += 1
+                    except Exception:
+                        pass  # Already indexed or dimension mismatch
+
+            if count:
+                await self.db.commit()
+                logger.info("Synced %d existing chunks to vec index", count)
+
+            # Re-embed chunks cleared by dimension change
+            async with self.db.execute(
+                "SELECT id, content FROM document_chunks WHERE embedding IS NULL"
+            ) as cursor:
+                null_rows = await cursor.fetchall()
+
+            if null_rows:
+                logger.info("Re-embedding %d chunks with new model...", len(null_rows))
+                for chunk_id, content in null_rows:
+                    try:
+                        embedding = await self.embedder.embed(content)
+                        blob = serialize_embedding_blob(embedding)
+                        if blob:
+                            await self.db.execute(
+                                "UPDATE document_chunks SET embedding = ? WHERE id = ?",
+                                (blob, chunk_id),
+                            )
+                            await self.db.execute(
+                                "INSERT INTO vec_chunks(chunk_id, embedding) VALUES (?, ?)",
+                                (chunk_id, blob),
+                            )
+                    except Exception as e:
+                        logger.error("Re-embed chunk %d: %s", chunk_id, e)
+                await self.db.commit()
+                logger.info("Re-embedding complete")
+
+        except Exception as e:
+            logger.error("Vec index sync failed: %s", e)
 
     @property
     def db(self) -> aiosqlite.Connection:
@@ -184,7 +317,7 @@ class MemoryStore:
         await self.db.commit()
 
     async def search_memories(self, query: str, limit: int = 20, user_id: str = "_global") -> list[dict]:
-        """Hybrid search: text LIKE + vector similarity. Paginated, not loading ALL."""
+        """Hybrid search: text LIKE + vector similarity. No artificial caps."""
         q = f"%{query.lower()}%"
         async with self.db.execute(
             "SELECT key, value, tags, embedding FROM memories "
@@ -196,15 +329,13 @@ class MemoryStore:
 
         text_results = [{"key": r[0], "value": r[1], "tags": r[2], "embedding": r[3]} for r in text_rows]
 
-        # Vector search if embeddings are active
         if self.embedder.name != "none":
             query_embedding = await self.embedder.embed(query)
             if query_embedding:
-                # Paginated: only load recent 500, not ALL
+                # Scan all memories for this user — no row cap
                 async with self.db.execute(
                     "SELECT key, value, tags, embedding FROM memories "
-                    "WHERE user_id = ? AND embedding IS NOT NULL "
-                    "ORDER BY updated_at DESC LIMIT 500",
+                    "WHERE user_id = ? AND embedding IS NOT NULL",
                     (user_id,),
                 ) as cursor:
                     candidates = await cursor.fetchall()
@@ -252,16 +383,30 @@ class MemoryStore:
     # --- Document chunks (RAG) ---
 
     async def ingest_document(self, source: str, content: str, user_id: str = "_global") -> int:
-        """Chunk a document, embed each chunk, and store for RAG retrieval.
+        """Chunk, embed, and store a document. Dual-writes to vec_chunks when available.
 
-        Returns the number of chunks stored.  Re-ingesting the same source
-        replaces all previous chunks for that source.
+        Re-ingesting the same source replaces all previous chunks.
         """
         chunks = chunk_text(content)
         if not chunks:
             return 0
 
-        # Remove old chunks for this source (handles re-reads cleanly)
+        # Cascade delete: remove from vec index first, then main table
+        if self._has_vec:
+            async with self.db.execute(
+                "SELECT id FROM document_chunks WHERE source = ? AND user_id = ?",
+                (source, user_id),
+            ) as cursor:
+                old_ids = [r[0] for r in await cursor.fetchall()]
+            if old_ids:
+                placeholders = ",".join("?" * len(old_ids))
+                try:
+                    await self.db.execute(
+                        f"DELETE FROM vec_chunks WHERE chunk_id IN ({placeholders})", old_ids
+                    )
+                except Exception:
+                    pass
+
         await self.db.execute(
             "DELETE FROM document_chunks WHERE source = ? AND user_id = ?",
             (source, user_id),
@@ -270,28 +415,76 @@ class MemoryStore:
         for i, text in enumerate(chunks):
             embedding = await self.embedder.embed(text)
             blob = serialize_embedding_blob(embedding)
-            await self.db.execute(
+            cursor = await self.db.execute(
                 "INSERT INTO document_chunks (source, chunk_index, content, embedding, user_id) "
                 "VALUES (?, ?, ?, ?, ?)",
                 (source, i, text, blob, user_id),
             )
+            chunk_id = cursor.lastrowid
+
+            # Dual-write to sqlite-vec index
+            if self._has_vec and blob and chunk_id:
+                try:
+                    await self.db.execute(
+                        "INSERT INTO vec_chunks(chunk_id, embedding) VALUES (?, ?)",
+                        (chunk_id, blob),
+                    )
+                except Exception as e:
+                    logger.debug("vec insert for chunk %d: %s", chunk_id, e)
 
         await self.db.commit()
         logger.info("RAG: ingested %d chunks from %s", len(chunks), source)
         return len(chunks)
 
     async def search_documents(self, query: str, limit: int = 5, user_id: str = "_global") -> list[dict]:
-        """Search document chunks by vector similarity with text fallback."""
-        results: list[dict] = []
+        """Search document chunks: sqlite-vec ANN → brute-force cosine → text LIKE."""
 
-        # Vector search if embeddings are active
+        # Path 1: sqlite-vec ANN search (fast, O(log n))
+        if self._has_vec and self.embedder.name != "none":
+            query_embedding = await self.embedder.embed(query)
+            if query_embedding:
+                query_blob = serialize_embedding_blob(query_embedding)
+                if query_blob:
+                    try:
+                        # Over-fetch to allow post-filtering by user_id
+                        async with self.db.execute(
+                            "SELECT chunk_id, distance FROM vec_chunks "
+                            "WHERE embedding MATCH ? AND k = ?",
+                            (query_blob, limit * 5),
+                        ) as cursor:
+                            vec_rows = await cursor.fetchall()
+
+                        if vec_rows:
+                            chunk_ids = [r[0] for r in vec_rows]
+                            placeholders = ",".join("?" * len(chunk_ids))
+                            async with self.db.execute(
+                                f"SELECT id, source, chunk_index, content FROM document_chunks "
+                                f"WHERE id IN ({placeholders}) AND user_id = ?",
+                                (*chunk_ids, user_id),
+                            ) as cursor:
+                                rows = await cursor.fetchall()
+
+                            # Preserve vec ordering (nearest first)
+                            id_to_row = {r[0]: r for r in rows}
+                            results = []
+                            for chunk_id, _ in vec_rows:
+                                if chunk_id in id_to_row:
+                                    r = id_to_row[chunk_id]
+                                    results.append({"source": r[1], "chunk": r[2], "content": r[3]})
+                                    if len(results) >= limit:
+                                        break
+                            if results:
+                                return results
+                    except Exception as e:
+                        logger.warning("sqlite-vec search failed, falling back to brute-force: %s", e)
+
+        # Path 2: Brute-force cosine similarity (no row cap)
         if self.embedder.name != "none":
             query_embedding = await self.embedder.embed(query)
             if query_embedding:
                 async with self.db.execute(
                     "SELECT source, chunk_index, content, embedding FROM document_chunks "
-                    "WHERE user_id = ? AND embedding IS NOT NULL "
-                    "ORDER BY created_at DESC LIMIT 2000",
+                    "WHERE user_id = ? AND embedding IS NOT NULL",
                     (user_id,),
                 ) as cursor:
                     candidates = await cursor.fetchall()
@@ -306,7 +499,7 @@ class MemoryStore:
                 scored.sort(key=lambda x: x[0], reverse=True)
                 return [item for _, item in scored[:limit]]
 
-        # Text fallback
+        # Path 3: Text fallback (no embeddings)
         q = f"%{query.lower()}%"
         async with self.db.execute(
             "SELECT source, chunk_index, content FROM document_chunks "
