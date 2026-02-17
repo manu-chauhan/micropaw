@@ -65,6 +65,8 @@ microclaw chat      # start talking
 
 <br>
 
+> **Zero telemetry. Zero data collection. MicroClaw never phones home — your conversations, API keys, and data stay on your machine. Always.**
+
 </div>
 
 ```
@@ -158,36 +160,33 @@ Override models: `CLAUDE_MODEL`, `OPENAI_MODEL`, `GEMINI_MODEL`, `OLLAMA_MODEL`
 
 ## RAG — Read Once, Ask Anywhere
 
-**Read a file, PDF, or YouTube video on any channel. Ask about it later from any other channel. Zero config.**
-
-<div align="center">
+<h3 align="center">
+  Read a file, PDF, or YouTube video on any channel.<br>
+  Ask about it later from any other channel. Zero config.
+</h3>
 
 ```
-  User (Telegram):  "Read /home/manu/report.pdf"
-
-  MicroClaw:        [pdf_read] → auto-chunks → embeds in background
-                    "Here's a summary of your report..."
-
-  User (Telegram):  "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-
-  MicroClaw:        [web_browse] → detects YouTube → fetches transcript via InnerTube
-                    → auto-chunks → embeds → stored for RAG
-                    "This is a music video by Rick Astley..."
-
-               ╌╌╌  next day, different platform  ╌╌╌
-
-  User (Discord):   "What did the report say about revenue?"
-
-  MicroClaw:        [relevant chunks auto-injected into context]
-                    "According to your report, revenue grew 23% in Q4..."
-
-  User (Discord):   "What was that YouTube video about?"
-
-  MicroClaw:        [transcript chunks retrieved via ANN search]
-                    "The video was 'Never Gonna Give You Up' by Rick Astley..."
+┌─ 📱 Telegram (Day 1) ───────────────────────────────────────────────┐
+│                                                                      │
+│  You:        "Read /home/report.pdf"                                │
+│  MicroClaw:   ✓ PDF read → chunked → embedded → stored              │
+│              "Here's a summary of your report..."                   │
+│                                                                      │
+│  You:        "https://youtube.com/watch?v=abc123"                   │
+│  MicroClaw:   ✓ transcript fetched → chunked → embedded → stored    │
+│              "This is a 21-min talk about body language..."         │
+│                                                                      │
+├─ 💬 Discord (Next day) ─────────────────────────────────────────────┤
+│                                                                      │
+│  You:        "What did the report say about revenue?"               │
+│  MicroClaw:  "Revenue grew 23% in Q4, with expenses down 10%..."   │
+│                                                                      │
+│  You:        "What was that YouTube video about?"                   │
+│  MicroClaw:  "The talk was by Amy Cuddy about how posture affects   │
+│               confidence and hormone levels..."                     │
+│                                                                      │
+└──────────────────────────────────────────────────────────────────────┘
 ```
-
-</div>
 
 ### YouTube Transcripts — Zero Config
 
