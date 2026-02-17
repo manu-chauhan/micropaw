@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Literal
@@ -224,8 +225,10 @@ def load_config() -> Config:
     if CONFIG_FILE.exists():
         try:
             raw = json.loads(CONFIG_FILE.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
+        except json.JSONDecodeError as e:
+            logging.getLogger(__name__).warning("Config file corrupt, using defaults: %s", e)
+        except OSError as e:
+            logging.getLogger(__name__).warning("Config file unreadable, using defaults: %s", e)
 
     _apply_env_overrides(raw)
     raw.pop("config_version", None)

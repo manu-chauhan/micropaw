@@ -77,7 +77,7 @@ class TerminalChannel(Channel):
 
         while self._running:
             try:
-                line = await asyncio.get_event_loop().run_in_executor(
+                line = await asyncio.get_running_loop().run_in_executor(
                     None, lambda: console.input("[bold green]You >[/bold green] ")
                 )
             except (EOFError, KeyboardInterrupt):

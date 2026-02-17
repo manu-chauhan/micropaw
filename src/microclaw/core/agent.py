@@ -39,6 +39,10 @@ class Agent:
         self.max_tool_iterations = config.context.max_tool_iterations
         self.last_usage: dict[str, int] = {"input": 0, "output": 0}
 
+    def _reset_usage(self) -> None:
+        """Reset per-message usage counter."""
+        self.last_usage = {"input": 0, "output": 0}
+
     def _accumulate_usage(self, usage: dict) -> None:
         """Accumulate token usage from the latest response."""
         self.last_usage["input"] += usage.get("input", 0)
@@ -137,6 +141,7 @@ class Agent:
         send_typing: Callable[[], Awaitable[None]] | None = None,
     ) -> str:
         """Process a message and return the response text (non-streaming)."""
+        self._reset_usage()
         conv_id, messages = await self._prepare(text, user_id, platform, channel_id, send_typing)
 
         tool_defs = self.registry.to_tool_defs()
@@ -181,6 +186,7 @@ class Agent:
         on_chunk: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
         """Process a message with streaming. Streams text via on_chunk callback."""
+        self._reset_usage()
         conv_id, messages = await self._prepare(text, user_id, platform, channel_id, send_typing)
 
         tool_defs = self.registry.to_tool_defs()

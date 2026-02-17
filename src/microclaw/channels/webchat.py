@@ -261,7 +261,7 @@ class WebChatChannel(Channel):
                 if not text or len(text) > MAX_MSG_LENGTH:
                     continue
 
-                await self._process_message(conn_id, writer, text)
+                asyncio.create_task(self._process_message(conn_id, writer, text))
 
         except (ConnectionError, asyncio.IncompleteReadError):
             pass

@@ -217,10 +217,9 @@ class Gateway:
     async def _reset_terminal_conversation(self) -> None:
         """Reset the terminal conversation ID so /new starts fresh."""
         if self.agent:
-            # Generate a new unique conversation ID for terminal
             import uuid
             new_id = f"terminal:terminal-user:{uuid.uuid4().hex[:8]}"
-            self.agent.conversations._terminal_override = new_id
+            self.agent.conversations.reset_terminal_session(new_id)
 
     async def _bus_consumer(self) -> None:
         """Consume outbound bus messages and route to channels."""

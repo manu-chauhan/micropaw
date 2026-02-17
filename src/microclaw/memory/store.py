@@ -217,9 +217,11 @@ class MemoryStore:
             rows = await cursor.fetchall()
         return [{"key": r[0], "value": r[1], "tags": r[2]} for r in rows]
 
-    async def delete_memory(self, key: str, user_id: str = "_global") -> None:
-        await self.db.execute("DELETE FROM memories WHERE key = ? AND user_id = ?", (key, user_id))
+    async def delete_memory(self, key: str, user_id: str = "_global") -> bool:
+        """Delete a memory. Returns True if a row was deleted."""
+        cursor = await self.db.execute("DELETE FROM memories WHERE key = ? AND user_id = ?", (key, user_id))
         await self.db.commit()
+        return cursor.rowcount > 0
 
     async def get_recent_memories(self, limit: int = 10, user_id: str = "_global") -> list[dict]:
         async with self.db.execute(

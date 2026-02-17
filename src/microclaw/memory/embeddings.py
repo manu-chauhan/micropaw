@@ -100,7 +100,7 @@ class LocalEmbedding(EmbeddingProvider):
         import asyncio
         model = self._load()
         # Run in thread pool — model.encode is CPU-bound
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         vec = await loop.run_in_executor(None, lambda: model.encode(text, normalize_embeddings=True))
         return vec.tolist()
 

@@ -50,7 +50,10 @@ class WhatsAppChannel(Channel):
 
     async def start(self) -> None:
         """Start webhook server for WhatsApp."""
-        from aiohttp import web
+        try:
+            from aiohttp import web
+        except ImportError:
+            raise RuntimeError("aiohttp not installed. Install with: pip install microclaw[whatsapp]")
 
         app = web.Application()
         app.router.add_get("/webhook", self._verify)

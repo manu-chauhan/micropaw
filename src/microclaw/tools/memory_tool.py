@@ -88,7 +88,7 @@ class MemoryTool(Tool):
             key = args.get("key", "")
             if not key:
                 return "Error: 'delete' requires 'key'."
-            await _store.delete_memory(key, user_id=user_id)
-            return f"Memory deleted: {key}"
+            deleted = await _store.delete_memory(key, user_id=user_id)
+            return f"Memory deleted: {key}" if deleted else f"Memory not found: {key}"
 
         return f"Unknown action: {action}"

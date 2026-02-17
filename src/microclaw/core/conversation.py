@@ -27,3 +27,7 @@ class ConversationManager:
 
     async def save_message(self, conversation_id: str, message: Message) -> None:
         await self.store.save_message(conversation_id, message)
+
+    def reset_terminal_session(self, new_id: str) -> None:
+        """Set a new conversation ID for terminal sessions (/new command)."""
+        self._terminal_override = new_id
