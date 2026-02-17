@@ -8,11 +8,11 @@
 
 **Your AI. Your machine. Your keys.**
 
-6 channels. 4 providers. 11 tools. Shared memory everywhere. ~6,900 lines of Python. Zero SDK dependencies.
+6 channels. 4 providers. 12 tools. Shared memory everywhere. ~7,100 lines of Python. Zero SDK dependencies.
 
 [![PyPI](https://img.shields.io/pypi/v/micropaw)](https://pypi.org/project/micropaw/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
-[![Tests](https://img.shields.io/badge/tests-268%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-303%20passed-brightgreen)]()
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=flat&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/manuchauhan)
 
@@ -44,6 +44,12 @@ paw chat      # start talking
 
 - **Context compaction** — Conversations never hit a wall. When context fills up, older messages are summarized by the LLM while the last 10 are kept verbatim. Unbounded conversations.
 
+- **Scheduled tasks** — Tell MicroPaw "remind me every 2 hours to stretch" or use `paw cron add`. Recurring and one-shot jobs, managed via CLI or conversationally through the LLM.
+
+- **Proactive heartbeat** — Drop tasks in `~/.micropaw/HEARTBEAT.md` and MicroPaw picks them up every 30 minutes. No prompting needed — it just does the work.
+
+- **Custom persona** — Create `~/.micropaw/SOUL.md` for personality and `~/.micropaw/USER.md` for user context. Your assistant, your rules.
+
 ### Reliability
 
 - **Automatic failover** — Provider chain with exponential backoff and Retry-After support. Claude down? Switches to GPT-4o, then Ollama. Keeps working.
@@ -68,7 +74,7 @@ paw chat      # start talking
 
 - **Zero SDK dependencies** — All 4 AI providers via raw httpx. No `anthropic`, `openai`, or `google-genai` packages. Switching providers is a config change.
 
-- **11 built-in tools** — Web search (Brave → SearXNG → DuckDuckGo), browser automation, file I/O, shell, HTTP requests, memory, vision, PDF, sessions, delegation — all security-hardened.
+- **12 built-in tools** — Web search (Brave → SearXNG → DuckDuckGo), browser automation, file I/O, shell, HTTP requests, memory, vision, PDF, sessions, delegation, cron scheduling — all security-hardened.
 
 - **Raw WebSocket** — WebChat channel implements RFC 6455 from scratch. No aiohttp. ~100 LOC.
 
@@ -85,15 +91,15 @@ paw chat      # start talking
 | | **MicroPaw** | **OpenClaw** | **NanoClaw** | **PicoClaw** | **MimiClaw** |
 |---|---|---|---|---|---|
 | **Language** | Python | TypeScript | TypeScript | Go | C |
-| **Codebase** | ~6,900 LOC | ~430k LOC | ~500 LOC | ~4k LOC | ~15k LOC |
+| **Codebase** | ~7,100 LOC | ~430k LOC | ~500 LOC | ~4k LOC | ~15k LOC |
 | **Channels** | 6 | 15+ | 1 (WhatsApp) | 5 | 3 |
-| **Tools** | 11 | 25 + 53 skills | SDK-dependent | 6 | 6 |
+| **Tools** | 12 | 25 + 53 skills | SDK-dependent | 6 | 6 |
 | **AI SDKs** | None — raw httpx | Internal framework | Anthropic SDK | None — raw HTTP | None — raw HTTP |
 | **RAG / Vectors** | sqlite-vec ANN + fallback | sqlite-vec + BM25 | No | No | No |
 | **Telemetry** | None, ever | Local JSONL (opt-out) | None | None | None |
 | **License** | MIT | MIT | MIT | MIT | MIT |
 
-**MicroPaw sits in the sweet spot** — full-featured like OpenClaw (RAG, 6 channels, 11 tools, multi-agent delegation) but lightweight like PicoClaw (~6,900 LOC, zero SDK dependencies). No telemetry, no bloat, no wrappers.
+**MicroPaw sits in the sweet spot** — full-featured like OpenClaw (RAG, 6 channels, 12 tools, scheduling, multi-agent delegation) but lightweight like PicoClaw (~7,100 LOC, zero SDK dependencies). No telemetry, no bloat, no wrappers.
 
 ---
 
@@ -196,6 +202,7 @@ paw chat
 | `pdf_read` | Extract text from PDFs with page ranges |
 | `sessions` | List and export conversation history |
 | `delegate` | Spin up sub-agents for parallel tasks |
+| `cron` | Schedule recurring or one-shot tasks via LLM |
 
 Disable any tool:
 ```json
@@ -348,6 +355,10 @@ MicroPaw > [delegate] "Research quantum computing breakthroughs"
 | `paw config` | Show configuration (secrets redacted) |
 | `paw status` | System status overview |
 | `paw doctor` | Diagnostics — Python, deps, disk, keys |
+| `paw cron add "task" --every 6h` | Schedule a recurring task |
+| `paw cron add "task" --once 2h` | Schedule a one-shot reminder |
+| `paw cron list` | List all scheduled tasks |
+| `paw cron remove <id>` | Remove a scheduled task |
 | `paw export` | Export conversations (JSON/Markdown) |
 | `paw reset` | Delete all config and data |
 
@@ -400,6 +411,10 @@ Config file: `~/.micropaw/config.json` (0600 permissions).
   }
 }
 ```
+
+Or use persona files for richer customization:
+- `~/.micropaw/SOUL.md` — personality, values, behavioral guidelines (overrides `personality` field)
+- `~/.micropaw/USER.md` — user preferences, timezone, language, personal context
 
 ### Custom API Base URLs
 
@@ -457,21 +472,22 @@ docker compose --profile full up                     # Everything
 <summary><strong>Architecture</strong></summary>
 
 ```
-src/micropaw/          6,873 LOC source + 3,101 LOC tests
- cli.py                 Click CLI (11 commands)
+src/micropaw/          ~7,100 LOC source + ~3,400 LOC tests
+ cli.py                 Click CLI (14 commands)
  config.py              Single Pydantic config model
  connector.py           Guided channel setup + live validation
- gateway.py             Central coordinator + rate limiter + bus
+ gateway.py             Central coordinator + rate limiter + bus + scheduler
+ scheduler.py           Cron jobs + HEARTBEAT.md proactive mode
  bus.py                 Async message bus (bounded queues)
  security.py            SSRF + path security + DNS checks
  core/
-   agent.py             Agent loop (streaming, tools, caching, errors)
+   agent.py             Agent loop (streaming, tools, caching, persona files)
    subagent.py          Sub-agent loop (tools minus delegate, configurable cap)
    context.py           Context compaction + auto-summarization
    conversation.py      History + session management
  providers/             4 providers + failover (raw httpx, retry)
  channels/              6 channels
- tools/                 11 tools
+ tools/                 12 tools (including cron scheduling)
  memory/                SQLite + vectors + embeddings + RAG chunker
 ```
 
@@ -485,7 +501,7 @@ Full decision log: [`DECISIONS.md`](DECISIONS.md)
 
 ```bash
 pip install ".[dev]"
-pytest                 # 268 tests, ~1s
+pytest                 # 303 tests
 ruff check src/
 mypy src/
 ```

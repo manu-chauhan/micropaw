@@ -150,6 +150,11 @@ class SearchConfig(BaseModel):
     searxng_url: str = ""  # self-hosted SearXNG URL, e.g. "http://localhost:8888"
 
 
+class SchedulerConfig(BaseModel):
+    heartbeat_interval: int = 1800  # seconds (30 minutes)
+    max_jobs: int = 50
+
+
 class ContextConfig(BaseModel):
     max_history_messages: int = 50
     compaction_threshold: int = 30
@@ -173,6 +178,7 @@ class Config(BaseModel):
     embedding: EmbeddingConfig = EmbeddingConfig()
     search: SearchConfig = SearchConfig()
     context: ContextConfig = ContextConfig()
+    scheduler: SchedulerConfig = SchedulerConfig()
     fallback_providers: list[str] = []
 
 

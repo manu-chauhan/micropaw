@@ -1,0 +1,106 @@
+"""Cron tool — schedule recurring or one-shot tasks via LLM."""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, TYPE_CHECKING
+
+from micropaw.tools.base import Tool, ToolContext
+
+if TYPE_CHECKING:
+    from micropaw.scheduler import Scheduler
+
+logger = logging.getLogger(__name__)
+
+_scheduler: Scheduler | None = None
+
+
+def set_scheduler(scheduler: Scheduler) -> None:
+    global _scheduler
+    _scheduler = scheduler
+
+
+class CronTool(Tool):
+    name = "cron"
+    description = (
+        "Schedule tasks. Actions: 'add' (create a recurring or one-shot job), "
+        "'list' (show all jobs), 'remove' (delete a job by ID)."
+    )
+    parameters: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "description": "The action to perform",
+                "enum": ["add", "list", "remove"],
+            },
+            "description": {
+                "type": "string",
+                "description": "Task description — what to do when the job fires (for add)",
+            },
+            "interval_seconds": {
+                "type": "integer",
+                "description": "How often to run, in seconds. E.g. 3600 = every hour (for add)",
+            },
+            "one_shot": {
+                "type": "boolean",
+                "description": "If true, run once after interval_seconds then auto-delete (for add)",
+            },
+            "job_id": {
+                "type": "integer",
+                "description": "Job ID to remove (for remove)",
+            },
+        },
+        "required": ["action"],
+    }
+
+    async def execute(self, args: dict[str, Any], context: ToolContext) -> str:
+        if _scheduler is None:
+            return "Error: Scheduler not initialized."
+
+        action = args["action"]
+
+        if action == "add":
+            description = args.get("description", "")
+            interval = args.get("interval_seconds", 0)
+            if not description or interval <= 0:
+                return "Error: 'add' requires 'description' and 'interval_seconds' > 0."
+            one_shot = args.get("one_shot", False)
+            try:
+                job_id = await _scheduler.add_job(
+                    description, interval, context.user_id, context.platform,
+                    context.conversation_id, one_shot=one_shot,
+                )
+            except ValueError as e:
+                return f"Error: {e}"
+            kind = "one-shot" if one_shot else "recurring"
+            return f"Scheduled {kind} job #{job_id}: \"{description}\" (every {_fmt_interval(interval)})"
+
+        elif action == "list":
+            jobs = await _scheduler.list_jobs()
+            if not jobs:
+                return "No scheduled jobs."
+            lines = [f"Scheduled jobs ({len(jobs)}):"]
+            for j in jobs:
+                kind = "once" if j["one_shot"] else f"every {_fmt_interval(j['interval_seconds'])}"
+                lines.append(f"  #{j['id']}: \"{j['description']}\" ({kind})")
+            return "\n".join(lines)
+
+        elif action == "remove":
+            job_id = args.get("job_id")
+            if not job_id:
+                return "Error: 'remove' requires 'job_id'."
+            removed = await _scheduler.remove_job(int(job_id))
+            return f"Job #{job_id} removed." if removed else f"Job #{job_id} not found."
+
+        return f"Unknown action: {action}"
+
+
+def _fmt_interval(seconds: int) -> str:
+    if seconds >= 86400 and seconds % 86400 == 0:
+        return f"{seconds // 86400}d"
+    if seconds >= 3600 and seconds % 3600 == 0:
+        return f"{seconds // 3600}h"
+    if seconds >= 60 and seconds % 60 == 0:
+        return f"{seconds // 60}m"
+    return f"{seconds}s"

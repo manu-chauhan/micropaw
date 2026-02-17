@@ -78,6 +78,7 @@ def _create_registry(config: Config):
     """Create and populate the tool registry, respecting disabled_tools config."""
     import logging
     from micropaw.tools.base import ToolRegistry
+    from micropaw.tools.cron_tool import CronTool
     from micropaw.tools.file_read import FileReadTool
     from micropaw.tools.file_write import FileWriteTool
     from micropaw.tools.http_request import HttpRequestTool
@@ -98,7 +99,7 @@ def _create_registry(config: Config):
     for tool in [
         WebSearchTool(), WebBrowseTool(), FileReadTool(), FileWriteTool(),
         ShellTool(), HttpRequestTool(), MemoryTool(), PdfReadTool(),
-        VisionTool(), SessionsTool(), DelegateTool(),
+        VisionTool(), SessionsTool(), DelegateTool(), CronTool(),
     ]:
         if tool.name not in disabled:
             registry.register(tool)
@@ -377,6 +378,123 @@ def reset():
         console.print("[green]All MicroPaw data has been reset.[/green]")
     else:
         console.print("[dim]Nothing to reset.[/dim]")
+
+
+# ---------------------------------------------------------------------------
+# Cron subcommands
+# ---------------------------------------------------------------------------
+
+def _parse_interval(s: str) -> int:
+    """Parse '6h', '45m', '30s', '1d' → seconds."""
+    units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    s = s.strip()
+    if s and s[-1] in units:
+        try:
+            return int(s[:-1]) * units[s[-1]]
+        except ValueError:
+            pass
+    try:
+        return int(s)
+    except ValueError:
+        raise click.BadParameter(f"Invalid interval: {s}. Use e.g. 6h, 45m, 30s, 1d")
+
+
+@main.group()
+def cron():
+    """Manage scheduled tasks."""
+
+
+@cron.command()
+@click.argument("description")
+@click.option("--every", "interval", default=None, help="Recurring interval (e.g. 6h, 45m, 30s, 1d).")
+@click.option("--once", "once_delay", default=None, help="One-shot delay (e.g. 2h, 30m). Fires once then deletes.")
+def add(description, interval, once_delay):
+    """Add a scheduled task."""
+    if not interval and not once_delay:
+        console.print("[red]Provide --every (recurring) or --once (one-shot).[/red]")
+        return
+    if interval and once_delay:
+        console.print("[red]Use either --every or --once, not both.[/red]")
+        return
+
+    one_shot = once_delay is not None
+    seconds = _parse_interval(once_delay if one_shot else interval)  # type: ignore[arg-type]
+
+    async def _add():
+        from micropaw.scheduler import Scheduler
+        sched = Scheduler(str(DB_FILE), handler=None, bus=None, channels=[])
+        await sched.init()
+        try:
+            job_id = await sched.add_job(description, seconds, one_shot=one_shot)
+            kind = "one-shot" if one_shot else "recurring"
+            console.print(f"[green]Created {kind} job #{job_id}: \"{description}\"[/green]")
+        except ValueError as e:
+            console.print(f"[red]{e}[/red]")
+        finally:
+            await sched.close()
+
+    asyncio.run(_add())
+
+
+@cron.command(name="list")
+def list_jobs():
+    """List all scheduled tasks."""
+    from datetime import datetime, timezone
+
+    async def _list():
+        from micropaw.scheduler import Scheduler
+        sched = Scheduler(str(DB_FILE), handler=None, bus=None, channels=[])
+        await sched.init()
+        try:
+            jobs = await sched.list_jobs()
+            if not jobs:
+                console.print("[dim]No scheduled tasks.[/dim]")
+                return
+            table = Table(title="Scheduled Tasks")
+            table.add_column("ID", style="cyan")
+            table.add_column("Description")
+            table.add_column("Schedule")
+            table.add_column("Next Run")
+            for j in jobs:
+                kind = "once" if j["one_shot"] else f"every {_fmt(j['interval_seconds'])}"
+                next_dt = datetime.fromtimestamp(j["next_run_at"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+                table.add_row(str(j["id"]), j["description"], kind, next_dt)
+            console.print(table)
+        finally:
+            await sched.close()
+
+    asyncio.run(_list())
+
+
+@cron.command()
+@click.argument("job_id", type=int)
+def remove(job_id):
+    """Remove a scheduled task by ID."""
+    async def _remove():
+        from micropaw.scheduler import Scheduler
+        sched = Scheduler(str(DB_FILE), handler=None, bus=None, channels=[])
+        await sched.init()
+        try:
+            removed = await sched.remove_job(job_id)
+            if removed:
+                console.print(f"[green]Removed job #{job_id}.[/green]")
+            else:
+                console.print(f"[red]Job #{job_id} not found.[/red]")
+        finally:
+            await sched.close()
+
+    asyncio.run(_remove())
+
+
+def _fmt(seconds: int) -> str:
+    """Format seconds as human-readable interval."""
+    if seconds >= 86400 and seconds % 86400 == 0:
+        return f"{seconds // 86400}d"
+    if seconds >= 3600 and seconds % 3600 == 0:
+        return f"{seconds // 3600}h"
+    if seconds >= 60 and seconds % 60 == 0:
+        return f"{seconds // 60}m"
+    return f"{seconds}s"
 
 
 if __name__ == "__main__":

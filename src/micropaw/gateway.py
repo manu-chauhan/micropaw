@@ -147,6 +147,19 @@ class Gateway:
         # Start bus consumer for background sub-agent results
         self._bus_task = asyncio.create_task(self._bus_consumer())
 
+        # Start scheduler for cron jobs + heartbeat
+        from micropaw.scheduler import Scheduler
+        self._scheduler = Scheduler(
+            str(DB_FILE), self._handle_message, self._bus, self.channels,
+            heartbeat_interval=self.config.scheduler.heartbeat_interval,
+            max_jobs=self.config.scheduler.max_jobs,
+        )
+        await self._scheduler.init()
+        self._scheduler_task: asyncio.Task | None = asyncio.create_task(self._scheduler.run())
+
+        from micropaw.tools.cron_tool import set_scheduler
+        set_scheduler(self._scheduler)
+
         if terminal_coro:
             # Terminal blocks — run it as the main loop
             await terminal_coro[1]
@@ -313,6 +326,18 @@ class Gateway:
         return NullEmbedding()
 
     async def stop(self) -> None:
+        # Close scheduler
+        if hasattr(self, "_scheduler"):
+            self._scheduler._running = False
+        if hasattr(self, "_scheduler_task") and self._scheduler_task and not self._scheduler_task.done():
+            self._scheduler_task.cancel()
+            try:
+                await self._scheduler_task
+            except asyncio.CancelledError:
+                pass
+        if hasattr(self, "_scheduler"):
+            await self._scheduler.close()
+
         # Close bus and consumer
         if hasattr(self, "_bus"):
             self._bus.close()

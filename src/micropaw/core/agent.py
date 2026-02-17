@@ -91,9 +91,28 @@ class Agent:
 
         # Identity
         parts.append(f"You are {self.config.persona.name}, an AI assistant.")
-        parts.append(f"You are {self.config.persona.personality}.")
+
+        # Persona: SOUL.md overrides default personality if present
+        from micropaw.config import CONFIG_DIR
+        soul_file = CONFIG_DIR / "SOUL.md"
+        if soul_file.exists():
+            soul = soul_file.read_text()[:2048].strip()
+            if soul:
+                parts.append(soul)
+            else:
+                parts.append(f"You are {self.config.persona.personality}.")
+        else:
+            parts.append(f"You are {self.config.persona.personality}.")
+
         parts.append("Help users by chatting naturally and using tools when needed.")
         parts.append("Keep responses concise and conversational.")
+
+        # User context: USER.md provides user preferences if present
+        user_file = CONFIG_DIR / "USER.md"
+        if user_file.exists():
+            user_context = user_file.read_text()[:2048].strip()
+            if user_context:
+                parts.append(f"\nAbout the user:\n{user_context}")
 
         # Platform hints
         hints = {
