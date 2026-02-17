@@ -1,4 +1,4 @@
-# MicroClaw — Decision Log & Timeline
+# MicroPaw — Decision Log & Timeline
 
 ## Project Genesis
 **Date:** 2026-02-16
@@ -14,7 +14,7 @@
 
 ### Key Decision: Name
 - Considered: OpenPaw, NanoClaw, PicoClaw variants
-- **Chose: MicroClaw** — Goldilocks between Pico (too small) and Open (too big)
+- **Chose: MicroPaw** — Goldilocks between Pico (too small) and Open (too big)
 
 ## Architecture Decisions
 
@@ -30,13 +30,13 @@
 
 ### D3: Message Bus as optional coordination layer
 **Decided:** 2026-02-16, **Updated:** 2026-02-17
-**Rationale:** NanoClaw's bus architecture is clean but adds complexity for v1. MicroClaw keeps the handler callback pattern (simpler, proven) for request-response messages. Bus wired in v1.1 for background sub-agent result delivery (see D17).
+**Rationale:** NanoClaw's bus architecture is clean but adds complexity for v1. MicroPaw keeps the handler callback pattern (simpler, proven) for request-response messages. Bus wired in v1.1 for background sub-agent result delivery (see D17).
 **Impact:** Channels use direct handler callbacks for real-time messages. Bus handles async delivery (background sub-agent results). Hybrid approach: callbacks for streaming, bus for fire-and-forget.
 
 ### D4: Playwright for browser automation (not CDP)
 **Decided:** 2026-02-16
 **Rationale:** User confirmed browser automation is a selling point. Playwright gives full browser control (navigate, click, fill, screenshot, JS eval) without requiring Chrome extension + daemon like OpenClaw's CDP approach. Cross-browser (Chrome, Firefox, WebKit).
-**Impact:** `web_browse` tool uses Playwright. Optional dependency: `pip install microclaw[browser]`
+**Impact:** `web_browse` tool uses Playwright. Optional dependency: `pip install micropaw[browser]`
 
 ### D5: Shell completion via Click (not custom)
 **Decided:** 2026-02-16
@@ -55,12 +55,12 @@
 
 ### D8: No ACP protocol
 **Decided:** 2026-02-16
-**Rationale:** ACP is OpenClaw's custom NDJSON-based RPC for native client apps. MicroClaw uses standard WebSocket — any client (web, mobile, CLI) can connect directly.
+**Rationale:** ACP is OpenClaw's custom NDJSON-based RPC for native client apps. MicroPaw uses standard WebSocket — any client (web, mobile, CLI) can connect directly.
 **Impact:** Standard protocols only. No custom wire format.
 
 ### D9: No OAuth token management
 **Decided:** 2026-02-16
-**Rationale:** MicroClaw uses BYOK (bring your own keys). API keys don't expire like OAuth tokens. Invalid key → 401 → failover chain tries next provider.
+**Rationale:** MicroPaw uses BYOK (bring your own keys). API keys don't expire like OAuth tokens. Invalid key → 401 → failover chain tries next provider.
 **Impact:** Simple API key auth. No token refresh complexity.
 
 ### D10: No wake-word detection
@@ -70,13 +70,13 @@
 
 ### D11: Embedded SQLite schema (no external files)
 **Decided:** 2026-02-16
-**Rationale:** OpenPaw uses a separate schema.sql file loaded via importlib.resources. MicroClaw embeds the schema as a Python constant in store.py — simpler, no file loading issues, schema version is always in sync with code.
+**Rationale:** OpenPaw uses a separate schema.sql file loaded via importlib.resources. MicroPaw embeds the schema as a Python constant in store.py — simpler, no file loading issues, schema version is always in sync with code.
 **Impact:** One less file. Schema changes are code changes.
 
 ### D12: Single Pydantic config model
 **Decided:** 2026-02-16
 **Rationale:** Proven pattern from OpenPaw. One Config class replaces OpenClaw's 126 config files. Env var overrides via a clean mapping table instead of ad-hoc os.getenv() calls.
-**Impact:** `~/.microclaw/config.json` with 0o600 permissions. All secrets in one place.
+**Impact:** `~/.micropaw/config.json` with 0o600 permissions. All secrets in one place.
 
 ### D13: Multi-backend web search with automatic failover
 **Decided:** 2026-02-16
@@ -115,7 +115,7 @@
 - Added missing `google-genai` and `pypdf` to dependency list (now using raw httpx anyway)
 - Fixed vector search loading all memories — added pagination
 - Fixed Ollama vision — base64 images now sent in the `images` field
-- Fixed `MICROCLAW_PROVIDER` env var override — was missing from mapping table
+- Fixed `MICROPAW_PROVIDER` env var override — was missing from mapping table
 - Fixed SSRF DNS resolution bypass — DNS failure now blocks instead of passing through
 - Fixed `confirm_dangerous` config — was defined but never wired to the shell tool
 
@@ -130,7 +130,7 @@
 - **Retry with backoff** — `retry_on_transient()` retries 429/503 with exponential backoff + Retry-After header support
 - **Rate limiting** — Per-user sliding window + burst detection at gateway level
 - **HTTP client cleanup** — All providers and embedding providers implement `close()` for proper connection pool teardown
-- **File logging** — RotatingFileHandler (5MB, 3 backups) via `MICROCLAW_FILE_LOG` or `MICROCLAW_LOG_FILE` env vars
+- **File logging** — RotatingFileHandler (5MB, 3 backups) via `MICROPAW_FILE_LOG` or `MICROPAW_LOG_FILE` env vars
 - **SQLite busy_timeout** — 5-second timeout prevents "database is locked" under concurrent access
 - **Message size validation** — Configurable max (100KB default) prevents memory exhaustion
 
@@ -148,7 +148,7 @@
 - **Critical:** SubAgent nudge used empty assistant content (`""`) — Claude API rejects this with 400. Fixed to non-empty nudge
 - `asyncio.get_event_loop()` → `asyncio.get_running_loop()` in terminal and embeddings (deprecated in Python 3.12+)
 - WebChat `_process_message` blocked the frame loop — client couldn't ping during AI thinking. Now uses `asyncio.create_task()`
-- WhatsApp channel missing helpful `"Install with: pip install microclaw[whatsapp]"` on ImportError
+- WhatsApp channel missing helpful `"Install with: pip install micropaw[whatsapp]"` on ImportError
 - `load_config` silently swallowed corrupt JSON — now warns via logger
 - `memory_tool.delete` returned "Memory deleted" for nonexistent keys — now returns "Memory not found"
 - `sessions.py` bypassed store abstraction with raw SQL — now uses `store.list_conversations()` and `store.export_messages()`
@@ -177,7 +177,7 @@
 ### D15: Conversation Export
 **Decided:** 2026-02-17
 **Rationale:** No way to export chat history from the SQLite database. Users need this for backup, audit, or sharing.
-**Design:** `microclaw export` CLI command. No conversation ID → lists all conversations in a Rich table. With `--conversation-id` + `--format` (json/markdown) + `--output` (file/stdout). Read-only SQLite, own MemoryStore connection.
+**Design:** `micropaw export` CLI command. No conversation ID → lists all conversations in a Rich table. With `--conversation-id` + `--format` (json/markdown) + `--output` (file/stdout). Read-only SQLite, own MemoryStore connection.
 **Impact:** Full conversation export with zero dependencies.
 
 ### D16: Sub-Agent System
@@ -222,7 +222,7 @@
 
 ### D20: Model Env Var Overrides
 **Decided:** 2026-02-17
-**Rationale:** Users can override provider and API keys via env vars (`ANTHROPIC_API_KEY`, etc.) but not the model. Switching models requires editing `~/.microclaw/config.json`. For quick testing or CI, env var overrides are cleaner.
+**Rationale:** Users can override provider and API keys via env vars (`ANTHROPIC_API_KEY`, etc.) but not the model. Switching models requires editing `~/.micropaw/config.json`. For quick testing or CI, env var overrides are cleaner.
 **Design:** Add to env var mapping table in `config.py`:
 - `CLAUDE_MODEL` → `provider_config.claude.model`
 - `OPENAI_MODEL` → `provider_config.openai.model`

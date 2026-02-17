@@ -6,7 +6,7 @@ import math
 
 import pytest
 
-from microclaw.memory.embeddings import (
+from micropaw.memory.embeddings import (
     NullEmbedding,
     cosine_similarity,
     deserialize_embedding,

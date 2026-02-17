@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from microclaw.config import Config
-from microclaw.gateway import Gateway, _RateLimiter
+from micropaw.config import Config
+from micropaw.gateway import Gateway, _RateLimiter
 
 
 # ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "microclaw"
+name = "micropaw"
 version = "0.1.0"
 description = "Feature-rich lightweight personal AI assistant — your AI, your machine, your keys"
 readme = "README.md"
@@ -58,15 +58,15 @@ dev = [
 ]
 
 [project.scripts]
-microclaw = "microclaw.cli:main"
+micropaw = "micropaw.cli:main"
 
 [project.urls]
-Homepage = "https://gitlab.com/MANU-CHAUHAN/microclaw"
-Repository = "https://gitlab.com/MANU-CHAUHAN/microclaw"
-Issues = "https://gitlab.com/MANU-CHAUHAN/microclaw/-/issues"
+Homepage = "https://gitlab.com/MANU-CHAUHAN/micropaw"
+Repository = "https://gitlab.com/MANU-CHAUHAN/micropaw"
+Issues = "https://gitlab.com/MANU-CHAUHAN/micropaw/-/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/microclaw"]
+packages = ["src/micropaw"]
 
 [tool.ruff]
 target-version = "py311"

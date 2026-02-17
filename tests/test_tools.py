@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from microclaw.channels.base import chunk_text
-from microclaw.tools.base import Tool, ToolContext, ToolRegistry
-from microclaw.tools.path_security import validate_file_path, validate_write_path
+from micropaw.channels.base import chunk_text
+from micropaw.tools.base import Tool, ToolContext, ToolRegistry
+from micropaw.tools.path_security import validate_file_path, validate_write_path
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +169,7 @@ class TestWebSearch:
 
     @pytest.mark.asyncio
     async def test_searxng_returns_formatted_results(self):
-        from microclaw.tools.web_search import _search_searxng
+        from micropaw.tools.web_search import _search_searxng
 
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -185,7 +185,7 @@ class TestWebSearch:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("microclaw.tools.web_search.httpx.AsyncClient", return_value=mock_client):
+        with patch("micropaw.tools.web_search.httpx.AsyncClient", return_value=mock_client):
             result = await _search_searxng("python", 5, base_url="http://localhost:8888")
 
         assert result is not None
@@ -195,21 +195,21 @@ class TestWebSearch:
 
     @pytest.mark.asyncio
     async def test_searxng_returns_none_on_failure(self):
-        from microclaw.tools.web_search import _search_searxng
+        from micropaw.tools.web_search import _search_searxng
 
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(side_effect=Exception("Connection refused"))
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("microclaw.tools.web_search.httpx.AsyncClient", return_value=mock_client):
+        with patch("micropaw.tools.web_search.httpx.AsyncClient", return_value=mock_client):
             result = await _search_searxng("test", 5, base_url="http://localhost:8888")
 
         assert result is None
 
     @pytest.mark.asyncio
     async def test_brave_returns_formatted_results(self):
-        from microclaw.tools.web_search import _search_brave
+        from micropaw.tools.web_search import _search_brave
 
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -226,7 +226,7 @@ class TestWebSearch:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("microclaw.tools.web_search.httpx.AsyncClient", return_value=mock_client):
+        with patch("micropaw.tools.web_search.httpx.AsyncClient", return_value=mock_client):
             result = await _search_brave("test", 5, "BSA-fake-key")
 
         assert result is not None
@@ -236,7 +236,7 @@ class TestWebSearch:
     @pytest.mark.asyncio
     async def test_brave_returns_none_on_rate_limit(self):
         import httpx
-        from microclaw.tools.web_search import _search_brave
+        from micropaw.tools.web_search import _search_brave
 
         mock_response = MagicMock()
         mock_response.status_code = 429
@@ -247,14 +247,14 @@ class TestWebSearch:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("microclaw.tools.web_search.httpx.AsyncClient", return_value=mock_client):
+        with patch("micropaw.tools.web_search.httpx.AsyncClient", return_value=mock_client):
             result = await _search_brave("test", 5, "BSA-fake-key")
 
         assert result is None  # None allows fallthrough to next backend
 
     @pytest.mark.asyncio
     async def test_duckduckgo_always_returns_string(self):
-        from microclaw.tools.web_search import _search_duckduckgo
+        from micropaw.tools.web_search import _search_duckduckgo
 
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -270,7 +270,7 @@ class TestWebSearch:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("microclaw.tools.web_search.httpx.AsyncClient", return_value=mock_client):
+        with patch("micropaw.tools.web_search.httpx.AsyncClient", return_value=mock_client):
             result = await _search_duckduckgo("python", 5)
 
         assert isinstance(result, str)
@@ -278,7 +278,7 @@ class TestWebSearch:
 
     @pytest.mark.asyncio
     async def test_duckduckgo_returns_no_results_message(self):
-        from microclaw.tools.web_search import _search_duckduckgo
+        from micropaw.tools.web_search import _search_duckduckgo
 
         mock_response = MagicMock()
         mock_response.json.return_value = {"RelatedTopics": []}
@@ -289,7 +289,7 @@ class TestWebSearch:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("microclaw.tools.web_search.httpx.AsyncClient", return_value=mock_client):
+        with patch("micropaw.tools.web_search.httpx.AsyncClient", return_value=mock_client):
             result = await _search_duckduckgo("xyznonexistent", 5)
 
         assert isinstance(result, str)
@@ -298,7 +298,7 @@ class TestWebSearch:
     @pytest.mark.asyncio
     async def test_tool_execute_fallback_chain(self):
         """Test that the tool falls back from SearXNG to DuckDuckGo."""
-        from microclaw.tools.web_search import WebSearchTool, set_search_config
+        from micropaw.tools.web_search import WebSearchTool, set_search_config
 
         # Set up config with auto provider (no brave key)
         mock_config = MagicMock()
@@ -311,8 +311,8 @@ class TestWebSearch:
         ctx = ToolContext(conversation_id="conv1", user_id="u1", platform="test")
 
         # Mock SearXNG to fail, DDG to succeed
-        with patch("microclaw.tools.web_search._search_searxng", AsyncMock(return_value=None)), \
-             patch("microclaw.tools.web_search._search_duckduckgo", AsyncMock(return_value="DDG results")) as mock_ddg:
+        with patch("micropaw.tools.web_search._search_searxng", AsyncMock(return_value=None)), \
+             patch("micropaw.tools.web_search._search_duckduckgo", AsyncMock(return_value="DDG results")) as mock_ddg:
             result = await tool.execute({"query": "test"}, ctx)
 
         assert result == "DDG results"
@@ -321,7 +321,7 @@ class TestWebSearch:
     @pytest.mark.asyncio
     async def test_tool_execute_brave_with_key(self):
         """Test that Brave is used when API key is configured."""
-        from microclaw.tools.web_search import WebSearchTool, set_search_config
+        from micropaw.tools.web_search import WebSearchTool, set_search_config
 
         mock_config = MagicMock()
         mock_config.provider = "auto"
@@ -332,7 +332,7 @@ class TestWebSearch:
         tool = WebSearchTool()
         ctx = ToolContext(conversation_id="conv1", user_id="u1", platform="test")
 
-        with patch("microclaw.tools.web_search._search_brave", AsyncMock(return_value="Brave results")) as mock_brave:
+        with patch("micropaw.tools.web_search._search_brave", AsyncMock(return_value="Brave results")) as mock_brave:
             result = await tool.execute({"query": "test"}, ctx)
 
         assert result == "Brave results"
@@ -341,7 +341,7 @@ class TestWebSearch:
     @pytest.mark.asyncio
     async def test_searxng_source_uses_safe_parsing(self):
         """Source name should be extracted safely even with unusual URLs."""
-        from microclaw.tools.web_search import _search_searxng
+        from micropaw.tools.web_search import _search_searxng
 
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -353,7 +353,7 @@ class TestWebSearch:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("microclaw.tools.web_search.httpx.AsyncClient", return_value=mock_client):
+        with patch("micropaw.tools.web_search.httpx.AsyncClient", return_value=mock_client):
             result = await _search_searxng("test", 5, base_url="https://search.example.com")
 
         assert result is not None
@@ -362,7 +362,7 @@ class TestWebSearch:
     @pytest.mark.asyncio
     async def test_max_results_clamped_to_20(self):
         """max_results should be capped at 20 even if LLM requests more."""
-        from microclaw.tools.web_search import WebSearchTool, set_search_config
+        from micropaw.tools.web_search import WebSearchTool, set_search_config
 
         mock_config = MagicMock()
         mock_config.provider = "duckduckgo"
@@ -373,7 +373,7 @@ class TestWebSearch:
         tool = WebSearchTool()
         ctx = ToolContext(conversation_id="conv1", user_id="u1", platform="test")
 
-        with patch("microclaw.tools.web_search._search_duckduckgo", AsyncMock(return_value="results")) as mock_ddg:
+        with patch("micropaw.tools.web_search._search_duckduckgo", AsyncMock(return_value="results")) as mock_ddg:
             await tool.execute({"query": "test", "max_results": 1000}, ctx)
 
         # Verify max_results was clamped to 20
@@ -387,8 +387,8 @@ class TestWebSearch:
 class TestSubAgent:
     @pytest.mark.asyncio
     async def test_inline_returns_text(self):
-        from microclaw.core.subagent import SubAgent
-        from microclaw.providers.base import AIResponse
+        from micropaw.core.subagent import SubAgent
+        from micropaw.providers.base import AIResponse
 
         mock_provider = AsyncMock()
         mock_provider.chat = AsyncMock(return_value=AIResponse(
@@ -407,8 +407,8 @@ class TestSubAgent:
     @pytest.mark.asyncio
     async def test_with_tools_excludes_delegate(self):
         """Sub-agent with a registry should get all tools except delegate."""
-        from microclaw.core.subagent import SubAgent
-        from microclaw.providers.base import AIResponse
+        from micropaw.core.subagent import SubAgent
+        from micropaw.providers.base import AIResponse
 
         mock_provider = AsyncMock()
         mock_provider.chat = AsyncMock(return_value=AIResponse(
@@ -416,7 +416,7 @@ class TestSubAgent:
         ))
 
         # Build a registry with a regular tool and a delegate tool
-        from microclaw.tools.delegate import DelegateTool
+        from micropaw.tools.delegate import DelegateTool
         reg = ToolRegistry()
         reg.register(FakeTool())
         reg.register(DelegateTool())
@@ -436,8 +436,8 @@ class TestSubAgent:
     @pytest.mark.asyncio
     async def test_tool_call_executed(self):
         """Sub-agent should execute tool calls and continue."""
-        from microclaw.core.subagent import SubAgent
-        from microclaw.providers.base import AIResponse, ToolCall
+        from micropaw.core.subagent import SubAgent
+        from micropaw.providers.base import AIResponse, ToolCall
 
         call_count = 0
 
@@ -467,8 +467,8 @@ class TestSubAgent:
 
     @pytest.mark.asyncio
     async def test_max_iterations_bail(self):
-        from microclaw.core.subagent import SubAgent
-        from microclaw.providers.base import AIResponse
+        from micropaw.core.subagent import SubAgent
+        from micropaw.providers.base import AIResponse
 
         mock_provider = AsyncMock()
         mock_provider.chat = AsyncMock(return_value=AIResponse(
@@ -482,8 +482,8 @@ class TestSubAgent:
 
     @pytest.mark.asyncio
     async def test_custom_max_iterations(self):
-        from microclaw.core.subagent import SubAgent
-        from microclaw.providers.base import AIResponse
+        from micropaw.core.subagent import SubAgent
+        from micropaw.providers.base import AIResponse
 
         mock_provider = AsyncMock()
         mock_provider.chat = AsyncMock(return_value=AIResponse(
@@ -497,7 +497,7 @@ class TestSubAgent:
 
     @pytest.mark.asyncio
     async def test_provider_error_handled(self):
-        from microclaw.core.subagent import SubAgent
+        from micropaw.core.subagent import SubAgent
 
         mock_provider = AsyncMock()
         mock_provider.chat = AsyncMock(side_effect=RuntimeError("API down"))
@@ -512,8 +512,8 @@ class TestSubAgent:
 class TestDelegateTool:
     @pytest.mark.asyncio
     async def test_inline_mode(self):
-        from microclaw.providers.base import AIResponse
-        from microclaw.tools.delegate import DelegateTool, set_delegate_deps
+        from micropaw.providers.base import AIResponse
+        from micropaw.tools.delegate import DelegateTool, set_delegate_deps
 
         mock_provider = AsyncMock()
         mock_provider.chat = AsyncMock(return_value=AIResponse(
@@ -529,8 +529,8 @@ class TestDelegateTool:
 
     @pytest.mark.asyncio
     async def test_background_without_bus_errors(self):
-        from microclaw.providers.base import AIResponse
-        from microclaw.tools.delegate import DelegateTool, set_delegate_deps
+        from micropaw.providers.base import AIResponse
+        from micropaw.tools.delegate import DelegateTool, set_delegate_deps
 
         mock_provider = AsyncMock()
         set_delegate_deps(mock_provider, None)
@@ -545,9 +545,9 @@ class TestDelegateTool:
     @pytest.mark.asyncio
     async def test_background_passes_channel_directly(self):
         """Background delegation should pass platform as channel name, not parse from chat_id."""
-        from microclaw.providers.base import AIResponse
-        from microclaw.tools.delegate import set_delegate_deps, _run_background
-        from microclaw.bus import MessageBus
+        from micropaw.providers.base import AIResponse
+        from micropaw.tools.delegate import set_delegate_deps, _run_background
+        from micropaw.bus import MessageBus
 
         mock_provider = AsyncMock()
         mock_provider.chat = AsyncMock(return_value=AIResponse(
@@ -557,7 +557,7 @@ class TestDelegateTool:
         bus = MessageBus()
         set_delegate_deps(mock_provider, bus)
 
-        from microclaw.core.subagent import SubAgent
+        from micropaw.core.subagent import SubAgent
         agent = SubAgent(mock_provider)
         await _run_background(agent, "test task", "discord", "discord:channel:123")
 
@@ -570,8 +570,8 @@ class TestDelegateTool:
     @pytest.mark.asyncio
     async def test_subagent_gets_registry(self):
         """Delegate should pass registry to sub-agent so it can use tools."""
-        from microclaw.providers.base import AIResponse
-        from microclaw.tools.delegate import DelegateTool, set_delegate_deps
+        from micropaw.providers.base import AIResponse
+        from micropaw.tools.delegate import DelegateTool, set_delegate_deps
 
         mock_provider = AsyncMock()
         mock_provider.chat = AsyncMock(return_value=AIResponse(
@@ -598,16 +598,16 @@ class TestDelegateTool:
 
 class TestChunker:
     def test_short_text_single_chunk(self):
-        from microclaw.memory.chunker import chunk_text
+        from micropaw.memory.chunker import chunk_text
         assert chunk_text("hello world") == ["hello world"]
 
     def test_empty_returns_empty(self):
-        from microclaw.memory.chunker import chunk_text
+        from micropaw.memory.chunker import chunk_text
         assert chunk_text("") == []
         assert chunk_text("   ") == []
 
     def test_splits_long_text(self):
-        from microclaw.memory.chunker import chunk_text
+        from micropaw.memory.chunker import chunk_text
         text = "word " * 1000  # ~5000 chars
         chunks = chunk_text(text, max_chars=500, overlap=50)
         assert len(chunks) > 1
@@ -615,7 +615,7 @@ class TestChunker:
             assert len(c) <= 500
 
     def test_overlap_preserves_context(self):
-        from microclaw.memory.chunker import chunk_text
+        from micropaw.memory.chunker import chunk_text
         text = "A" * 200 + " " + "B" * 200 + " " + "C" * 200
         chunks = chunk_text(text, max_chars=250, overlap=50)
         assert len(chunks) >= 2
@@ -625,7 +625,7 @@ class TestChunker:
             assert any(end_of_first[i:i+10] in chunks[1] for i in range(len(end_of_first) - 10))
 
     def test_prefers_paragraph_breaks(self):
-        from microclaw.memory.chunker import chunk_text
+        from micropaw.memory.chunker import chunk_text
         text = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph."
         chunks = chunk_text(text, max_chars=30, overlap=5)
         assert any("First paragraph." in c for c in chunks)
@@ -637,7 +637,7 @@ class TestChunker:
 
 class TestBlobSerialization:
     def test_roundtrip(self):
-        from microclaw.memory.embeddings import serialize_embedding_blob, deserialize_embedding_blob
+        from micropaw.memory.embeddings import serialize_embedding_blob, deserialize_embedding_blob
         original = [0.1, 0.2, 0.3, 0.4, 0.5]
         blob = serialize_embedding_blob(original)
         assert isinstance(blob, bytes)
@@ -647,7 +647,7 @@ class TestBlobSerialization:
             assert abs(a - b) < 1e-6
 
     def test_empty_embedding(self):
-        from microclaw.memory.embeddings import serialize_embedding_blob, deserialize_embedding_blob
+        from micropaw.memory.embeddings import serialize_embedding_blob, deserialize_embedding_blob
         assert serialize_embedding_blob([]) is None
         assert deserialize_embedding_blob(None) == []
         assert deserialize_embedding_blob(b"") == []
@@ -660,8 +660,8 @@ class TestBlobSerialization:
 class TestDocumentIngest:
     @pytest.mark.asyncio
     async def test_ingest_and_search(self, tmp_path):
-        from microclaw.memory.store import MemoryStore
-        from microclaw.memory.embeddings import NullEmbedding
+        from micropaw.memory.store import MemoryStore
+        from micropaw.memory.embeddings import NullEmbedding
 
         store = MemoryStore(str(tmp_path / "test.db"), NullEmbedding())
         await store.init()
@@ -680,8 +680,8 @@ class TestDocumentIngest:
 
     @pytest.mark.asyncio
     async def test_reingest_replaces_old_chunks(self, tmp_path):
-        from microclaw.memory.store import MemoryStore
-        from microclaw.memory.embeddings import NullEmbedding
+        from micropaw.memory.store import MemoryStore
+        from micropaw.memory.embeddings import NullEmbedding
 
         store = MemoryStore(str(tmp_path / "test.db"), NullEmbedding())
         await store.init()
@@ -698,8 +698,8 @@ class TestDocumentIngest:
 
     @pytest.mark.asyncio
     async def test_empty_content_not_ingested(self, tmp_path):
-        from microclaw.memory.store import MemoryStore
-        from microclaw.memory.embeddings import NullEmbedding
+        from micropaw.memory.store import MemoryStore
+        from micropaw.memory.embeddings import NullEmbedding
 
         store = MemoryStore(str(tmp_path / "test.db"), NullEmbedding())
         await store.init()
@@ -711,8 +711,8 @@ class TestDocumentIngest:
 
     @pytest.mark.asyncio
     async def test_cross_user_isolation(self, tmp_path):
-        from microclaw.memory.store import MemoryStore
-        from microclaw.memory.embeddings import NullEmbedding
+        from micropaw.memory.store import MemoryStore
+        from micropaw.memory.embeddings import NullEmbedding
 
         store = MemoryStore(str(tmp_path / "test.db"), NullEmbedding())
         await store.init()
@@ -730,27 +730,27 @@ class TestDocumentIngest:
 
 class TestYouTubePattern:
     def test_watch_url(self):
-        from microclaw.tools.web_browse import _YT_PATTERN
+        from micropaw.tools.web_browse import _YT_PATTERN
         m = _YT_PATTERN.search("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
         assert m and m.group(1) == "dQw4w9WgXcQ"
 
     def test_short_url(self):
-        from microclaw.tools.web_browse import _YT_PATTERN
+        from micropaw.tools.web_browse import _YT_PATTERN
         m = _YT_PATTERN.search("https://youtu.be/dQw4w9WgXcQ")
         assert m and m.group(1) == "dQw4w9WgXcQ"
 
     def test_shorts_url(self):
-        from microclaw.tools.web_browse import _YT_PATTERN
+        from micropaw.tools.web_browse import _YT_PATTERN
         m = _YT_PATTERN.search("https://youtube.com/shorts/dQw4w9WgXcQ")
         assert m and m.group(1) == "dQw4w9WgXcQ"
 
     def test_non_youtube_url(self):
-        from microclaw.tools.web_browse import _YT_PATTERN
+        from micropaw.tools.web_browse import _YT_PATTERN
         m = _YT_PATTERN.search("https://example.com/page")
         assert m is None
 
     def test_url_with_extra_params(self):
-        from microclaw.tools.web_browse import _YT_PATTERN
+        from micropaw.tools.web_browse import _YT_PATTERN
         m = _YT_PATTERN.search("https://www.youtube.com/watch?v=Tn6-PIqc4UM&t=120")
         assert m and m.group(1) == "Tn6-PIqc4UM"
 
@@ -821,7 +821,7 @@ class TestYouTubeTranscriptFetch:
     @pytest.mark.asyncio
     async def test_fetch_returns_structured_output(self):
         """Mock the full InnerTube flow and verify output structure."""
-        from microclaw.tools.web_browse import fetch_youtube_transcript
+        from micropaw.tools.web_browse import fetch_youtube_transcript
 
         page_html = '<script>var x = {"INNERTUBE_API_KEY": "test_key_123"};</script>'
         player_json = {
@@ -844,7 +844,7 @@ class TestYouTubeTranscriptFetch:
         ]
         mock_responses[1].json.return_value = player_json
 
-        with patch("microclaw.tools.web_browse.httpx.AsyncClient") as mock_client_cls:
+        with patch("micropaw.tools.web_browse.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -862,7 +862,7 @@ class TestYouTubeTranscriptFetch:
     @pytest.mark.asyncio
     async def test_no_captions_returns_message(self):
         """Videos without captions return a helpful message."""
-        from microclaw.tools.web_browse import fetch_youtube_transcript
+        from micropaw.tools.web_browse import fetch_youtube_transcript
 
         page_html = '<script>var x = {"INNERTUBE_API_KEY": "key123"};</script>'
         player_json = {
@@ -870,7 +870,7 @@ class TestYouTubeTranscriptFetch:
             "captions": {"playerCaptionsTracklistRenderer": {"captionTracks": []}},
         }
 
-        with patch("microclaw.tools.web_browse.httpx.AsyncClient") as mock_client_cls:
+        with patch("micropaw.tools.web_browse.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -887,14 +887,14 @@ class TestWebBrowseYouTube:
     @pytest.mark.asyncio
     async def test_youtube_url_triggers_transcript(self):
         """web_browse with a YouTube URL should call fetch_youtube_transcript."""
-        from microclaw.tools.web_browse import WebBrowseTool
+        from micropaw.tools.web_browse import WebBrowseTool
 
         tool = WebBrowseTool()
         context = MagicMock()
         context.allow_web_browse = True
 
-        with patch("microclaw.tools.web_browse.validate_url", return_value=None), \
-             patch("microclaw.tools.web_browse.fetch_youtube_transcript", new_callable=AsyncMock) as mock_fetch:
+        with patch("micropaw.tools.web_browse.validate_url", return_value=None), \
+             patch("micropaw.tools.web_browse.fetch_youtube_transcript", new_callable=AsyncMock) as mock_fetch:
             mock_fetch.return_value = "Title: Test\n\nTranscript:\nHello world"
             result = await tool.execute({"url": "https://youtube.com/watch?v=abc12345678"}, context)
 
@@ -904,15 +904,15 @@ class TestWebBrowseYouTube:
     @pytest.mark.asyncio
     async def test_non_youtube_skips_transcript(self):
         """Non-YouTube URLs should NOT trigger transcript fetch."""
-        from microclaw.tools.web_browse import WebBrowseTool
+        from micropaw.tools.web_browse import WebBrowseTool
 
         tool = WebBrowseTool()
         context = MagicMock()
         context.allow_web_browse = True
 
-        with patch("microclaw.tools.web_browse.validate_url", return_value=None), \
-             patch("microclaw.tools.web_browse.fetch_youtube_transcript", new_callable=AsyncMock) as mock_fetch, \
-             patch("microclaw.tools.web_browse._get_browser") as mock_browser:
+        with patch("micropaw.tools.web_browse.validate_url", return_value=None), \
+             patch("micropaw.tools.web_browse.fetch_youtube_transcript", new_callable=AsyncMock) as mock_fetch, \
+             patch("micropaw.tools.web_browse._get_browser") as mock_browser:
             # Make Playwright fail so we can verify the path taken
             mock_browser.side_effect = RuntimeError("test: should use playwright path")
             result = await tool.execute({"url": "https://example.com/article"}, context)
@@ -939,7 +939,7 @@ class TestSqliteVec:
     @pytest.mark.asyncio
     async def test_vec_search_path(self, tmp_path):
         """Ingest + search uses sqlite-vec when available."""
-        from microclaw.memory.store import MemoryStore
+        from micropaw.memory.store import MemoryStore
 
         store = MemoryStore(str(tmp_path / "vec.db"), _FakeEmbedder())
         await store.init()
@@ -961,7 +961,7 @@ class TestSqliteVec:
     @pytest.mark.asyncio
     async def test_vec_reingest_cascade_delete(self, tmp_path):
         """Re-ingesting a document removes old chunks from vec index too."""
-        from microclaw.memory.store import MemoryStore
+        from micropaw.memory.store import MemoryStore
 
         store = MemoryStore(str(tmp_path / "vec.db"), _FakeEmbedder())
         await store.init()
@@ -979,7 +979,7 @@ class TestSqliteVec:
     @pytest.mark.asyncio
     async def test_vec_cross_user_isolation(self, tmp_path):
         """Vec search respects user_id filtering."""
-        from microclaw.memory.store import MemoryStore
+        from micropaw.memory.store import MemoryStore
 
         store = MemoryStore(str(tmp_path / "vec.db"), _FakeEmbedder())
         await store.init()
@@ -993,7 +993,7 @@ class TestSqliteVec:
     @pytest.mark.asyncio
     async def test_kv_meta_tracks_dimensions(self, tmp_path):
         """kv_meta stores embedding dimensions for change detection."""
-        from microclaw.memory.store import MemoryStore
+        from micropaw.memory.store import MemoryStore
 
         store = MemoryStore(str(tmp_path / "vec.db"), _FakeEmbedder())
         await store.init()
@@ -1007,7 +1007,7 @@ class TestSqliteVec:
     @pytest.mark.asyncio
     async def test_brute_force_fallback(self, tmp_path):
         """When vec is disabled, brute-force cosine still works."""
-        from microclaw.memory.store import MemoryStore
+        from micropaw.memory.store import MemoryStore
 
         store = MemoryStore(str(tmp_path / "bf.db"), _FakeEmbedder())
         await store.init()
@@ -1025,8 +1025,8 @@ class TestSqliteVec:
     @pytest.mark.asyncio
     async def test_null_embedding_text_fallback(self, tmp_path):
         """NullEmbedding falls through to text LIKE search."""
-        from microclaw.memory.store import MemoryStore
-        from microclaw.memory.embeddings import NullEmbedding
+        from micropaw.memory.store import MemoryStore
+        from micropaw.memory.embeddings import NullEmbedding
 
         store = MemoryStore(str(tmp_path / "null.db"), NullEmbedding())
         await store.init()
@@ -1043,8 +1043,8 @@ class TestSqliteVec:
     @pytest.mark.asyncio
     async def test_search_memories_no_cap(self, tmp_path):
         """search_memories scans all memories without artificial row cap."""
-        from microclaw.memory.store import MemoryStore
-        from microclaw.memory.embeddings import NullEmbedding
+        from micropaw.memory.store import MemoryStore
+        from micropaw.memory.embeddings import NullEmbedding
 
         store = MemoryStore(str(tmp_path / "mem.db"), NullEmbedding())
         await store.init()
@@ -1070,7 +1070,7 @@ class TestSqliteVec:
 class TestProbeOllama:
     @pytest.mark.asyncio
     async def test_probe_ollama_success(self):
-        from microclaw.memory.embeddings import probe_ollama
+        from micropaw.memory.embeddings import probe_ollama
 
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -1086,12 +1086,12 @@ class TestProbeOllama:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("microclaw.memory.embeddings.httpx.AsyncClient", return_value=mock_client):
+        with patch("micropaw.memory.embeddings.httpx.AsyncClient", return_value=mock_client):
             assert await probe_ollama("http://localhost:11434") is True
 
     @pytest.mark.asyncio
     async def test_probe_ollama_model_missing(self):
-        from microclaw.memory.embeddings import probe_ollama
+        from micropaw.memory.embeddings import probe_ollama
 
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -1104,42 +1104,42 @@ class TestProbeOllama:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("microclaw.memory.embeddings.httpx.AsyncClient", return_value=mock_client):
+        with patch("micropaw.memory.embeddings.httpx.AsyncClient", return_value=mock_client):
             assert await probe_ollama("http://localhost:11434") is False
 
     @pytest.mark.asyncio
     async def test_probe_ollama_connection_refused(self):
-        from microclaw.memory.embeddings import probe_ollama
+        from micropaw.memory.embeddings import probe_ollama
 
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(side_effect=Exception("Connection refused"))
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("microclaw.memory.embeddings.httpx.AsyncClient", return_value=mock_client):
+        with patch("micropaw.memory.embeddings.httpx.AsyncClient", return_value=mock_client):
             assert await probe_ollama("http://localhost:11434") is False
 
 
 class TestEmbeddingConfig:
     def test_bool_true_coerced(self):
-        from microclaw.config import EmbeddingConfig
+        from micropaw.config import EmbeddingConfig
         cfg = EmbeddingConfig(enabled=True)
         assert cfg.enabled == "true"
 
     def test_bool_false_coerced(self):
-        from microclaw.config import EmbeddingConfig
+        from micropaw.config import EmbeddingConfig
         cfg = EmbeddingConfig(enabled=False)
         assert cfg.enabled == "false"
 
     def test_auto_default(self):
-        from microclaw.config import EmbeddingConfig
+        from micropaw.config import EmbeddingConfig
         cfg = EmbeddingConfig()
         assert cfg.enabled == "auto"
         assert cfg.provider == "auto"
         assert cfg.model == ""
 
     def test_explicit_provider(self):
-        from microclaw.config import EmbeddingConfig
+        from micropaw.config import EmbeddingConfig
         cfg = EmbeddingConfig(provider="ollama", model="snowflake-arctic-embed")
         assert cfg.provider == "ollama"
         assert cfg.model == "snowflake-arctic-embed"
@@ -1147,20 +1147,20 @@ class TestEmbeddingConfig:
 
 class TestShellBlocking:
     def test_base64_pipe_to_shell_blocked(self):
-        from microclaw.tools.shell import _BLOCKED_RE
+        from micropaw.tools.shell import _BLOCKED_RE
         assert any(p.search("base64 -d payload.txt|bash") for p in _BLOCKED_RE)
         assert any(p.search("base64 -d payload.txt | sh") for p in _BLOCKED_RE)
 
     def test_xxd_pipe_to_shell_blocked(self):
-        from microclaw.tools.shell import _BLOCKED_RE
+        from micropaw.tools.shell import _BLOCKED_RE
         assert any(p.search("xxd -r -p payload.hex|bash") for p in _BLOCKED_RE)
 
     def test_process_substitution_blocked(self):
-        from microclaw.tools.shell import _BLOCKED_RE
+        from micropaw.tools.shell import _BLOCKED_RE
         assert any(p.search("diff <(cat /etc/shadow) <(echo)") for p in _BLOCKED_RE)
 
     def test_safe_commands_allowed(self):
-        from microclaw.tools.shell import _BLOCKED_RE
+        from micropaw.tools.shell import _BLOCKED_RE
         safe = ["ls -la", "cat README.md", "python3 main.py", "git status", "pip list"]
         for cmd in safe:
             assert not any(p.search(cmd) for p in _BLOCKED_RE), f"False positive: {cmd}"
@@ -1172,18 +1172,18 @@ class TestShellBlocking:
 
 class TestPdfParsing:
     def test_parse_pages_empty_on_out_of_bounds(self):
-        from microclaw.tools.pdf_read import _parse_pages
+        from micropaw.tools.pdf_read import _parse_pages
         # PDF has 5 pages; request page 100
         pages = _parse_pages("100", 5)
         assert pages == []
 
     def test_parse_pages_valid(self):
-        from microclaw.tools.pdf_read import _parse_pages
+        from micropaw.tools.pdf_read import _parse_pages
         pages = _parse_pages("1-3", 10)
         assert pages == [0, 1, 2]
 
     def test_parse_pages_mixed(self):
-        from microclaw.tools.pdf_read import _parse_pages
+        from micropaw.tools.pdf_read import _parse_pages
         pages = _parse_pages("1,3,5", 10)
         assert pages == [0, 2, 4]
 
@@ -1195,7 +1195,7 @@ class TestPdfParsing:
 class TestMessageBus:
     @pytest.mark.asyncio
     async def test_closed_bus_consume_returns_none(self):
-        from microclaw.bus import MessageBus
+        from micropaw.bus import MessageBus
         bus = MessageBus()
         bus.close()
         assert await bus.consume_outbound() is None
@@ -1203,7 +1203,7 @@ class TestMessageBus:
 
     @pytest.mark.asyncio
     async def test_publish_on_closed_bus_raises(self):
-        from microclaw.bus import MessageBus, InboundMessage
+        from micropaw.bus import MessageBus, InboundMessage
         bus = MessageBus()
         bus.close()
         with pytest.raises(RuntimeError, match="closed"):
@@ -1214,7 +1214,7 @@ class TestMessageBus:
 
     @pytest.mark.asyncio
     async def test_publish_and_consume_roundtrip(self):
-        from microclaw.bus import MessageBus, OutboundMessage
+        from micropaw.bus import MessageBus, OutboundMessage
         bus = MessageBus()
         await bus.publish_outbound(OutboundMessage(channel="discord", chat_id="ch1", content="hello"))
         msg = await bus.consume_outbound()
@@ -1232,7 +1232,7 @@ class TestStoreCorruptJson:
     @pytest.mark.asyncio
     async def test_corrupt_tool_calls_returns_empty_tools(self, tmp_path):
         import aiosqlite
-        from microclaw.memory.store import MemoryStore
+        from micropaw.memory.store import MemoryStore
 
         db_path = tmp_path / "test.db"
         store = MemoryStore(str(db_path))
@@ -1260,7 +1260,7 @@ class TestStoreCorruptJson:
     async def test_valid_tool_calls_loaded(self, tmp_path):
         import json
         import aiosqlite
-        from microclaw.memory.store import MemoryStore
+        from micropaw.memory.store import MemoryStore
 
         db_path = tmp_path / "test.db"
         store = MemoryStore(str(db_path))

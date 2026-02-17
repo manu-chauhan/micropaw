@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from microclaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef, retry_on_transient
-from microclaw.providers.failover import AllProvidersFailedError, FailoverProvider
+from micropaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef, retry_on_transient
+from micropaw.providers.failover import AllProvidersFailedError, FailoverProvider
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +157,7 @@ class TestRetryOnTransient:
 
     async def test_retries_on_429(self, monkeypatch):
         import httpx
-        import microclaw.providers.base as base_mod
+        import micropaw.providers.base as base_mod
 
         # Speed up test by zeroing the delay
         monkeypatch.setattr(base_mod, "RETRY_BASE_DELAY", 0.0)
@@ -182,7 +182,7 @@ class TestContextCompaction:
 
     async def test_compaction_short_history_returns_unchanged(self):
         """When non-system messages < KEEP_RECENT, nothing to summarize — returns unchanged."""
-        from microclaw.core.context import ContextManager
+        from micropaw.core.context import ContextManager
 
         failing_provider = MockProvider(fail=True)
         ctx = ContextManager(max_history=5, compaction_threshold=3)
@@ -205,7 +205,7 @@ class TestContextCompaction:
 
     async def test_compaction_fallback_truncation_on_provider_failure(self):
         """If the summarization provider fails, fall back to truncation (system + recent)."""
-        from microclaw.core.context import ContextManager, KEEP_RECENT
+        from micropaw.core.context import ContextManager, KEEP_RECENT
 
         failing_provider = MockProvider(fail=True)
         ctx = ContextManager(max_history=50, compaction_threshold=3)
@@ -223,7 +223,7 @@ class TestContextCompaction:
 
     async def test_compaction_fallback_truncation_on_empty_summary(self):
         """If the LLM returns an empty summary, fall back to truncation."""
-        from microclaw.core.context import ContextManager, KEEP_RECENT
+        from micropaw.core.context import ContextManager, KEEP_RECENT
 
         empty_provider = MockProvider(response="")
         ctx = ContextManager(max_history=50, compaction_threshold=3)
@@ -239,7 +239,7 @@ class TestContextCompaction:
 
     async def test_compaction_works_when_provider_succeeds(self):
         """When summarization succeeds, messages should be compacted."""
-        from microclaw.core.context import ContextManager
+        from micropaw.core.context import ContextManager
 
         good_provider = MockProvider(response="Summary of previous conversation.")
         ctx = ContextManager(max_history=50, compaction_threshold=3)
@@ -263,7 +263,7 @@ class TestContextCompaction:
 
     async def test_compaction_below_threshold_returns_unchanged(self):
         """Messages below threshold should pass through unchanged."""
-        from microclaw.core.context import ContextManager
+        from micropaw.core.context import ContextManager
 
         good_provider = MockProvider(response="Summary")
         ctx = ContextManager(max_history=50, compaction_threshold=100)
@@ -282,7 +282,7 @@ class TestGeminiStreamingUsage:
     """Test that Gemini streaming extracts usageMetadata from final SSE chunk."""
 
     async def test_gemini_build_body_system_message(self):
-        from microclaw.providers.gemini import GeminiProvider
+        from micropaw.providers.gemini import GeminiProvider
         p = GeminiProvider(api_key="test-key")
         messages = [
             Message(role="system", content="You are helpful"),
@@ -295,7 +295,7 @@ class TestGeminiStreamingUsage:
         assert body["contents"][0]["role"] == "user"
 
     async def test_gemini_build_body_tool_calls(self):
-        from microclaw.providers.gemini import GeminiProvider
+        from micropaw.providers.gemini import GeminiProvider
         p = GeminiProvider(api_key="test-key")
         messages = [
             Message(role="user", content="Search python"),
@@ -315,7 +315,7 @@ class TestGeminiStreamingUsage:
         assert any("functionResponse" in p for p in tool_msg["parts"])
 
     async def test_gemini_parse_candidates_text(self):
-        from microclaw.providers.gemini import GeminiProvider
+        from micropaw.providers.gemini import GeminiProvider
         p = GeminiProvider(api_key="test-key")
         data = {
             "candidates": [{
@@ -327,7 +327,7 @@ class TestGeminiStreamingUsage:
         assert tool_calls == []
 
     async def test_gemini_parse_candidates_function_call(self):
-        from microclaw.providers.gemini import GeminiProvider
+        from micropaw.providers.gemini import GeminiProvider
         p = GeminiProvider(api_key="test-key")
         data = {
             "candidates": [{
@@ -341,7 +341,7 @@ class TestGeminiStreamingUsage:
 
     async def test_gemini_non_streaming_usage(self):
         """Non-streaming should extract usageMetadata."""
-        from microclaw.providers.gemini import GeminiProvider
+        from micropaw.providers.gemini import GeminiProvider
         from unittest.mock import AsyncMock, MagicMock
 
         p = GeminiProvider(api_key="test-key")
@@ -362,7 +362,7 @@ class TestClaudeMessageBuilding:
     """Test Claude provider message format building."""
 
     def test_system_message_extracted(self):
-        from microclaw.providers.claude import ClaudeProvider
+        from micropaw.providers.claude import ClaudeProvider
         p = ClaudeProvider(api_key="test-key")
         messages = [
             Message(role="system", content="Be helpful"),
@@ -373,7 +373,7 @@ class TestClaudeMessageBuilding:
         assert len(body["messages"]) == 1  # system extracted
 
     def test_tool_call_format(self):
-        from microclaw.providers.claude import ClaudeProvider
+        from micropaw.providers.claude import ClaudeProvider
         p = ClaudeProvider(api_key="test-key")
         messages = [
             Message(role="user", content="Search"),
@@ -393,7 +393,7 @@ class TestClaudeMessageBuilding:
         assert tool_msg["content"][0]["type"] == "tool_result"
 
     def test_tools_format(self):
-        from microclaw.providers.claude import ClaudeProvider
+        from micropaw.providers.claude import ClaudeProvider
         p = ClaudeProvider(api_key="test-key")
         tools = [ToolDef(name="search", description="Search web", parameters={"type": "object"})]
         body = p._build_body([Message(role="user", content="Hi")], tools)
@@ -406,7 +406,7 @@ class TestOpenAIMessageBuilding:
     """Test OpenAI provider message format building."""
 
     def test_system_message_included(self):
-        from microclaw.providers.openai import OpenAIProvider
+        from micropaw.providers.openai import OpenAIProvider
         p = OpenAIProvider(api_key="test-key")
         messages = [
             Message(role="system", content="Be helpful"),
@@ -416,7 +416,7 @@ class TestOpenAIMessageBuilding:
         assert body["messages"][0] == {"role": "system", "content": "Be helpful"}
 
     def test_tool_call_format(self):
-        from microclaw.providers.openai import OpenAIProvider
+        from micropaw.providers.openai import OpenAIProvider
         p = OpenAIProvider(api_key="test-key")
         messages = [
             Message(role="user", content="Search"),
@@ -434,7 +434,7 @@ class TestOpenAIMessageBuilding:
         assert tool_msg["tool_call_id"] == "tc1"
 
     def test_tools_format(self):
-        from microclaw.providers.openai import OpenAIProvider
+        from micropaw.providers.openai import OpenAIProvider
         p = OpenAIProvider(api_key="test-key")
         tools = [ToolDef(name="search", description="Search web", parameters={"type": "object"})]
         body = p._build_body([Message(role="user", content="Hi")], tools)
@@ -444,20 +444,20 @@ class TestOpenAIMessageBuilding:
 
 class TestRateLimiter:
     def test_allows_normal_traffic(self):
-        from microclaw.gateway import _RateLimiter
+        from micropaw.gateway import _RateLimiter
         rl = _RateLimiter(messages_per_minute=20, burst_limit=5)
         for _ in range(5):
             assert rl.check("user1") is True
 
     def test_blocks_burst(self):
-        from microclaw.gateway import _RateLimiter
+        from micropaw.gateway import _RateLimiter
         rl = _RateLimiter(messages_per_minute=20, burst_limit=3)
         for _ in range(3):
             assert rl.check("user1") is True
         assert rl.check("user1") is False  # burst exceeded
 
     def test_separate_users(self):
-        from microclaw.gateway import _RateLimiter
+        from micropaw.gateway import _RateLimiter
         rl = _RateLimiter(messages_per_minute=20, burst_limit=3)
         for _ in range(3):
             rl.check("user1")

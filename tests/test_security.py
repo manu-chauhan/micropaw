@@ -6,8 +6,8 @@ import re
 
 import pytest
 
-from microclaw.security import validate_path, validate_url
-from microclaw.tools.shell import _BLOCKED_RE, _DANGEROUS_RE
+from micropaw.security import validate_path, validate_url
+from micropaw.tools.shell import _BLOCKED_RE, _DANGEROUS_RE
 
 
 class TestValidateUrl:
@@ -137,7 +137,7 @@ class TestShellBlocking:
 
     def test_blocks_sensitive_file_access(self):
         assert _is_blocked("cat ~/.ssh/id_rsa")
-        assert _is_blocked("cat ~/.microclaw/config.json")
+        assert _is_blocked("cat ~/.micropaw/config.json")
         assert _is_blocked("cat .env")
 
     def test_blocks_cron_manipulation(self):

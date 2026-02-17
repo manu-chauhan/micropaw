@@ -8,10 +8,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from microclaw.config import Config
-from microclaw.core.agent import Agent, _cache_key, _CACHEABLE_TOOLS, _classify_error
-from microclaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef
-from microclaw.tools.base import Tool, ToolContext, ToolRegistry
+from micropaw.config import Config
+from micropaw.core.agent import Agent, _cache_key, _CACHEABLE_TOOLS, _classify_error
+from micropaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef
+from micropaw.tools.base import Tool, ToolContext, ToolRegistry
 
 
 # ---------------------------------------------------------------------------
@@ -393,7 +393,7 @@ class TestSystemPrompt:
         provider = MockProvider()
         agent = _make_agent(provider)
         prompt = agent._build_system_prompt("terminal")
-        assert "MicroClaw" in prompt
+        assert "MicroPaw" in prompt
         assert "friendly" in prompt
 
     def test_includes_platform_hint(self):

@@ -1,4 +1,4 @@
-"""Tests for MicroClaw configuration."""
+"""Tests for MicroPaw configuration."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from microclaw.config import (
+from micropaw.config import (
     Config,
     _apply_env_overrides,
     _redact,
@@ -57,7 +57,7 @@ class TestConfig:
 
     def test_persona_defaults(self):
         c = Config()
-        assert c.persona.name == "MicroClaw"
+        assert c.persona.name == "MicroPaw"
 
 
 class TestEnvOverrides:
@@ -81,9 +81,9 @@ class TestEnvOverrides:
             _apply_env_overrides(raw)
         assert raw == {}
 
-    def test_apply_microclaw_provider(self):
+    def test_apply_micropaw_provider(self):
         raw: dict = {}
-        with patch.dict(os.environ, {"MICROCLAW_PROVIDER": "ollama"}, clear=False):
+        with patch.dict(os.environ, {"MICROPAW_PROVIDER": "ollama"}, clear=False):
             _apply_env_overrides(raw)
         assert raw["provider"] == "ollama"
 
@@ -128,7 +128,7 @@ class TestEnvOverrides:
         config_file = tmp_path / "config.json"
         config_file.write_text("{}")
         with (
-            patch("microclaw.config.CONFIG_FILE", config_file),
+            patch("micropaw.config.CONFIG_FILE", config_file),
             patch.dict(os.environ, {"CLAUDE_MODEL": "claude-opus-4-6"}, clear=False),
         ):
             c = load_config()
@@ -165,8 +165,8 @@ class TestSaveLoad:
         config_dir = tmp_path
 
         with (
-            patch("microclaw.config.CONFIG_FILE", config_file),
-            patch("microclaw.config.CONFIG_DIR", config_dir),
+            patch("micropaw.config.CONFIG_FILE", config_file),
+            patch("micropaw.config.CONFIG_DIR", config_dir),
         ):
             original = Config(provider="openai")
             save_config(original)
@@ -178,7 +178,7 @@ class TestSaveLoad:
 
     def test_load_missing_file_returns_defaults(self, tmp_path: Path):
         config_file = tmp_path / "nonexistent.json"
-        with patch("microclaw.config.CONFIG_FILE", config_file):
+        with patch("micropaw.config.CONFIG_FILE", config_file):
             # Clear env vars that might interfere
             with patch.dict(os.environ, {}, clear=True):
                 c = load_config()
@@ -192,8 +192,8 @@ class TestSaveLoad:
         config_file.chmod(0o644)  # World-readable
 
         with (
-            patch("microclaw.config.CONFIG_FILE", config_file),
-            patch("microclaw.config.logging") as mock_logging,
+            patch("micropaw.config.CONFIG_FILE", config_file),
+            patch("micropaw.config.logging") as mock_logging,
         ):
             mock_logger = MagicMock()
             mock_logging.getLogger.return_value = mock_logger

@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from microclaw.bus import InboundMessage, MessageBus, OutboundMessage
+from micropaw.bus import InboundMessage, MessageBus, OutboundMessage
 
 
 @pytest.fixture

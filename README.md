@@ -1,6 +1,6 @@
 <div align="center">
 
-# MicroClaw
+# MicroPaw
 
 ### A local-first AI agent that runs on your machine, talks on every platform, and keeps your keys to yourself.
 
@@ -18,8 +18,8 @@
 
 ```bash
 pip install .
-microclaw setup     # pick provider, paste key
-microclaw chat      # start talking
+micropaw setup     # pick provider, paste key
+micropaw chat      # start talking
 ```
 
 ---
@@ -32,7 +32,7 @@ microclaw chat      # start talking
 
 - **RAG out of the box** — Read a PDF, paste a YouTube URL, or browse a web page. Documents are auto-chunked, embedded, and searchable across all channels. Ask about them days later from any platform.
 
-- **YouTube transcripts** — Paste a YouTube link and MicroClaw extracts the full transcript automatically. No API key, no extra dependency. Auto-indexed for RAG.
+- **YouTube transcripts** — Paste a YouTube link and MicroPaw extracts the full transcript automatically. No API key, no extra dependency. Auto-indexed for RAG.
 
 - **sqlite-vec ANN search** — Vector search powered by [sqlite-vec](https://github.com/asg017/sqlite-vec) directly inside SQLite. Scales to tens of thousands of chunks. Falls back to brute-force cosine if removed.
 
@@ -44,7 +44,7 @@ microclaw chat      # start talking
 
 - **Automatic failover** — Provider chain with exponential backoff and Retry-After support. Claude down? Switches to GPT-4o, then Ollama. Keeps working.
 
-- **Self-healing channels** — If a channel crashes, MicroClaw detects it, waits 5 seconds, and restarts. Other channels keep running.
+- **Self-healing channels** — If a channel crashes, MicroPaw detects it, waits 5 seconds, and restarts. Other channels keep running.
 
 - **Streaming everywhere** — Real-time token-by-token output on Terminal, Telegram (0.5s), Discord (0.8s), Slack (1.0s). No waiting for full responses.
 
@@ -97,7 +97,7 @@ microclaw chat      # start talking
 
 <br>
 
-> **Zero telemetry. Zero data collection. MicroClaw never phones home — your conversations, API keys, and data stay on your machine. Always.**
+> **Zero telemetry. Zero data collection. MicroPaw never phones home — your conversations, API keys, and data stay on your machine. Always.**
 
 </div>
 
@@ -124,9 +124,9 @@ microclaw chat      # start talking
 ```
 
 ```bash
-microclaw connect telegram    # guided setup, validates token live
-microclaw connect discord     # auto-generates bot invite URL
-microclaw start               # launch ALL channels at once
+micropaw connect telegram    # guided setup, validates token live
+micropaw connect discord     # auto-generates bot invite URL
+micropaw start               # launch ALL channels at once
 ```
 
 ---
@@ -136,24 +136,24 @@ microclaw start               # launch ALL channels at once
 **Terminal only:**
 ```bash
 pip install .
-microclaw setup && microclaw chat
+micropaw setup && micropaw chat
 ```
 
 **Multi-channel:**
 ```bash
 pip install ".[telegram,discord]"
-microclaw setup
-microclaw connect telegram
-microclaw connect discord
-microclaw start
+micropaw setup
+micropaw connect telegram
+micropaw connect discord
+micropaw start
 ```
 
 **Fully local (no internet):**
 ```bash
 ollama pull llama3.1
 pip install .
-microclaw setup    # select Ollama
-microclaw chat
+micropaw setup    # select Ollama
+micropaw chat
 ```
 
 ---
@@ -209,20 +209,20 @@ Override models: `CLAUDE_MODEL`, `OPENAI_MODEL`, `GEMINI_MODEL`, `OLLAMA_MODEL`
 ┌─ 📱 Telegram (Day 1) ───────────────────────────────────────────────┐
 │                                                                      │
 │  You:        "Read /home/report.pdf"                                │
-│  MicroClaw:   ✓ PDF read → chunked → embedded → stored              │
+│  MicroPaw:   ✓ PDF read → chunked → embedded → stored              │
 │              "Here's a summary of your report..."                   │
 │                                                                      │
 │  You:        "https://youtube.com/watch?v=abc123"                   │
-│  MicroClaw:   ✓ transcript fetched → chunked → embedded → stored    │
+│  MicroPaw:   ✓ transcript fetched → chunked → embedded → stored    │
 │              "This is a 21-min talk about body language..."         │
 │                                                                      │
 ├─ 💬 Discord (Next day) ─────────────────────────────────────────────┤
 │                                                                      │
 │  You:        "What did the report say about revenue?"               │
-│  MicroClaw:  "Revenue grew 23% in Q4, with expenses down 10%..."   │
+│  MicroPaw:  "Revenue grew 23% in Q4, with expenses down 10%..."   │
 │                                                                      │
 │  You:        "What was that YouTube video about?"                   │
-│  MicroClaw:  "The talk was by Amy Cuddy about how posture affects   │
+│  MicroPaw:  "The talk was by Amy Cuddy about how posture affects   │
 │               confidence and hormone levels..."                     │
 │                                                                      │
 └──────────────────────────────────────────────────────────────────────┘
@@ -258,7 +258,7 @@ No extra tools, no commands, no user action needed. Just read, browse, or paste 
 | **No row caps** | Memory and document search scan all entries — no artificial limits |
 | **Cross-user isolation** | Each user's documents and memories are strictly separated |
 
-> **Graceful fallback:** If you remove `sqlite-vec`, MicroClaw falls back to brute-force cosine similarity in pure Python. Slower on large collections, but fully functional.
+> **Graceful fallback:** If you remove `sqlite-vec`, MicroPaw falls back to brute-force cosine similarity in pure Python. Slower on large collections, but fully functional.
 
 ### Embeddings (auto-detected, zero config)
 
@@ -285,7 +285,7 @@ Default model: `nomic-embed-text` (768 dims, 8k token context). Override in conf
 ```
 You > Research quantum computing AND summarize today's AI news
 
-MicroClaw > [delegate] "Research quantum computing breakthroughs"
+MicroPaw > [delegate] "Research quantum computing breakthroughs"
             [delegate] "Summarize today's top AI news"
 
             Here's what I found on both fronts...
@@ -317,16 +317,16 @@ MicroClaw > [delegate] "Research quantum computing breakthroughs"
 
 | Command | Description |
 |---------|-------------|
-| `microclaw setup` | Interactive wizard — provider, API key, persona, permissions |
-| `microclaw chat` | Terminal chat session |
-| `microclaw start` | Launch all enabled channels |
-| `microclaw connect <channel>` | Guided channel setup with live token validation |
-| `microclaw test` | Validate provider + all channel tokens |
-| `microclaw config` | Show configuration (secrets redacted) |
-| `microclaw status` | System status overview |
-| `microclaw doctor` | Diagnostics — Python, deps, disk, keys |
-| `microclaw export` | Export conversations (JSON/Markdown) |
-| `microclaw reset` | Delete all config and data |
+| `micropaw setup` | Interactive wizard — provider, API key, persona, permissions |
+| `micropaw chat` | Terminal chat session |
+| `micropaw start` | Launch all enabled channels |
+| `micropaw connect <channel>` | Guided channel setup with live token validation |
+| `micropaw test` | Validate provider + all channel tokens |
+| `micropaw config` | Show configuration (secrets redacted) |
+| `micropaw status` | System status overview |
+| `micropaw doctor` | Diagnostics — Python, deps, disk, keys |
+| `micropaw export` | Export conversations (JSON/Markdown) |
+| `micropaw reset` | Delete all config and data |
 
 Terminal slash commands: `/help`, `/new`, `/tools`, `/usage`, `/clear`, `/config`, `quit`
 
@@ -335,13 +335,13 @@ Terminal slash commands: `/help`, `/new`, `/tools`, `/usage`, `/clear`, `/config
 <details>
 <summary><strong>Configuration</strong></summary>
 
-Config file: `~/.microclaw/config.json` (0600 permissions).
+Config file: `~/.micropaw/config.json` (0600 permissions).
 
 ### Environment Variables
 
 | Variable | Purpose |
 |----------|---------|
-| `MICROCLAW_PROVIDER` | Primary provider (`claude`/`openai`/`gemini`/`ollama`) |
+| `MICROPAW_PROVIDER` | Primary provider (`claude`/`openai`/`gemini`/`ollama`) |
 | `ANTHROPIC_API_KEY` | Claude API key |
 | `OPENAI_API_KEY` | OpenAI API key |
 | `GEMINI_API_KEY` | Gemini API key |
@@ -371,7 +371,7 @@ Config file: `~/.microclaw/config.json` (0600 permissions).
 ```json
 {
   "persona": {
-    "name": "MicroClaw",
+    "name": "MicroPaw",
     "personality": "friendly, helpful, and clever",
     "system_prompt_extra": "Always respond in Spanish."
   }
@@ -399,8 +399,8 @@ Point any provider at a compatible server (vLLM, LM Studio, Azure OpenAI):
 <summary><strong>Installation Options</strong></summary>
 
 ```bash
-git clone https://gitlab.com/MANU-CHAUHAN/microclaw.git
-cd microclaw
+git clone https://gitlab.com/MANU-CHAUHAN/micropaw.git
+cd micropaw
 pip install .
 ```
 
@@ -418,7 +418,7 @@ pip install ".[all]"           # Everything
 
 Docker:
 ```bash
-docker compose run --rm microclaw chat              # Basic
+docker compose run --rm micropaw chat              # Basic
 docker compose --profile browser up                  # + Playwright
 docker compose --profile full up                     # Everything
 ```
@@ -429,7 +429,7 @@ docker compose --profile full up                     # Everything
 <summary><strong>Architecture</strong></summary>
 
 ```
-src/microclaw/          6,873 LOC source + 3,101 LOC tests
+src/micropaw/          6,873 LOC source + 3,101 LOC tests
  cli.py                 Click CLI (11 commands)
  config.py              Single Pydantic config model
  connector.py           Guided channel setup + live validation
@@ -464,8 +464,8 @@ mypy src/
 
 Shell completion:
 ```bash
-eval "$(_MICROCLAW_COMPLETE=bash_source microclaw)"    # Bash
-eval "$(_MICROCLAW_COMPLETE=zsh_source microclaw)"     # Zsh
+eval "$(_MICROPAW_COMPLETE=bash_source micropaw)"    # Bash
+eval "$(_MICROPAW_COMPLETE=zsh_source micropaw)"     # Zsh
 ```
 
 ---

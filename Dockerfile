@@ -1,4 +1,4 @@
-# MicroClaw — Multi-stage Dockerfile
+# MicroPaw — Multi-stage Dockerfile
 # Base: slim Python image with core deps
 # Browser: adds Playwright + Chromium for web_browse tool
 
@@ -19,15 +19,15 @@ COPY src/ src/
 RUN pip install --no-cache-dir .
 
 # Non-root user for security
-RUN useradd -m -r microclaw && \
-    mkdir -p /home/microclaw/.microclaw && \
-    chown -R microclaw:microclaw /home/microclaw/.microclaw
+RUN useradd -m -r micropaw && \
+    mkdir -p /home/micropaw/.micropaw && \
+    chown -R micropaw:micropaw /home/micropaw/.micropaw
 
-USER microclaw
+USER micropaw
 
-ENV MICROCLAW_HOME=/home/microclaw/.microclaw
+ENV MICROPAW_HOME=/home/micropaw/.micropaw
 
-ENTRYPOINT ["microclaw"]
+ENTRYPOINT ["micropaw"]
 CMD ["start"]
 
 # ── Browser stage (adds Playwright + Chromium) ─────────────
@@ -39,9 +39,9 @@ USER root
 RUN pip install --no-cache-dir ".[browser]" && \
     playwright install --with-deps chromium
 
-USER microclaw
+USER micropaw
 
-ENTRYPOINT ["microclaw"]
+ENTRYPOINT ["micropaw"]
 CMD ["start"]
 
 # ── All extras stage ───────────────────────────────────────
@@ -52,7 +52,7 @@ USER root
 # Install all optional dependencies
 RUN pip install --no-cache-dir ".[all]"
 
-USER microclaw
+USER micropaw
 
-ENTRYPOINT ["microclaw"]
+ENTRYPOINT ["micropaw"]
 CMD ["start"]

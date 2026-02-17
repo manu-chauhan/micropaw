@@ -7,7 +7,7 @@ import hashlib
 
 import pytest
 
-from microclaw.channels.webchat import (
+from micropaw.channels.webchat import (
     WebChatChannel,
     _ws_accept_key,
     _ws_encode_frame,
@@ -107,7 +107,7 @@ class TestWebChatTokenCheck:
 
 class TestWsOutboundTruncation:
     def test_oversized_payload_truncated(self):
-        from microclaw.channels.webchat import MAX_FRAME_SIZE
+        from micropaw.channels.webchat import MAX_FRAME_SIZE
         huge = "x" * (MAX_FRAME_SIZE + 1000)
         frame = _ws_text(huge)
         # Frame should be smaller than the original payload + overhead
