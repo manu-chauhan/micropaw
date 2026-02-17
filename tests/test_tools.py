@@ -725,6 +725,203 @@ class TestDocumentIngest:
 
 
 # ---------------------------------------------------------------------------
+# YouTube transcript tests
+# ---------------------------------------------------------------------------
+
+class TestYouTubePattern:
+    def test_watch_url(self):
+        from microclaw.tools.web_browse import _YT_PATTERN
+        m = _YT_PATTERN.search("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        assert m and m.group(1) == "dQw4w9WgXcQ"
+
+    def test_short_url(self):
+        from microclaw.tools.web_browse import _YT_PATTERN
+        m = _YT_PATTERN.search("https://youtu.be/dQw4w9WgXcQ")
+        assert m and m.group(1) == "dQw4w9WgXcQ"
+
+    def test_shorts_url(self):
+        from microclaw.tools.web_browse import _YT_PATTERN
+        m = _YT_PATTERN.search("https://youtube.com/shorts/dQw4w9WgXcQ")
+        assert m and m.group(1) == "dQw4w9WgXcQ"
+
+    def test_non_youtube_url(self):
+        from microclaw.tools.web_browse import _YT_PATTERN
+        m = _YT_PATTERN.search("https://example.com/page")
+        assert m is None
+
+    def test_url_with_extra_params(self):
+        from microclaw.tools.web_browse import _YT_PATTERN
+        m = _YT_PATTERN.search("https://www.youtube.com/watch?v=Tn6-PIqc4UM&t=120")
+        assert m and m.group(1) == "Tn6-PIqc4UM"
+
+
+class TestYouTubeTranscriptParsing:
+    """Test XML parsing for both manual (<p>) and auto-generated (<text>) captions."""
+
+    def test_parse_manual_captions(self):
+        """Manual captions use <p> tags."""
+        from html import unescape
+        from xml.etree.ElementTree import fromstring
+
+        xml = (
+            '<?xml version="1.0" encoding="utf-8" ?><timedtext format="3"><body>'
+            '<p t="1000" d="2000">Hello world</p>'
+            '<p t="3000" d="2000">This is a test</p>'
+            '</body></timedtext>'
+        )
+        root = fromstring(xml)
+        segments = []
+        for tag in ("p", "text"):
+            for elem in root.iter(tag):
+                text = unescape(elem.text or "").replace("\n", " ").strip()
+                if text:
+                    segments.append(text)
+            if segments:
+                break
+        assert segments == ["Hello world", "This is a test"]
+
+    def test_parse_autogen_captions(self):
+        """Auto-generated captions use <text> tags."""
+        from html import unescape
+        from xml.etree.ElementTree import fromstring
+
+        xml = (
+            '<?xml version="1.0" encoding="utf-8" ?><transcript>'
+            '<text start="0" dur="1.5">hello everyone</text>'
+            '<text start="1.5" dur="2.0">welcome to the video</text>'
+            '</transcript>'
+        )
+        root = fromstring(xml)
+        segments = []
+        for tag in ("p", "text"):
+            for elem in root.iter(tag):
+                text = unescape(elem.text or "").replace("\n", " ").strip()
+                if text:
+                    segments.append(text)
+            if segments:
+                break
+        assert segments == ["hello everyone", "welcome to the video"]
+
+    def test_html_entity_decoding(self):
+        """Captions often contain HTML entities."""
+        from html import unescape
+        from xml.etree.ElementTree import fromstring
+
+        xml = (
+            '<?xml version="1.0" encoding="utf-8" ?><timedtext format="3"><body>'
+            '<p t="0" d="1000">We&#39;re no strangers to love</p>'
+            '</body></timedtext>'
+        )
+        root = fromstring(xml)
+        text = unescape(list(root.iter("p"))[0].text)
+        assert text == "We're no strangers to love"
+
+
+class TestYouTubeTranscriptFetch:
+    @pytest.mark.asyncio
+    async def test_fetch_returns_structured_output(self):
+        """Mock the full InnerTube flow and verify output structure."""
+        from microclaw.tools.web_browse import fetch_youtube_transcript
+
+        page_html = '<script>var x = {"INNERTUBE_API_KEY": "test_key_123"};</script>'
+        player_json = {
+            "videoDetails": {"title": "Test Video", "author": "Tester", "lengthSeconds": "125"},
+            "captions": {"playerCaptionsTracklistRenderer": {"captionTracks": [{
+                "languageCode": "en",
+                "baseUrl": "https://www.youtube.com/api/timedtext?v=test",
+            }]}},
+        }
+        caption_xml = (
+            '<?xml version="1.0" encoding="utf-8" ?><transcript>'
+            '<text start="0" dur="5">Hello world this is a test transcript</text>'
+            '</transcript>'
+        )
+
+        mock_responses = [
+            MagicMock(text=page_html, status_code=200),   # page GET
+            MagicMock(status_code=200),                     # player POST
+            MagicMock(text=caption_xml, status_code=200),  # caption GET
+        ]
+        mock_responses[1].json.return_value = player_json
+
+        with patch("microclaw.tools.web_browse.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.get = AsyncMock(side_effect=[mock_responses[0], mock_responses[2]])
+            mock_client.post = AsyncMock(return_value=mock_responses[1])
+            mock_client_cls.return_value = mock_client
+
+            result = await fetch_youtube_transcript("test12345ab")
+
+        assert "Title: Test Video" in result
+        assert "Author: Tester" in result
+        assert "Duration: 2:05" in result
+        assert "Hello world this is a test transcript" in result
+
+    @pytest.mark.asyncio
+    async def test_no_captions_returns_message(self):
+        """Videos without captions return a helpful message."""
+        from microclaw.tools.web_browse import fetch_youtube_transcript
+
+        page_html = '<script>var x = {"INNERTUBE_API_KEY": "key123"};</script>'
+        player_json = {
+            "videoDetails": {"title": "No Caps", "author": "Test", "lengthSeconds": "60"},
+            "captions": {"playerCaptionsTracklistRenderer": {"captionTracks": []}},
+        }
+
+        with patch("microclaw.tools.web_browse.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.get = AsyncMock(return_value=MagicMock(text=page_html, status_code=200))
+            mock_client.post = AsyncMock(return_value=MagicMock(status_code=200, **{"json.return_value": player_json}))
+            mock_client_cls.return_value = mock_client
+
+            result = await fetch_youtube_transcript("nocaps12345")
+
+        assert "No captions available" in result
+
+
+class TestWebBrowseYouTube:
+    @pytest.mark.asyncio
+    async def test_youtube_url_triggers_transcript(self):
+        """web_browse with a YouTube URL should call fetch_youtube_transcript."""
+        from microclaw.tools.web_browse import WebBrowseTool
+
+        tool = WebBrowseTool()
+        context = MagicMock()
+        context.allow_web_browse = True
+
+        with patch("microclaw.tools.web_browse.validate_url", return_value=None), \
+             patch("microclaw.tools.web_browse.fetch_youtube_transcript", new_callable=AsyncMock) as mock_fetch:
+            mock_fetch.return_value = "Title: Test\n\nTranscript:\nHello world"
+            result = await tool.execute({"url": "https://youtube.com/watch?v=abc12345678"}, context)
+
+        assert "Hello world" in result
+        mock_fetch.assert_called_once_with("abc12345678")
+
+    @pytest.mark.asyncio
+    async def test_non_youtube_skips_transcript(self):
+        """Non-YouTube URLs should NOT trigger transcript fetch."""
+        from microclaw.tools.web_browse import WebBrowseTool
+
+        tool = WebBrowseTool()
+        context = MagicMock()
+        context.allow_web_browse = True
+
+        with patch("microclaw.tools.web_browse.validate_url", return_value=None), \
+             patch("microclaw.tools.web_browse.fetch_youtube_transcript", new_callable=AsyncMock) as mock_fetch, \
+             patch("microclaw.tools.web_browse._get_browser") as mock_browser:
+            # Make Playwright fail so we can verify the path taken
+            mock_browser.side_effect = RuntimeError("test: should use playwright path")
+            result = await tool.execute({"url": "https://example.com/article"}, context)
+
+        mock_fetch.assert_not_called()
+        assert "test: should use playwright path" in result
+
+
+# ---------------------------------------------------------------------------
 # sqlite-vec integration tests
 # ---------------------------------------------------------------------------
 

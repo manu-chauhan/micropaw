@@ -1,9 +1,14 @@
-"""Web browsing tool using Playwright."""
+"""Web browsing tool using Playwright, with smart YouTube transcript extraction."""
 
 from __future__ import annotations
 
 import logging
+import re
+from html import unescape
 from typing import Any
+from xml.etree.ElementTree import fromstring
+
+import httpx
 
 from microclaw.security import validate_url
 from microclaw.tools.base import Tool, ToolContext
@@ -15,6 +20,13 @@ MAX_CONTENT = 20_000
 # Shared browser instance (lazy init)
 _browser = None
 _playwright = None
+
+# YouTube URL patterns — matches watch, short URLs, and Shorts
+_YT_PATTERN = re.compile(
+    r"(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)([a-zA-Z0-9_-]{11})"
+)
+_INNERTUBE_KEY_RE = re.compile(r'"INNERTUBE_API_KEY":\s*"([a-zA-Z0-9_-]+)"')
+_INNERTUBE_CLIENT = {"clientName": "ANDROID", "clientVersion": "20.10.38"}
 
 
 async def _get_browser():
@@ -41,9 +53,83 @@ async def cleanup_browser():
         _playwright = None
 
 
+async def fetch_youtube_transcript(video_id: str) -> str:
+    """Fetch YouTube transcript via InnerTube API. Raw httpx, zero extra deps."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept-Language": "en-US",
+    }
+
+    async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=15.0) as client:
+        # 1. Get API key from video page
+        page = await client.get(f"https://www.youtube.com/watch?v={video_id}")
+        m = _INNERTUBE_KEY_RE.search(page.text)
+        if not m:
+            return ""
+
+        # 2. InnerTube player request (ANDROID client returns valid caption URLs)
+        player = (await client.post(
+            f"https://www.youtube.com/youtubei/v1/player?key={m.group(1)}",
+            json={"context": {"client": _INNERTUBE_CLIENT}, "videoId": video_id},
+        )).json()
+
+        details = player.get("videoDetails", {})
+        title = details.get("title", "Unknown")
+        author = details.get("author", "Unknown")
+        duration = int(details.get("lengthSeconds", 0))
+
+        tracks = (player.get("captions", {})
+                  .get("playerCaptionsTracklistRenderer", {})
+                  .get("captionTracks", []))
+        if not tracks:
+            mins, secs = divmod(duration, 60)
+            return f"Title: {title}\nAuthor: {author}\nDuration: {mins}:{secs:02d}\n\nNo captions available for this video."
+
+        # Prefer manual English, then any English, then first available
+        en_manual = [t for t in tracks if t["languageCode"].startswith("en") and t.get("kind") != "asr"]
+        en_any = [t for t in tracks if t["languageCode"].startswith("en")]
+        track = (en_manual or en_any or tracks)[0]
+
+        cap_url = track["baseUrl"]
+        if "&exp=xpe" in cap_url:
+            return f"Title: {title}\nAuthor: {author}\n\nCaptions require authentication for this video."
+
+        # 3. Fetch and parse caption XML
+        cap = await client.get(cap_url)
+        if not cap.text:
+            return ""
+
+        root = fromstring(cap.text)
+        segments: list[str] = []
+        for tag in ("p", "text"):  # manual captions use <p>, auto-gen uses <text>
+            for elem in root.iter(tag):
+                text = unescape(elem.text or "").replace("\n", " ").strip()
+                if text:
+                    segments.append(text)
+            if segments:
+                break
+
+        transcript = " ".join(segments)
+        mins, secs = divmod(duration, 60)
+        lang = track.get("languageCode", "?")
+        kind = "auto-generated" if track.get("kind") == "asr" else "manual"
+
+        return (
+            f"Title: {title}\n"
+            f"Author: {author}\n"
+            f"Duration: {mins}:{secs:02d}\n"
+            f"Captions: {lang} ({kind})\n\n"
+            f"Transcript:\n{transcript}"
+        )
+
+
 class WebBrowseTool(Tool):
     name = "web_browse"
-    description = "Browse a URL and extract its content. Supports text extraction, screenshots, and form interaction."
+    description = (
+        "Browse a URL and extract its content. "
+        "YouTube URLs automatically extract the video transcript for RAG indexing."
+    )
     parameters: dict[str, Any] = {
         "type": "object",
         "properties": {
@@ -67,6 +153,18 @@ class WebBrowseTool(Tool):
         if error := validate_url(url):
             return f"Error: {error}"
 
+        # Smart YouTube detection — fetch transcript directly, skip Playwright
+        yt_match = _YT_PATTERN.search(url)
+        if yt_match and extract == "text":
+            try:
+                transcript = await fetch_youtube_transcript(yt_match.group(1))
+                if transcript:
+                    logger.info("YouTube transcript fetched for %s", yt_match.group(1))
+                    return transcript
+            except Exception as e:
+                logger.warning("YouTube transcript failed for %s, falling back to Playwright: %s", url, e)
+
+        # Standard Playwright flow for non-YouTube URLs (or YouTube fallback)
         try:
             browser = await _get_browser()
             ctx = await browser.new_context()

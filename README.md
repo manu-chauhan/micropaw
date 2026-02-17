@@ -6,10 +6,10 @@
 
 **Your AI. Your machine. Your keys.**
 
-6 channels. 4 providers. 11 tools. Shared memory everywhere. ~6,800 lines of Python. Zero SDK dependencies.
+6 channels. 4 providers. 11 tools. Shared memory everywhere. ~6,900 lines of Python. Zero SDK dependencies.
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
-[![Tests](https://img.shields.io/badge/tests-256%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-268%20passed-brightgreen)]()
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 </div>
@@ -158,15 +158,21 @@ Override models: `CLAUDE_MODEL`, `OPENAI_MODEL`, `GEMINI_MODEL`, `OLLAMA_MODEL`
 
 ## RAG — Read Once, Ask Anywhere
 
-**Read a file or PDF on any channel. Ask about it later from any other channel. Zero config.**
+**Read a file, PDF, or YouTube video on any channel. Ask about it later from any other channel. Zero config.**
 
 <div align="center">
 
 ```
   User (Telegram):  "Read /home/manu/report.pdf"
 
-  MicroClaw:        [pdf_read] → reads text → auto-chunks → embeds in background
+  MicroClaw:        [pdf_read] → auto-chunks → embeds in background
                     "Here's a summary of your report..."
+
+  User (Telegram):  "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+  MicroClaw:        [web_browse] → detects YouTube → fetches transcript via InnerTube
+                    → auto-chunks → embeds → stored for RAG
+                    "This is a music video by Rick Astley..."
 
                ╌╌╌  next day, different platform  ╌╌╌
 
@@ -174,19 +180,33 @@ Override models: `CLAUDE_MODEL`, `OPENAI_MODEL`, `GEMINI_MODEL`, `OLLAMA_MODEL`
 
   MicroClaw:        [relevant chunks auto-injected into context]
                     "According to your report, revenue grew 23% in Q4..."
+
+  User (Discord):   "What was that YouTube video about?"
+
+  MicroClaw:        [transcript chunks retrieved via ANN search]
+                    "The video was 'Never Gonna Give You Up' by Rick Astley..."
 ```
 
 </div>
+
+### YouTube Transcripts — Zero Config
+
+Paste a YouTube URL → MicroClaw fetches the transcript directly via YouTube's InnerTube API. No API key, no Playwright, no extra dependency — just raw httpx.
+
+- Supports `youtube.com/watch`, `youtu.be`, and `youtube.com/shorts` URLs
+- Prefers manual English captions, falls back to auto-generated
+- Works on residential IPs (your machine) — aligns perfectly with local-first philosophy
+- If transcript unavailable, falls back to normal Playwright page rendering
 
 **How it works — fully automatic, zero config:**
 
 | Step | What happens |
 |------|-------------|
-| **Auto-ingest** | File or PDF read (>500 chars) → recursive chunking (~2k chars, 200 overlap) → embed → store in SQLite |
+| **Auto-ingest** | File, PDF, or web page read (>500 chars) → recursive chunking (~2k chars, 200 overlap) → embed → store |
 | **Auto-retrieve** | Every user message → embed query → ANN vector search against all stored chunks |
 | **Auto-inject** | Top 5 relevant chunks injected into system prompt as LLM context |
 
-No extra tools, no commands, no user action needed. Just read and ask.
+No extra tools, no commands, no user action needed. Just read, browse, or paste a link — and ask later.
 
 ### Under the hood
 
@@ -373,7 +393,7 @@ docker compose --profile full up                     # Everything
 <summary><strong>Architecture</strong></summary>
 
 ```
-src/microclaw/          6,775 LOC source + 2,904 LOC tests
+src/microclaw/          6,873 LOC source + 3,101 LOC tests
  cli.py                 Click CLI (11 commands)
  config.py              Single Pydantic config model
  connector.py           Guided channel setup + live validation
@@ -401,7 +421,7 @@ Full decision log: [`DECISIONS.md`](DECISIONS.md)
 
 ```bash
 pip install ".[dev]"
-pytest                 # 256 tests, ~1s
+pytest                 # 268 tests, ~1s
 ruff check src/
 mypy src/
 ```

@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # Tools that are safe to cache (read-only, no side effects)
 _CACHEABLE_TOOLS = frozenset({"web_search", "web_browse", "file_read", "http_request", "pdf_read", "vision"})
 # Tools whose output should be auto-ingested for RAG
-_INGEST_TOOLS = frozenset({"file_read", "pdf_read"})
+_INGEST_TOOLS = frozenset({"file_read", "pdf_read", "web_browse"})
 _MIN_INGEST_SIZE = 500  # only ingest results larger than this
 
 
@@ -311,7 +311,7 @@ class Agent:
                 and len(result) > _MIN_INGEST_SIZE
                 and not result.startswith("Error")
             ):
-                source = tc.arguments.get("path", "unknown")
+                source = tc.arguments.get("path") or tc.arguments.get("url") or "unknown"
                 asyncio.create_task(self._auto_ingest(source, result, tool_context.user_id))
 
             tool_msg = Message(role="tool", content=result, tool_call_id=tc.id)

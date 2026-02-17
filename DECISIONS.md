@@ -273,3 +273,35 @@
 - `web_search.py` — `max_results` parameter unclamped; LLM could request 1000 results. Clamped to 20.
 - `webchat.py` — outbound WebSocket frames not validated against `MAX_FRAME_SIZE`. Now truncates oversized payloads.
 - `pdf_read.py` — silently returned empty content when all requested pages were out of bounds. Now returns an explicit error message.
+
+---
+
+## v0.2.2 — RAG + sqlite-vec + YouTube Transcripts
+
+**Decided:** 2026-02-17
+
+### D25: RAG Pipeline (Auto-Ingest, Auto-Retrieve, Auto-Inject)
+**Rationale:** Users read files and PDFs but can't ask about them later. Manual knowledge management is tedious.
+**Design:** Three-stage automatic pipeline: (1) Auto-ingest — file_read/pdf_read results >500 chars are chunked (~2k chars, 200 overlap) and embedded in background via `asyncio.create_task()`. (2) Auto-retrieve — every user message is embedded and searched against stored chunks. (3) Auto-inject — top 5 relevant chunks injected into system prompt.
+**Impact:** Zero-config RAG. No user action needed. Cross-platform (read on Telegram, ask on Discord).
+
+### D26: sqlite-vec for ANN Vector Search
+**Rationale:** Brute-force cosine similarity over all chunks is O(n) and degrades beyond ~2000 chunks. sqlite-vec provides ANN search directly inside SQLite with no separate vector database.
+**Design:** Required dependency. `vec_chunks` virtual table with cosine distance metric. Three-path search: sqlite-vec ANN → brute-force cosine fallback → text LIKE fallback. `kv_meta` table tracks embedding dimensions. On dimension change: clear embeddings (derived data), preserve text (source of truth), background re-embed.
+**Impact:** Scales to tens of thousands of chunks. Graceful fallback if sqlite-vec removed.
+
+### D27: YouTube Transcript Extraction
+**Rationale:** Users paste YouTube URLs expecting the agent to understand the video. Playwright renders YouTube pages as UI garbage (nav, comments, cookie banners). The actual transcript is hidden behind a button click.
+**Design:** Smart detection in `web_browse` — regex detects YouTube URLs, fetches transcript via YouTube's InnerTube API (raw httpx, ANDROID client context). Parses XML captions (both `<p>` manual and `<text>` auto-generated formats). Falls back to Playwright if transcript unavailable.
+**Impact:** Zero extra dependencies. ~100 LOC added to web_browse.py. Works on residential IPs (aligns with local-first philosophy). Transcripts auto-ingest into RAG pipeline.
+
+### D28: Web Browse Auto-Ingest
+**Rationale:** RAG auto-ingest only triggered on file_read/pdf_read. Web content (articles, YouTube transcripts) is the most common thing users want to reference later.
+**Design:** Add `web_browse` to `_INGEST_TOOLS` in agent.py. Source key uses `url` arg instead of `path` arg.
+**Impact:** 1-line change. Browsed pages and YouTube transcripts now auto-index for RAG.
+
+### Metrics (v0.2.2)
+- Source LOC: ~6,873
+- Test LOC: ~3,101
+- Tests: 268 passing
+- Dependencies: 8 core (added sqlite-vec), 7 optional extras
