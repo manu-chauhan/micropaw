@@ -26,21 +26,53 @@ microclaw chat      # start talking
 
 ## Highlights
 
-- **Same brain, everywhere** — Talk on Telegram, continue on Discord, ask from WhatsApp. One memory, one personality, six platforms running simultaneously. Your assistant remembers everything across all channels.
+### Intelligence
 
-- **Zero SDK dependencies** — Every AI provider (Claude, GPT-4o, Gemini, Ollama) talks raw HTTP via `httpx`. No `anthropic` package. No `openai` package. No `google-genai`. Switching providers is a config change, not a rewrite.
+- **Same brain, everywhere** — Talk on Telegram, continue on Discord, ask from WhatsApp. One memory, one personality, six platforms running simultaneously.
 
-- **RAG out of the box** — Read a PDF on Telegram, ask about it from Discord next week. Documents are auto-chunked, embedded, and searchable across all channels. Embeddings auto-detect: Ollama -> OpenAI -> sentence-transformers. Zero config.
+- **RAG out of the box** — Read a PDF, paste a YouTube URL, or browse a web page. Documents are auto-chunked, embedded, and searchable across all channels. Ask about them days later from any platform.
 
-- **Multi-agent delegation** — The main agent spawns sub-agents for parallel tasks. Sub-agents inherit all tools except `delegate` (no recursive spawning). Max 25 LLM rounds per sub-agent, configurable.
+- **YouTube transcripts** — Paste a YouTube link and MicroClaw fetches the full transcript via InnerTube API. No API key, no Playwright — raw httpx. Auto-indexed for RAG.
 
-- **Automatic failover** — Provider chain with exponential backoff. If Claude is down, your assistant switches to GPT-4o, then Ollama. Keeps working no matter what.
+- **sqlite-vec ANN search** — Vector search powered by [sqlite-vec](https://github.com/asg017/sqlite-vec) directly inside SQLite. Scales to tens of thousands of chunks. Falls back to brute-force cosine if removed.
 
-- **Self-healing channels** — If a channel crashes, MicroClaw detects it and restarts automatically. Other channels keep running.
+- **Multi-agent delegation** — The main agent spawns sub-agents for parallel tasks. Sub-agents inherit all tools except `delegate` (no recursive spawning). Max 25 iterations, configurable.
 
-- **11 built-in tools** — Web search (3-backend fallback), browser automation, file I/O, shell execution, memory, vision, PDF reading, HTTP requests, session export, and delegation — all with security guardrails.
+- **Context compaction** — Conversations never hit a wall. When context fills up, older messages are summarized by the LLM while the last 10 are kept verbatim. Unbounded conversations.
 
-- **Fully local option** — Run entirely offline with Ollama. No data leaves your machine. No telemetry, ever.
+### Reliability
+
+- **Automatic failover** — Provider chain with exponential backoff and Retry-After support. Claude down? Switches to GPT-4o, then Ollama. Keeps working.
+
+- **Self-healing channels** — If a channel crashes, MicroClaw detects it, waits 5 seconds, and restarts. Other channels keep running.
+
+- **Streaming everywhere** — Real-time token-by-token output on Terminal, Telegram (0.5s), Discord (0.8s), Slack (1.0s). No waiting for full responses.
+
+- **Rate limiting** — Per-user sliding window + burst detection at the gateway. Protects your API keys from runaway requests.
+
+### Security
+
+- **Shell hardening** — 40+ blocked patterns: reverse shells, fork bombs, data exfiltration, `rm -rf /`, process substitution. Dangerous command confirmation toggle.
+
+- **SSRF protection** — URL scheme whitelist, private IP range blocking, DNS rebinding detection, cloud metadata service blocking.
+
+- **Path traversal prevention** — Symlink resolution, `..` detection, sensitive file blocking (`/etc/shadow`, `~/.ssh`, API keys).
+
+- **WebSocket hardening** — 1MB frame limit, 50 max headers, origin validation, timing-safe authentication.
+
+### Architecture
+
+- **Zero SDK dependencies** — All 4 AI providers via raw httpx. No `anthropic`, `openai`, or `google-genai` packages. Switching providers is a config change.
+
+- **11 built-in tools** — Web search (Brave → SearXNG → DuckDuckGo), browser automation, file I/O, shell, HTTP requests, memory, vision, PDF, sessions, delegation — all security-hardened.
+
+- **Raw WebSocket** — WebChat channel implements RFC 6455 from scratch. No aiohttp. ~100 LOC.
+
+- **Tool result caching** — Read-only tool calls cached per-message (LRU-32). Same query twice? Instant response, zero wasted tokens.
+
+- **Fully local option** — Run entirely offline with Ollama. No data leaves your machine. No telemetry. No phone home. Ever.
+
+- **Docker ready** — Multi-stage Dockerfile (base / browser / full). `docker compose up` with profiles. Named volume for persistence.
 
 ---
 
