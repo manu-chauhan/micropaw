@@ -10,11 +10,11 @@
 
 6 channels. 4 providers. 14 tools. Shared memory everywhere. ~7,700 lines of Python. Zero SDK dependencies.
 
-[![PyPI](https://img.shields.io/pypi/v/micropaw)](https://pypi.org/project/micropaw/)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://python.org)
-[![Tests](https://img.shields.io/badge/tests-334%20passed-brightgreen)]()
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=flat&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/manuchauhan)
+[![PyPI](https://img.shields.io/pypi/v/micropaw?style=for-the-badge)](https://pypi.org/project/micropaw/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?style=for-the-badge)](https://python.org)
+[![Tests](https://img.shields.io/badge/tests-334%20passed-brightgreen?style=for-the-badge)]()
+[![License: MIT](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)](LICENSE)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/manuchauhan)
 
 </div>
 
