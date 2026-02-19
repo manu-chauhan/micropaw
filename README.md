@@ -6,7 +6,7 @@
 
 ### A local-first AI agent that runs on your machine, talks on every platform, and keeps your keys to yourself.
 
-**Your AI. Your machine. Your keys.**
+**Your AI. Your model. Your machine.**
 
 6 channels. 4 providers. 16 tools. Shared memory everywhere. ~8,700 lines of Python. Zero SDK dependencies.
 
@@ -81,6 +81,8 @@ You (Discord, Day 3):    "What did Q4 revenue look like?"
 MicroPaw:                "Revenue grew 23% in Q4, driven by..."
                           (auto-retrieved from the PDF you read on Telegram)
 ```
+
+> Set your location in config (`persona.location`) or via `MICROPAW_LOCATION` env — powers all "near me" queries.
 
 ---
 
