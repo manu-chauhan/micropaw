@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/manu-chauhan/just_images_extras/main/puppy.png" width="160" alt="MicroPaw">
+<img src="https://raw.githubusercontent.com/manu-chauhan/just_images_extras/main/puppy.png" width="180" alt="MicroPaw">
 
 # 🐾 MicroPaw
 
