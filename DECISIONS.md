@@ -462,9 +462,20 @@
 **Design:** Single `_image_block(media)` static method, used via list comprehension in both paths.
 **Impact:** -8 LOC, single source of truth for image encoding format.
 
+### D44: Browser Install Hint in Setup Wizard
+**Decided:** 2026-02-19
+**Rationale:** Users discover Playwright is missing mid-conversation when they first try to browse — bad first impression. The setup wizard is the natural place for optional dependency setup.
+**Design:**
+- After permissions, before embeddings: "Install web browsing support? (Playwright + Chromium, ~150MB)"
+- If yes: runs `pip install playwright` + `playwright install chromium` via subprocess.
+- If no: skips silently. Runtime error still provides install instructions.
+- Uses `capture_output=True` to keep wizard clean. Catches `CalledProcessError`/`FileNotFoundError`.
+- Future phases: chat-based config tool (D-next), then gated install tool (D-next+1).
+**Impact:** Users who want browsing get it working in setup, no mid-chat surprises.
+
 ### Metrics (current)
 - Source LOC: ~8,700
 - Test LOC: ~4,300
-- Tests: 380 passing
+- Tests: 393 passing (7 skipped: browser)
 - Tools: 16 (48 actions)
 - Dependencies: 8 core, 7 optional extras

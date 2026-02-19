@@ -12,9 +12,6 @@ Run: python -m pytest tests/test_smoke.py -v
 
 from __future__ import annotations
 
-import asyncio
-import os
-
 import pytest
 
 from micropaw.config import Config
@@ -226,10 +223,13 @@ class TestClaudeImageBlock:
 def _has_playwright_browsers() -> bool:
     """Check if Playwright is installed AND browsers are available."""
     try:
-        from playwright.async_api import async_playwright
         import subprocess
+        check_script = (
+            "from playwright.sync_api import sync_playwright;"
+            "b=sync_playwright().start();b.chromium.launch(headless=True).close();b.stop()"
+        )
         result = subprocess.run(
-            ["python", "-c", "from playwright.sync_api import sync_playwright; b = sync_playwright().start(); b.chromium.launch(headless=True).close(); b.stop()"],
+            ["python", "-c", check_script],
             capture_output=True, timeout=15,
         )
         return result.returncode == 0

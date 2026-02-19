@@ -110,6 +110,28 @@ def run_setup() -> None:
     ).ask()
     config.permissions.allow_file_write = allow_write or False
 
+    # Browser (optional — Playwright for web browsing/screenshots)
+    install_browser = questionary.confirm(
+        "Install web browsing support? (Playwright + Chromium, ~150MB)",
+        default=False,
+    ).ask()
+    if install_browser:
+        console.print("[dim]Installing Playwright...[/dim]")
+        import subprocess
+        try:
+            subprocess.run(
+                ["pip", "install", "playwright"],
+                check=True, capture_output=True,
+            )
+            subprocess.run(
+                ["playwright", "install", "chromium"],
+                check=True, capture_output=True,
+            )
+            console.print("[green]Playwright + Chromium installed. Web browsing is ready.[/green]")
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            console.print(f"[yellow]Browser install failed: {e}[/yellow]")
+            console.print("[dim]You can install later: pip install playwright && playwright install chromium[/dim]")
+
     # Embeddings (for long-term memory with vector search)
     enable_embeddings = questionary.confirm(
         "Enable long-term memory with vector search?", default=False
