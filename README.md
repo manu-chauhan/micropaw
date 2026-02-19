@@ -8,11 +8,11 @@
 
 <h4>Your AI. Your model. Your machine.</h4>
 
-6 channels. 4 providers. 16 tools. Shared memory everywhere. ~8,700 lines of Python. Zero SDK dependencies.
+6 channels. 4 providers. 16 tools. Shared memory everywhere. ~8,800 lines of Python. Zero SDK dependencies.
 
 [![PyPI](https://img.shields.io/pypi/v/micropaw?style=for-the-badge)](https://pypi.org/project/micropaw/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?style=for-the-badge)](https://python.org)
-[![Tests](https://img.shields.io/badge/tests-380%20passed-brightgreen?style=for-the-badge)]()
+[![Tests](https://img.shields.io/badge/tests-393%20passed-brightgreen?style=for-the-badge)]()
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)](LICENSE)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/manuchauhan)
 
@@ -153,7 +153,7 @@ MicroPaw:                "Revenue grew 23% in Q4, driven by..."
 | | **MicroPaw** | **OpenClaw** | **NanoClaw** | **PicoClaw** | **MimiClaw** |
 |---|---|---|---|---|---|
 | **Language** | Python | TypeScript | TypeScript | Go | C |
-| **Codebase** | ~8,700 LOC | ~430k LOC | ~500 LOC | ~4k LOC | ~15k LOC |
+| **Codebase** | ~8,800 LOC | ~430k LOC | ~500 LOC | ~4k LOC | ~15k LOC |
 | **Channels** | 6 | 15+ | 1 (WhatsApp) | 5 | 3 |
 | **Tools** | 16 (48 actions) | 25 + 53 prompt templates | SDK-dependent | 6 | 6 |
 | **AI SDKs** | None — raw httpx | Internal framework | Anthropic SDK | None — raw HTTP | None — raw HTTP |
@@ -161,9 +161,9 @@ MicroPaw:                "Revenue grew 23% in Q4, driven by..."
 | **Telemetry** | None, ever | Local JSONL (opt-out) | None | None | None |
 | **License** | MIT | MIT | MIT | MIT | MIT |
 
-**MicroPaw sits in the sweet spot** — full-featured like OpenClaw (RAG, 6 channels, 16 tools, scheduling, email, calendar, multi-agent delegation) but lightweight like PicoClaw (~8,700 LOC, zero SDK dependencies). No telemetry, no bloat, no wrappers.
+**MicroPaw sits in the sweet spot** — full-featured like OpenClaw (RAG, 6 channels, 16 tools, scheduling, email, calendar, multi-agent delegation) but lightweight like PicoClaw (~8,800 LOC, zero SDK dependencies). No telemetry, no bloat, no wrappers.
 
-> Started at **4,667 LOC** in the first commit. Grew to **~8,700 source + ~4,300 test LOC** while adding 6 channels, 16 tools, RAG, multi-agent delegation, scheduling, email, calendar — and 380 tests. Every feature earned its lines.
+> Started at **4,667 LOC** in the first commit. Grew to **~8,700 source + ~4,300 test LOC** while adding 6 channels, 16 tools, RAG, multi-agent delegation, scheduling, email, calendar — and 393 tests. Every feature earned its lines.
 
 ---
 
@@ -538,7 +538,7 @@ docker compose --profile full up                     # Everything
 <summary><strong>Architecture</strong></summary>
 
 ```
-src/micropaw/          ~8,700 LOC source + ~4,300 LOC tests
+src/micropaw/          ~8,800 LOC source + ~4,700 LOC tests
  cli.py                 Click CLI (14 commands)
  config.py              Single Pydantic config model
  connector.py           Guided channel setup + live validation
@@ -567,7 +567,7 @@ Full decision log: [`DECISIONS.md`](DECISIONS.md)
 
 ```bash
 pip install ".[dev]"
-pytest                 # 380 tests
+pytest                 # 393 tests
 ruff check src/
 mypy src/
 ```

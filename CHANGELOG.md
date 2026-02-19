@@ -5,7 +5,7 @@ All entries in reverse chronological order. LOC = source lines (excluding tests/
 ---
 
 ### `e334f7c` 2026-02-19 — feat: interactive web browsing, screenshots, location context
-**Source: ~8,700 LOC | Tests: 380 | Tools: 16 (48 actions)**
+**Source: ~8,800 LOC | Tests: 393 | Tools: 16 (48 actions)**
 
 Added:
 - Interactive web_browse: 5 actions (browse, click, type, scroll, screenshot)

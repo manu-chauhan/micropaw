@@ -474,8 +474,8 @@
 **Impact:** Users who want browsing get it working in setup, no mid-chat surprises.
 
 ### Metrics (current)
-- Source LOC: ~8,700
-- Test LOC: ~4,300
+- Source LOC: ~8,800
+- Test LOC: ~4,700
 - Tests: 393 passing (7 skipped: browser)
 - Tools: 16 (48 actions)
 - Dependencies: 8 core, 7 optional extras
