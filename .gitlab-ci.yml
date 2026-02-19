@@ -1,0 +1,40 @@
+stages:
+  - test
+  - build
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+cache:
+  paths:
+    - .cache/pip
+
+.test:
+  stage: test
+  script:
+    - pip install -e ".[dev]"
+    - ruff check src/ tests/
+    - pytest tests/ -v --tb=short
+
+test-3.11:
+  extends: .test
+  image: python:3.11-slim
+
+test-3.12:
+  extends: .test
+  image: python:3.12-slim
+
+test-3.13:
+  extends: .test
+  image: python:3.13-slim
+
+build:
+  stage: build
+  image: python:3.12-slim
+  needs: ["test-3.12"]
+  script:
+    - pip install build
+    - python -m build
+  artifacts:
+    paths:
+      - dist/
