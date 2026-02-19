@@ -49,7 +49,14 @@ class OllamaProvider(AIProvider):
         }
         if tools:
             body["tools"] = [
-                {"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.parameters}}
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.parameters,
+                    },
+                }
                 for t in tools
             ]
         return body
@@ -86,7 +93,9 @@ class OllamaProvider(AIProvider):
             },
         )
 
-    async def chat_stream(self, messages: list[Message], tools: list[ToolDef] | None = None) -> AsyncGenerator[str | AIResponse, None]:
+    async def chat_stream(
+        self, messages: list[Message], tools: list[ToolDef] | None = None,
+    ) -> AsyncGenerator[str | AIResponse, None]:
         body = self._build_body(messages, tools, stream=True)
         logger.debug("Streaming Ollama %s", self.model)
 

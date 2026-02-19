@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from typing import Any
 
 import pytest
 
 from micropaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef, retry_on_transient
 from micropaw.providers.failover import AllProvidersFailedError, FailoverProvider
-
 
 # ---------------------------------------------------------------------------
 # Mock providers
@@ -157,6 +155,7 @@ class TestRetryOnTransient:
 
     async def test_retries_on_429(self, monkeypatch):
         import httpx
+
         import micropaw.providers.base as base_mod
 
         # Speed up test by zeroing the delay
@@ -205,7 +204,7 @@ class TestContextCompaction:
 
     async def test_compaction_fallback_truncation_on_provider_failure(self):
         """If the summarization provider fails, fall back to truncation (system + recent)."""
-        from micropaw.core.context import ContextManager, KEEP_RECENT
+        from micropaw.core.context import KEEP_RECENT, ContextManager
 
         failing_provider = MockProvider(fail=True)
         ctx = ContextManager(max_history=50, compaction_threshold=3)
@@ -223,7 +222,7 @@ class TestContextCompaction:
 
     async def test_compaction_fallback_truncation_on_empty_summary(self):
         """If the LLM returns an empty summary, fall back to truncation."""
-        from micropaw.core.context import ContextManager, KEEP_RECENT
+        from micropaw.core.context import KEEP_RECENT, ContextManager
 
         empty_provider = MockProvider(response="")
         ctx = ContextManager(max_history=50, compaction_threshold=3)
@@ -341,8 +340,9 @@ class TestGeminiStreamingUsage:
 
     async def test_gemini_non_streaming_usage(self):
         """Non-streaming should extract usageMetadata."""
-        from micropaw.providers.gemini import GeminiProvider
         from unittest.mock import AsyncMock, MagicMock
+
+        from micropaw.providers.gemini import GeminiProvider
 
         p = GeminiProvider(api_key="test-key")
         mock_response = MagicMock()

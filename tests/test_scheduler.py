@@ -2,16 +2,11 @@
 
 from __future__ import annotations
 
-import tempfile
-import time
-from pathlib import Path
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from micropaw.tools.base import ToolContext
-
 
 # ---------------------------------------------------------------------------
 # Interval parsing (CLI)
@@ -44,6 +39,7 @@ class TestIntervalParsing:
 
     def test_invalid(self):
         import click
+
         from micropaw.cli import _parse_interval
         with pytest.raises(click.BadParameter):
             _parse_interval("abc")
@@ -107,7 +103,7 @@ class TestSchedulerCRUD:
         sched = Scheduler(db, handler=None, bus=None, channels=[])
         await sched.init()
         try:
-            job_id = await sched.add_job("reminder", 7200, one_shot=True)
+            await sched.add_job("reminder", 7200, one_shot=True)
             jobs = await sched.list_jobs()
             assert len(jobs) == 1
             assert jobs[0]["one_shot"] is True
@@ -361,7 +357,6 @@ class TestPersonaFiles:
     def test_soul_file_overrides_personality(self, tmp_path):
         from micropaw.config import Config
         from micropaw.core.agent import Agent
-        from micropaw.memory.store import MemoryStore
 
         soul_file = tmp_path / "SOUL.md"
         soul_file.write_text("You are a pirate who loves coding. Always say 'Arrr!'")

@@ -137,7 +137,7 @@ async def _search_brave(query: str, max_results: int, api_key: str) -> str | Non
 async def _search_duckduckgo(query: str, max_results: int) -> str:
     """Search via DuckDuckGo Lite (HTML). Always returns a string (never None)."""
     import re
-    from urllib.parse import unquote, urlparse, parse_qs
+    from urllib.parse import parse_qs, unquote, urlparse
 
     try:
         async with httpx.AsyncClient(timeout=_DDG_TIMEOUT, follow_redirects=True) as client:

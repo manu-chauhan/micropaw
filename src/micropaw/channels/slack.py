@@ -30,8 +30,8 @@ class SlackChannel(Channel):
 
     async def start(self) -> None:
         try:
-            from slack_bolt.async_app import AsyncApp
             from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
+            from slack_bolt.async_app import AsyncApp
         except ImportError:
             raise RuntimeError("slack-bolt not installed. Install with: pip install micropaw[slack]")
 
@@ -52,10 +52,9 @@ class SlackChannel(Channel):
             thread_ts = event.get("thread_ts") or event.get("ts", "")
 
             # Get user name
-            user_name = user_id
             try:
                 info = await client.users_info(user=user_id)
-                user_name = info["user"]["real_name"] or info["user"]["name"]
+                info["user"]["real_name"] or info["user"]["name"]
             except Exception as e:
                 logger.debug("Slack user info lookup failed: %s", e)
 

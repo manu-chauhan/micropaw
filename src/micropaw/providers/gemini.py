@@ -18,7 +18,13 @@ _DEFAULT_BASE = "https://generativelanguage.googleapis.com"
 class GeminiProvider(AIProvider):
     name = "gemini"
 
-    def __init__(self, api_key: str, model: str = "gemini-2.5-flash", max_tokens: int = 4096, base_url: str = _DEFAULT_BASE) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gemini-2.5-flash",
+        max_tokens: int = 4096,
+        base_url: str = _DEFAULT_BASE,
+    ) -> None:
         self.api_key = api_key
         self.model = model
         self.max_tokens = max_tokens
@@ -27,7 +33,9 @@ class GeminiProvider(AIProvider):
 
     def _url(self, streaming: bool = False) -> str:
         action = "streamGenerateContent?alt=sse" if streaming else "generateContent"
-        return f"{self._api_base}/{self.model}:{action}&key={self.api_key}" if streaming else f"{self._api_base}/{self.model}:{action}?key={self.api_key}"
+        if streaming:
+            return f"{self._api_base}/{self.model}:{action}&key={self.api_key}"
+        return f"{self._api_base}/{self.model}:{action}?key={self.api_key}"
 
     def _build_body(self, messages: list[Message], tools: list[ToolDef] | None) -> dict:
         system_text = None
@@ -110,7 +118,9 @@ class GeminiProvider(AIProvider):
             usage={"input": meta.get("promptTokenCount", 0), "output": meta.get("candidatesTokenCount", 0)},
         )
 
-    async def chat_stream(self, messages: list[Message], tools: list[ToolDef] | None = None) -> AsyncGenerator[str | AIResponse, None]:
+    async def chat_stream(
+        self, messages: list[Message], tools: list[ToolDef] | None = None,
+    ) -> AsyncGenerator[str | AIResponse, None]:
         body = self._build_body(messages, tools)
         logger.debug("Streaming Gemini %s", self.model)
 
@@ -118,7 +128,10 @@ class GeminiProvider(AIProvider):
         tool_calls: list[ToolCall] = []
         usage_meta: dict = {}
 
-        async with self._client.stream("POST", self._url(streaming=True), headers={"Content-Type": "application/json"}, json=body) as resp:
+        url = self._url(streaming=True)
+        async with self._client.stream(
+            "POST", url, headers={"Content-Type": "application/json"}, json=body,
+        ) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
                 chunk = parse_sse(line)

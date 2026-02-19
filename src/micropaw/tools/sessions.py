@@ -18,7 +18,10 @@ def set_store(store: MemoryStore) -> None:
 
 class SessionsTool(Tool):
     name = "sessions"
-    description = "Manage conversation sessions. Actions: 'list' (show sessions), 'info' (session details), 'clear' (delete messages)."
+    description = (
+        "Manage conversation sessions. Actions: "
+        "'list' (show sessions), 'info' (session details), 'clear' (delete messages)."
+    )
     parameters: dict[str, Any] = {
         "type": "object",
         "properties": {

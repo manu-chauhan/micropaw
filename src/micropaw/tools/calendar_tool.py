@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 
 from micropaw.tools.base import Tool, ToolContext
-from micropaw.tools.google_auth import authorize, ensure_token, api_get, api_post, api_delete, api_error
+from micropaw.tools.google_auth import api_delete, api_error, api_get, api_post, authorize, ensure_token
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,10 @@ async def _list_events(token: str, args: dict) -> str:
     _add_date_params(params, args)
     try:
         data = await api_get(token, f"{_CAL}/calendars/primary/events", params)
-        return _format_event_list(data.get("items", []), "Calendar events", "No events found for the specified date range.")
+        return _format_event_list(
+            data.get("items", []), "Calendar events",
+            "No events found for the specified date range.",
+        )
     except httpx.HTTPStatusError as e:
         return api_error(e, "Calendar")
     except Exception as e:

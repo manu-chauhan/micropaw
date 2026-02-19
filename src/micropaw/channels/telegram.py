@@ -27,7 +27,8 @@ class TelegramChannel(Channel):
     async def start(self) -> None:
         try:
             from telegram import Update
-            from telegram.ext import Application, MessageHandler as TGMsgHandler, filters, ContextTypes
+            from telegram.ext import Application, ContextTypes, filters
+            from telegram.ext import MessageHandler as TGMsgHandler
         except ImportError:
             raise RuntimeError("python-telegram-bot not installed. Install with: pip install micropaw[telegram]")
 

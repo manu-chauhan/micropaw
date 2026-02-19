@@ -20,7 +20,13 @@ _API_VERSION = "2023-06-01"
 class ClaudeProvider(AIProvider):
     name = "claude"
 
-    def __init__(self, api_key: str, model: str = "claude-sonnet-4-20250514", max_tokens: int = 4096, base_url: str = _DEFAULT_BASE) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "claude-sonnet-4-20250514",
+        max_tokens: int = 4096,
+        base_url: str = _DEFAULT_BASE,
+    ) -> None:
         self.api_key = api_key
         self.model = model
         self.max_tokens = max_tokens
@@ -114,7 +120,9 @@ class ClaudeProvider(AIProvider):
             stop_reason=data.get("stop_reason", ""),
         )
 
-    async def chat_stream(self, messages: list[Message], tools: list[ToolDef] | None = None) -> AsyncGenerator[str | AIResponse, None]:
+    async def chat_stream(
+        self, messages: list[Message], tools: list[ToolDef] | None = None,
+    ) -> AsyncGenerator[str | AIResponse, None]:
         body = self._build_body(messages, tools)
         body["stream"] = True
         logger.debug("Streaming Claude %s", self.model)

@@ -112,7 +112,10 @@ def run_setup() -> None:
         if provider == "ollama":
             config.embedding.provider = "ollama"
             config.embedding.model = "nomic-embed-text"
-            console.print("[dim]Using Ollama embeddings (nomic-embed-text). Pull it with: ollama pull nomic-embed-text[/dim]")
+            console.print(
+                "[dim]Using Ollama embeddings (nomic-embed-text)."
+                " Pull it with: ollama pull nomic-embed-text[/dim]"
+            )
         else:
             # Check if fastembed is available
             _has_fe = False
@@ -163,7 +166,7 @@ def run_setup() -> None:
             for fb in fallbacks:
                 if fb == "ollama":
                     host = questionary.text(
-                        f"Ollama host for fallback:", default="http://localhost:11434"
+                        "Ollama host for fallback:", default="http://localhost:11434"
                     ).ask()
                     if host:
                         config.provider_config.ollama.host = host
@@ -222,7 +225,7 @@ def run_setup() -> None:
 
     # Save
     save_config(config)
-    console.print(f"\n[green]Config saved![/green]")
+    console.print("\n[green]Config saved![/green]")
 
     # Offer channel connection
     connect_channel = questionary.confirm(

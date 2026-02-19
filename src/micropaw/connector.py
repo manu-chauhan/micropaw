@@ -124,7 +124,11 @@ def validate_provider_key(config: Config) -> tuple[bool, str]:
             resp = httpx.post(
                 "https://api.anthropic.com/v1/messages",
                 headers={"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                json={"model": config.provider_config.claude.model, "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]},
+                json={
+                    "model": config.provider_config.claude.model,
+                    "max_tokens": 1,
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
                 timeout=15,
             )
             if resp.status_code == 200:
@@ -473,7 +477,10 @@ def test_channels(config: Config) -> None:
             app_id = _get_discord_app_id(dc.token)
             if app_id:
                 table.add_row("  invite URL", "[dim]--[/dim]", discord_invite_url(app_id))
-            table.add_row("  [yellow]reminder[/yellow]", "[dim]--[/dim]", "Ensure Message Content Intent is ON in Developer Portal")
+            table.add_row(
+                "  [yellow]reminder[/yellow]", "[dim]--[/dim]",
+                "Ensure Message Content Intent is ON in Developer Portal",
+            )
     else:
         table.add_row("Discord", skip_s, "not configured")
 
@@ -489,9 +496,15 @@ def test_channels(config: Config) -> None:
     # WhatsApp — can't validate token easily, just check it's configured
     wa = config.channels.whatsapp
     if wa.enabled and wa.token:
-        table.add_row("WhatsApp", "[yellow]configured[/yellow]", "token set (cannot validate without sending a message)")
-        table.add_row("  [yellow]warning[/yellow]", "[dim]--[/dim]", "Temporary tokens expire in 24h — use a permanent System User token")
-        table.add_row("  webhook", "[dim]--[/dim]", f"Expects POST at :8080/webhook (verify_token set)")
+        table.add_row(
+            "WhatsApp", "[yellow]configured[/yellow]",
+            "token set (cannot validate without sending a message)",
+        )
+        table.add_row(
+            "  [yellow]warning[/yellow]", "[dim]--[/dim]",
+            "Temporary tokens expire in 24h — use a permanent System User token",
+        )
+        table.add_row("  webhook", "[dim]--[/dim]", "Expects POST at :8080/webhook (verify_token set)")
     else:
         table.add_row("WhatsApp", skip_s, "not configured")
 

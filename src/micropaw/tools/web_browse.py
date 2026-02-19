@@ -84,7 +84,10 @@ async def fetch_youtube_transcript(video_id: str) -> str:
                   .get("captionTracks", []))
         if not tracks:
             mins, secs = divmod(duration, 60)
-            return f"Title: {title}\nAuthor: {author}\nDuration: {mins}:{secs:02d}\n\nNo captions available for this video."
+            return (
+                f"Title: {title}\nAuthor: {author}\nDuration: {mins}:{secs:02d}"
+                "\n\nNo captions available for this video."
+            )
 
         # Prefer manual English, then any English, then first available
         en_manual = [t for t in tracks if t["languageCode"].startswith("en") and t.get("kind") != "asr"]

@@ -13,6 +13,7 @@ import logging
 import secrets
 import struct
 import uuid
+
 from micropaw.channels.base import Channel
 
 logger = logging.getLogger(__name__)
@@ -97,7 +98,7 @@ async def _read_http_request(reader: asyncio.StreamReader) -> dict[str, str] | N
         request_line = await asyncio.wait_for(reader.readline(), timeout=10)
         if not request_line:
             return None
-    except (asyncio.TimeoutError, ConnectionError):
+    except (TimeoutError, ConnectionError):
         return None
 
     headers: dict[str, str] = {"_request_line": request_line.decode(errors="replace").strip()}

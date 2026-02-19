@@ -5,16 +5,13 @@ from __future__ import annotations
 import base64
 import hashlib
 
-import pytest
-
 from micropaw.channels.webchat import (
+    _WS_GUID,
     WebChatChannel,
     _ws_accept_key,
     _ws_encode_frame,
     _ws_text,
-    _WS_GUID,
 )
-
 
 # ---------------------------------------------------------------------------
 # WebSocket utilities

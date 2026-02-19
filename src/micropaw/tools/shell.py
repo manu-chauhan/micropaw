@@ -125,11 +125,11 @@ class ShellTool(Tool):
 
             return result
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             try:
                 proc.terminate()
                 await asyncio.wait_for(proc.wait(), timeout=3.0)
-            except (asyncio.TimeoutError, ProcessLookupError):
+            except (TimeoutError, ProcessLookupError):
                 # Process didn't die from SIGTERM — force kill
                 try:
                     os.kill(proc.pid, signal.SIGKILL)

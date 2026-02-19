@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -213,7 +212,7 @@ class TestEmailTool:
         with patch("micropaw.tools.email_tool.ensure_token", return_value=("tok", None)):
             with patch.object(self.mod, "_search", return_value="Search results (1 messages):") as mock:
                 tool = self.mod.EmailTool()
-                result = await tool.execute({"action": "search", "query": "from:alice"}, context)
+                await tool.execute({"action": "search", "query": "from:alice"}, context)
                 mock.assert_called_once_with("tok", "from:alice")
 
     async def test_unknown_action(self, context):
@@ -305,7 +304,11 @@ class TestCalendarTool:
             with patch("micropaw.tools.calendar_tool.api_post", return_value=mock_resp):
                 tool = self.mod.CalendarTool()
                 result = await tool.execute(
-                    {"action": "create", "title": "Meeting", "start_time": "2026-02-20T10:00:00", "end_time": "2026-02-20T11:00:00"},
+                    {
+                        "action": "create", "title": "Meeting",
+                        "start_time": "2026-02-20T10:00:00",
+                        "end_time": "2026-02-20T11:00:00",
+                    },
                     context,
                 )
                 assert "created" in result.lower()

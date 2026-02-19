@@ -4,15 +4,14 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from micropaw.config import Config
-from micropaw.core.agent import Agent, _cache_key, _CACHEABLE_TOOLS, _classify_error
+from micropaw.core.agent import _CACHEABLE_TOOLS, Agent, _cache_key, _classify_error
 from micropaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef
 from micropaw.tools.base import Tool, ToolContext, ToolRegistry
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -32,7 +31,9 @@ class MockProvider(AIProvider):
             return resp
         return AIResponse(content="default response", tool_calls=[], usage={"input": 10, "output": 5})
 
-    async def chat_stream(self, messages: list[Message], tools: list[ToolDef] | None = None) -> AsyncGenerator[str | AIResponse, None]:
+    async def chat_stream(
+        self, messages: list[Message], tools: list[ToolDef] | None = None,
+    ) -> AsyncGenerator[str | AIResponse, None]:
         resp = await self.chat(messages, tools)
         if resp.content:
             yield resp.content
@@ -198,7 +199,7 @@ class TestHandleMessage:
         provider = MockProvider([tool_response] * 20)  # More than max iterations
         agent = _make_agent(provider, [EchoTool()])
         agent.max_tool_iterations = 3
-        result = await agent.handle_message("Loop forever", "user1", "terminal")
+        await agent.handle_message("Loop forever", "user1", "terminal")
         assert provider._call_count <= 4  # max_iterations + 1 safety margin
 
 

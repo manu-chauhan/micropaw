@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from micropaw.config import Config
 from micropaw.gateway import Gateway, _RateLimiter
-
 
 # ---------------------------------------------------------------------------
 # Rate limiter (additional tests beyond test_providers.py)

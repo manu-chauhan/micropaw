@@ -6,7 +6,8 @@ import asyncio
 import logging
 import sys
 import uuid
-from typing import Any, Callable, Awaitable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -145,8 +146,9 @@ class TerminalChannel(Channel):
 
         elif command == "/config":
             if self._config:
-                from micropaw.config import display_config
                 import json
+
+                from micropaw.config import display_config
                 console.print_json(json.dumps(display_config(self._config), indent=2))
             else:
                 console.print("[dim]No config available.[/dim]")

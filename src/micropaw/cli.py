@@ -6,10 +6,10 @@ import asyncio
 import json
 import shutil
 import sys
+from datetime import UTC
 
 import click
 from rich.console import Console
-from rich.panel import Panel
 from rich.table import Table
 
 from micropaw import __version__
@@ -77,20 +77,21 @@ def _create_provider(config: Config):
 def _create_registry(config: Config):
     """Create and populate the tool registry, respecting disabled_tools config."""
     import logging
+
     from micropaw.tools.base import ToolRegistry
     from micropaw.tools.calendar_tool import CalendarTool
     from micropaw.tools.contacts_tool import ContactsTool
     from micropaw.tools.cron_tool import CronTool
+    from micropaw.tools.delegate import DelegateTool
     from micropaw.tools.email_tool import EmailTool
-    from micropaw.tools.files_tool import FilesTool
     from micropaw.tools.file_read import FileReadTool
     from micropaw.tools.file_write import FileWriteTool
+    from micropaw.tools.files_tool import FilesTool
     from micropaw.tools.http_request import HttpRequestTool
     from micropaw.tools.memory_tool import MemoryTool
     from micropaw.tools.pdf_read import PdfReadTool
     from micropaw.tools.sessions import SessionsTool
     from micropaw.tools.shell import ShellTool
-    from micropaw.tools.delegate import DelegateTool
     from micropaw.tools.vision import VisionTool
     from micropaw.tools.web_browse import WebBrowseTool
     from micropaw.tools.web_search import WebSearchTool
@@ -296,19 +297,28 @@ def doctor():
     table.add_column("Status")
     table.add_column("Detail", style="dim")
 
-    ok = lambda v: "[green]pass[/green]" if v else "[red]FAIL[/red]"
+    def ok(v):
+        return "[green]pass[/green]" if v else "[red]FAIL[/red]"
 
     py_ver = plat.python_version()
-    table.add_row("Python version", ok(tuple(int(x) for x in py_ver.split(".")[:2]) >= (3, 11)), py_ver)
+    py_ok = tuple(int(x) for x in py_ver.split(".")[:2]) >= (3, 11)
+    table.add_row("Python version", ok(py_ok), py_ver)
     table.add_row("Config file", ok(config_exists()), str(CONFIG_FILE))
-    table.add_row("Database", ok(DB_FILE.exists()), f"{DB_FILE.stat().st_size / 1024:.0f} KB" if DB_FILE.exists() else "not created")
+    db_detail = (
+        f"{DB_FILE.stat().st_size / 1024:.0f} KB" if DB_FILE.exists() else "not created"
+    )
+    table.add_row("Database", ok(DB_FILE.exists()), db_detail)
 
     provider = config.provider
     has_key = provider == "ollama" or bool(getattr(config.provider_config, provider).api_key)
     table.add_row(f"Provider ({provider})", ok(has_key), "API key configured" if has_key else "no API key")
 
     # Optional dependencies
-    for name, pkg in [("Playwright", "playwright"), ("pypdf", "pypdf"), ("discord.py", "discord"), ("telegram", "telegram")]:
+    optional_deps = [
+        ("Playwright", "playwright"), ("pypdf", "pypdf"),
+        ("discord.py", "discord"), ("telegram", "telegram"),
+    ]
+    for name, pkg in optional_deps:
         try:
             __import__(pkg)
             table.add_row(name, ok(True), "installed")
@@ -446,7 +456,7 @@ def add(description, interval, once_delay):
 @cron.command(name="list")
 def list_jobs():
     """List all scheduled tasks."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     async def _list():
         from micropaw.scheduler import Scheduler
@@ -464,7 +474,7 @@ def list_jobs():
             table.add_column("Next Run")
             for j in jobs:
                 kind = "once" if j["one_shot"] else f"every {_fmt(j['interval_seconds'])}"
-                next_dt = datetime.fromtimestamp(j["next_run_at"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+                next_dt = datetime.fromtimestamp(j["next_run_at"], tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
                 table.add_row(str(j["id"]), j["description"], kind, next_dt)
             console.print(table)
         finally:

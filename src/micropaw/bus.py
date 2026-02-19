@@ -92,7 +92,7 @@ class MessageBus:
             return None
         try:
             return await asyncio.wait_for(self._inbound.get(), timeout=self._timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
 
     # -- Outbound (agent → channel) --
@@ -109,7 +109,7 @@ class MessageBus:
             return None
         try:
             return await asyncio.wait_for(self._outbound.get(), timeout=self._timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
 
     # -- Lifecycle --

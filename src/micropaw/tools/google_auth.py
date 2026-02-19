@@ -7,9 +7,9 @@ import json
 import logging
 import time
 import webbrowser
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
-from urllib.parse import urlencode, parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
 
@@ -65,8 +65,14 @@ async def ensure_token(service: str = "Google") -> tuple[str | None, str | None]
     if token:
         return token, None
     if needs_reauth():
-        return None, f"Error: {service} not authorized. Ask the user to run the 'authorize' action to sign in with Google."
-    return None, "Error: Not authorized. Run the 'authorize' action first, or check that Google credentials are configured via 'paw setup'."
+        return None, (
+            f"Error: {service} not authorized. "
+            "Ask the user to run the 'authorize' action to sign in with Google."
+        )
+    return None, (
+        "Error: Not authorized. Run the 'authorize' action first, "
+        "or check that Google credentials are configured via 'paw setup'."
+    )
 
 
 def set_google_config(config: Any) -> None:

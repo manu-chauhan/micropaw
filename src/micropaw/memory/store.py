@@ -327,7 +327,8 @@ class MemoryStore:
 
         await self.db.execute(
             "INSERT INTO memories (key, value, tags, embedding, user_id) VALUES (?, ?, ?, ?, ?) "
-            "ON CONFLICT(key, user_id) DO UPDATE SET value = ?, tags = ?, embedding = ?, updated_at = CURRENT_TIMESTAMP",
+            "ON CONFLICT(key, user_id) DO UPDATE SET value = ?, tags = ?, embedding = ?,"
+            " updated_at = CURRENT_TIMESTAMP",
             (key, value, tags_str, embedding_json, user_id, value, tags_str, embedding_json),
         )
         await self.db.commit()

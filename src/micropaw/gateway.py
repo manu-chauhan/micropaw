@@ -6,9 +6,10 @@ import asyncio
 import logging
 import signal
 import time
+from typing import Any
 
 from micropaw.channels.base import Channel
-from micropaw.config import Config, DB_FILE
+from micropaw.config import DB_FILE, Config
 from micropaw.core.agent import Agent
 from micropaw.memory.store import MemoryStore
 from micropaw.providers.base import AIProvider
@@ -275,8 +276,13 @@ class Gateway:
 
     async def _create_embedding_provider(self):
         from micropaw.memory.embeddings import (
-            LocalEmbedding, NullEmbedding, OllamaEmbedding, OpenAIEmbedding,
-            probe_ollama, _DEFAULT_LOCAL_MODEL, _DEFAULT_OLLAMA_MODEL,
+            _DEFAULT_LOCAL_MODEL,
+            _DEFAULT_OLLAMA_MODEL,
+            LocalEmbedding,
+            NullEmbedding,
+            OllamaEmbedding,
+            OpenAIEmbedding,
+            probe_ollama,
         )
         cfg = self.config.embedding
 
@@ -324,8 +330,12 @@ class Gateway:
 
     def _create_explicit_provider(self, cfg):
         from micropaw.memory.embeddings import (
-            LocalEmbedding, NullEmbedding, OllamaEmbedding, OpenAIEmbedding,
-            _DEFAULT_LOCAL_MODEL, _DEFAULT_OLLAMA_MODEL,
+            _DEFAULT_LOCAL_MODEL,
+            _DEFAULT_OLLAMA_MODEL,
+            LocalEmbedding,
+            NullEmbedding,
+            OllamaEmbedding,
+            OpenAIEmbedding,
         )
         if cfg.provider == "local":
             try:
@@ -371,7 +381,7 @@ class Gateway:
         for channel in self.channels:
             try:
                 await asyncio.wait_for(channel.stop(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("Channel [%s] stop timed out", channel.name)
             except Exception as e:
                 logger.error("Error stopping [%s]: %s", channel.name, e)
@@ -385,7 +395,7 @@ class Gateway:
         # Close AI provider HTTP clients
         try:
             await asyncio.wait_for(self.provider.close(), timeout=5.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Provider close timed out")
         except Exception as e:
             logger.error("Error closing provider: %s", e)
@@ -394,7 +404,7 @@ class Gateway:
         if self.store and hasattr(self.store.embedder, "close"):
             try:
                 await asyncio.wait_for(self.store.embedder.close(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("Embedding provider close timed out")
             except Exception as e:
                 logger.error("Error closing embedding provider: %s", e)

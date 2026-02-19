@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import re
-
-import pytest
-
 from micropaw.security import validate_path, validate_url
 from micropaw.tools.shell import _BLOCKED_RE, _DANGEROUS_RE
 

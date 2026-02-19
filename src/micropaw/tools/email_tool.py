@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 
 from micropaw.tools.base import Tool, ToolContext
-from micropaw.tools.google_auth import authorize, ensure_token, api_get, api_post, api_error
+from micropaw.tools.google_auth import api_error, api_get, api_post, authorize, ensure_token
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,10 @@ async def _fetch_headers(token: str, msg_ids: list[str]) -> list[dict]:
     results = []
     for mid in msg_ids:
         try:
-            data = await api_get(token, f"{_GMAIL}/users/me/messages/{mid}", {"format": "metadata", "metadataHeaders": "From,Subject,Date"})
+            data = await api_get(
+                token, f"{_GMAIL}/users/me/messages/{mid}",
+                {"format": "metadata", "metadataHeaders": "From,Subject,Date"},
+            )
             hdrs = data.get("payload", {}).get("headers", [])
             results.append({
                 "id": mid,
@@ -206,7 +209,10 @@ class EmailTool(Tool):
             },
             "query": {
                 "type": "string",
-                "description": "Gmail search query (for search). Examples: 'from:alice', 'subject:meeting', 'is:unread after:2026/02/01'",
+                "description": (
+                    "Gmail search query (for search). Examples: "
+                    "'from:alice', 'subject:meeting', 'is:unread after:2026/02/01'"
+                ),
             },
         },
         "required": ["action"],

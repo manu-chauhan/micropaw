@@ -6,10 +6,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from micropaw.core.conversation import ConversationManager, MAX_HISTORY
-from micropaw.core.context import ContextManager, KEEP_RECENT
+from micropaw.core.context import KEEP_RECENT, ContextManager
+from micropaw.core.conversation import MAX_HISTORY, ConversationManager
 from micropaw.providers.base import AIResponse, Message, ToolCall
-
 
 # ---------------------------------------------------------------------------
 # ConversationManager

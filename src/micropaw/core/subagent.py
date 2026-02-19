@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from micropaw.providers.base import AIProvider, AIResponse, Message
+from micropaw.providers.base import AIProvider, Message
 from micropaw.tools.base import Tool, ToolContext, ToolDef, ToolRegistry
 
 logger = logging.getLogger(__name__)

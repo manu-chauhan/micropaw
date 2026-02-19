@@ -11,7 +11,6 @@ from micropaw.channels.base import chunk_text
 from micropaw.tools.base import Tool, ToolContext, ToolRegistry
 from micropaw.tools.path_security import validate_file_path, validate_write_path
 
-
 # ---------------------------------------------------------------------------
 # ToolRegistry tests
 # ---------------------------------------------------------------------------
@@ -236,6 +235,7 @@ class TestWebSearch:
     @pytest.mark.asyncio
     async def test_brave_returns_none_on_rate_limit(self):
         import httpx
+
         from micropaw.tools.web_search import _search_brave
 
         mock_response = MagicMock()
@@ -533,7 +533,6 @@ class TestDelegateTool:
 
     @pytest.mark.asyncio
     async def test_background_without_bus_errors(self):
-        from micropaw.providers.base import AIResponse
         from micropaw.tools.delegate import DelegateTool, set_delegate_deps
 
         mock_provider = AsyncMock()
@@ -549,9 +548,9 @@ class TestDelegateTool:
     @pytest.mark.asyncio
     async def test_background_passes_channel_directly(self):
         """Background delegation should pass platform as channel name, not parse from chat_id."""
-        from micropaw.providers.base import AIResponse
-        from micropaw.tools.delegate import set_delegate_deps, _run_background
         from micropaw.bus import MessageBus
+        from micropaw.providers.base import AIResponse
+        from micropaw.tools.delegate import _run_background, set_delegate_deps
 
         mock_provider = AsyncMock()
         mock_provider.chat = AsyncMock(return_value=AIResponse(
@@ -641,7 +640,7 @@ class TestChunker:
 
 class TestBlobSerialization:
     def test_roundtrip(self):
-        from micropaw.memory.embeddings import serialize_embedding_blob, deserialize_embedding_blob
+        from micropaw.memory.embeddings import deserialize_embedding_blob, serialize_embedding_blob
         original = [0.1, 0.2, 0.3, 0.4, 0.5]
         blob = serialize_embedding_blob(original)
         assert isinstance(blob, bytes)
@@ -651,7 +650,7 @@ class TestBlobSerialization:
             assert abs(a - b) < 1e-6
 
     def test_empty_embedding(self):
-        from micropaw.memory.embeddings import serialize_embedding_blob, deserialize_embedding_blob
+        from micropaw.memory.embeddings import deserialize_embedding_blob, serialize_embedding_blob
         assert serialize_embedding_blob([]) is None
         assert deserialize_embedding_blob(None) == []
         assert deserialize_embedding_blob(b"") == []
@@ -664,8 +663,8 @@ class TestBlobSerialization:
 class TestDocumentIngest:
     @pytest.mark.asyncio
     async def test_ingest_and_search(self, tmp_path):
-        from micropaw.memory.store import MemoryStore
         from micropaw.memory.embeddings import NullEmbedding
+        from micropaw.memory.store import MemoryStore
 
         store = MemoryStore(str(tmp_path / "test.db"), NullEmbedding())
         await store.init()
@@ -684,8 +683,8 @@ class TestDocumentIngest:
 
     @pytest.mark.asyncio
     async def test_reingest_replaces_old_chunks(self, tmp_path):
-        from micropaw.memory.store import MemoryStore
         from micropaw.memory.embeddings import NullEmbedding
+        from micropaw.memory.store import MemoryStore
 
         store = MemoryStore(str(tmp_path / "test.db"), NullEmbedding())
         await store.init()
@@ -702,8 +701,8 @@ class TestDocumentIngest:
 
     @pytest.mark.asyncio
     async def test_empty_content_not_ingested(self, tmp_path):
-        from micropaw.memory.store import MemoryStore
         from micropaw.memory.embeddings import NullEmbedding
+        from micropaw.memory.store import MemoryStore
 
         store = MemoryStore(str(tmp_path / "test.db"), NullEmbedding())
         await store.init()
@@ -715,8 +714,8 @@ class TestDocumentIngest:
 
     @pytest.mark.asyncio
     async def test_cross_user_isolation(self, tmp_path):
-        from micropaw.memory.store import MemoryStore
         from micropaw.memory.embeddings import NullEmbedding
+        from micropaw.memory.store import MemoryStore
 
         store = MemoryStore(str(tmp_path / "test.db"), NullEmbedding())
         await store.init()
@@ -1029,8 +1028,8 @@ class TestSqliteVec:
     @pytest.mark.asyncio
     async def test_null_embedding_text_fallback(self, tmp_path):
         """NullEmbedding falls through to text LIKE search."""
-        from micropaw.memory.store import MemoryStore
         from micropaw.memory.embeddings import NullEmbedding
+        from micropaw.memory.store import MemoryStore
 
         store = MemoryStore(str(tmp_path / "null.db"), NullEmbedding())
         await store.init()
@@ -1047,8 +1046,8 @@ class TestSqliteVec:
     @pytest.mark.asyncio
     async def test_search_memories_no_cap(self, tmp_path):
         """search_memories scans all memories without artificial row cap."""
-        from micropaw.memory.store import MemoryStore
         from micropaw.memory.embeddings import NullEmbedding
+        from micropaw.memory.store import MemoryStore
 
         store = MemoryStore(str(tmp_path / "mem.db"), NullEmbedding())
         await store.init()
@@ -1207,7 +1206,7 @@ class TestMessageBus:
 
     @pytest.mark.asyncio
     async def test_publish_on_closed_bus_raises(self):
-        from micropaw.bus import MessageBus, InboundMessage
+        from micropaw.bus import InboundMessage, MessageBus
         bus = MessageBus()
         bus.close()
         with pytest.raises(RuntimeError, match="closed"):
@@ -1235,7 +1234,6 @@ class TestMessageBus:
 class TestStoreCorruptJson:
     @pytest.mark.asyncio
     async def test_corrupt_tool_calls_returns_empty_tools(self, tmp_path):
-        import aiosqlite
         from micropaw.memory.store import MemoryStore
 
         db_path = tmp_path / "test.db"
@@ -1263,7 +1261,7 @@ class TestStoreCorruptJson:
     @pytest.mark.asyncio
     async def test_valid_tool_calls_loaded(self, tmp_path):
         import json
-        import aiosqlite
+
         from micropaw.memory.store import MemoryStore
 
         db_path = tmp_path / "test.db"

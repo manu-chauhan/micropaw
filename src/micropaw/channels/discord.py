@@ -113,7 +113,7 @@ class DiscordChannel(Channel):
         # Wait up to 30 seconds for the bot to connect
         try:
             await asyncio.wait_for(ready_event.wait(), timeout=30.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._task.cancel()
             raise RuntimeError("Discord bot failed to connect within 30 seconds")
 

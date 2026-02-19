@@ -1,16 +1,14 @@
 """Tests for contacts tool and files tool."""
 
 import asyncio
-import tempfile
-from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
 from micropaw.memory.store import MemoryStore
 from micropaw.tools.base import ToolContext
-from micropaw.tools.contacts_tool import ContactsTool, set_store as set_contacts_store
-from micropaw.tools.files_tool import FilesTool, _FILES_DIR, _safe_path
+from micropaw.tools.contacts_tool import ContactsTool
+from micropaw.tools.contacts_tool import set_store as set_contacts_store
+from micropaw.tools.files_tool import _FILES_DIR, FilesTool
 
 _ctx = ToolContext(conversation_id="test", user_id="u1", platform="test")
 
@@ -169,7 +167,9 @@ class TestFilesTool:
         assert result == "world"
 
     def test_save_subdirectory(self):
-        result = self.run(self.tool.execute({"action": "save", "path": "notes/meeting.md", "content": "# Meeting"}, _ctx))
+        result = self.run(self.tool.execute(
+            {"action": "save", "path": "notes/meeting.md", "content": "# Meeting"}, _ctx,
+        ))
         assert "Saved" in result
         assert (self.test_dir / "notes" / "meeting.md").exists()
 

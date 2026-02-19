@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from micropaw.config import (
     Config,
@@ -186,7 +183,6 @@ class TestSaveLoad:
 
     def test_warns_world_readable_config(self, tmp_path: Path):
         """Config file with group/other read bits should produce a warning."""
-        import logging
         config_file = tmp_path / "config.json"
         config_file.write_text("{}")
         config_file.chmod(0o644)  # World-readable

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, Callable, Awaitable
+from typing import Any
 
 import httpx
 
@@ -219,7 +220,10 @@ class Agent:
             messages = await self._execute_tools(messages, response, tool_context, conv_id)
             await _safe_typing(send_typing)
 
-        fallback = response.content if response and response.content else "I've been working on this for a while. Here's what I have so far."
+        fallback = (
+            response.content if response and response.content
+            else "I've been working on this for a while. Here's what I have so far."
+        )
         await self.conversations.save_message(conv_id, Message(role="assistant", content=fallback))
         return fallback
 
@@ -350,7 +354,10 @@ def _classify_error(e: Exception) -> str:
     if isinstance(e, httpx.TimeoutException):
         return "The AI provider timed out. Try again, or switch to a faster model."
     if isinstance(e, httpx.HTTPStatusError):
-        return _HTTP_ERRORS.get(e.response.status_code, f"AI provider error (HTTP {e.response.status_code}). Try again or check your config.")
+        return _HTTP_ERRORS.get(
+            e.response.status_code,
+            f"AI provider error (HTTP {e.response.status_code}). Try again or check your config.",
+        )
     return "Something went wrong talking to the AI provider. Please try again."
 
 

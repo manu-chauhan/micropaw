@@ -19,7 +19,13 @@ _DEFAULT_BASE = "https://api.openai.com"
 class OpenAIProvider(AIProvider):
     name = "openai"
 
-    def __init__(self, api_key: str, model: str = "gpt-4o", max_tokens: int = 4096, base_url: str = _DEFAULT_BASE) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gpt-4o",
+        max_tokens: int = 4096,
+        base_url: str = _DEFAULT_BASE,
+    ) -> None:
         self.api_key = api_key
         self.model = model
         self.max_tokens = max_tokens
@@ -65,7 +71,14 @@ class OpenAIProvider(AIProvider):
         body: dict = {"model": self.model, "messages": api_messages, "max_tokens": self.max_tokens}
         if tools:
             body["tools"] = [
-                {"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.parameters}}
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.parameters,
+                    },
+                }
                 for t in tools
             ]
         return body
@@ -103,7 +116,9 @@ class OpenAIProvider(AIProvider):
             stop_reason=choice.get("finish_reason", ""),
         )
 
-    async def chat_stream(self, messages: list[Message], tools: list[ToolDef] | None = None) -> AsyncGenerator[str | AIResponse, None]:
+    async def chat_stream(
+        self, messages: list[Message], tools: list[ToolDef] | None = None,
+    ) -> AsyncGenerator[str | AIResponse, None]:
         body = self._build_body(messages, tools)
         body["stream"] = True
         body["stream_options"] = {"include_usage": True}
