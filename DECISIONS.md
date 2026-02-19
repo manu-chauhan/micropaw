@@ -410,9 +410,61 @@
 - No file size limit on save.
 **Files:** `files_tool.py` (new), `cli.py` (registration).
 
-### Metrics (v0.1.2)
-- Source LOC: ~8,400
-- Test LOC: ~4,200
-- Tests: 376 passing
-- Tools: 16 (+ contacts, files)
+### D38: Provider Template Method Pattern
+**Decided:** 2026-02-19
+**Rationale:** All 4 providers duplicated the same chat() pattern: build body → log → retry → parse response. Also duplicated close() with `_client.aclose()`.
+**Design:**
+- Base class provides concrete `chat()` calling `_build_body()` → `retry_on_transient(_do_chat)` → `_parse_response()`.
+- Subclasses override only the three hooks. `close()` in base with `hasattr(self, "_client")` guard.
+- Removed `retry_on_transient` import from all 4 providers.
+**Impact:** -16 LOC net across 5 files. Single retry/log path.
+
+### D39: Channel stream_response() Helper
+**Decided:** 2026-02-19
+**Rationale:** Telegram, Discord, Slack all had ~25 lines of identical streaming logic (accumulate chunks, throttle edits, chunk final response).
+**Design:**
+- `stream_response()` in `channels/base.py` takes `edit_fn`/`send_fn` lambdas for platform-specific message editing.
+- Accumulate + throttle + edit pattern with configurable `edit_interval` and `max_msg_len`.
+**Impact:** Replaced ~25-line blocks with ~8-line calls in each channel. Removed `import time` from 3 channels.
+
+### D40: ToolResult Type for Media Returns
+**Decided:** 2026-02-19
+**Rationale:** Screenshots from web_browse need to pass image bytes back through the agent to the provider. Plain string returns can't carry binary media.
+**Design:**
+- `ToolResult(text, media: list[MediaItem])` dataclass in `tools/base.py`.
+- Agent normalizes `str | ToolResult` in `_execute_tools`.
+- Claude provider emits base64 image blocks in tool_result content. Other providers: text-only.
+**Impact:** Tools can now return images alongside text. Backward compatible — existing str-returning tools unchanged.
+
+### D41: Interactive Web Browse with Sessions
+**Decided:** 2026-02-19
+**Rationale:** Single-page browsing (navigate → extract text → close) can't handle multi-step interactions like clicking links, filling forms, or scrolling to find content.
+**Design:**
+- 5 actions: browse, click, type, scroll, screenshot.
+- Module-level `_sessions` dict keyed by `conversation_id` → `(context, page)`.
+- `_get_session()` creates or reuses; `close_session()` called by agent via `try/finally`.
+- Click: CSS selector → `get_by_text()` fallback. Type: CSS selector → `get_by_placeholder()` fallback.
+- Screenshot returns `ToolResult` with `MediaItem(type="image", ...)`.
+**Impact:** Multi-step browsing in a single conversation turn. Sessions auto-cleanup.
+
+### D42: Location Context
+**Decided:** 2026-02-19
+**Rationale:** "Near me" queries need geographic context. Without it, web searches return generic results.
+**Design:**
+- `persona.location` field in config + `MICROPAW_LOCATION` env override.
+- Injected into system prompt: "User's location: X. Use this for local queries like 'near me'."
+- Added to setup wizard as optional prompt.
+**Impact:** Zero-config for users who set location once. LLM can add location to search queries automatically.
+
+### D43: claude.py _image_block() Static Method
+**Decided:** 2026-02-19
+**Rationale:** Identical base64 image encoding appeared in both tool_result and user message branches of `_build_body`.
+**Design:** Single `_image_block(media)` static method, used via list comprehension in both paths.
+**Impact:** -8 LOC, single source of truth for image encoding format.
+
+### Metrics (current)
+- Source LOC: ~8,700
+- Test LOC: ~4,300
+- Tests: 380 passing
+- Tools: 16 (48 actions)
 - Dependencies: 8 core, 7 optional extras

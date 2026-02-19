@@ -4,7 +4,41 @@ All entries in reverse chronological order. LOC = source lines (excluding tests/
 
 ---
 
-### (pending) — feat: contacts + files tools, deduplicate codebase, v0.1.2
+### `e334f7c` 2026-02-19 — feat: interactive web browsing, screenshots, location context
+**Source: ~8,700 LOC | Tests: 380 | Tools: 16 (48 actions)**
+
+Added:
+- Interactive web_browse: 5 actions (browse, click, type, scroll, screenshot)
+- Per-conversation browser sessions with auto-cleanup via try/finally
+- ToolResult(text, media) type — tools can return images alongside text
+- Claude provider: base64 image blocks in tool_result content
+- Location context: `persona.location` config + `MICROPAW_LOCATION` env
+- Setup wizard: optional location prompt
+- `_image_block()` static method in claude.py — single source of truth for image encoding
+- ROADMAP_WEB.md: web capabilities roadmap (Phase 1 done, Phase 2 planned)
+- SKILLS.md support: `~/.micropaw/SKILLS.md` for multi-step workflow hints
+- 4 new tests (location config x2, ToolResult with media, ToolResult backward compat)
+
+Files: `web_browse.py`, `base.py` (tools), `agent.py`, `claude.py`, `config.py`, `setup_wizard.py`
+
+---
+
+### `6dcbca8` 2026-02-19 — refactor: deduplicate providers and channel streaming
+**Source: ~8,500 LOC | Tests: 376 | Tools: 16**
+
+Deduplicated:
+- Provider template method: base.chat() → _build_body/_do_chat/_parse_response in subclasses
+- Concrete close() in base with hasattr guard, removed from all 4 providers
+- Removed retry_on_transient import from all 4 providers
+- Channel stream_response() helper in channels/base.py with edit_fn/send_fn lambdas
+- Replaced ~25-line streaming blocks in telegram/discord/slack with ~8-line calls
+
+Files: `providers/base.py`, `claude.py`, `openai.py`, `gemini.py`, `ollama.py`,
+`channels/base.py`, `telegram.py`, `discord.py`, `slack.py`
+
+---
+
+### `6287a96` 2026-02-19 — feat: contacts + files tools, deduplicate codebase, v0.1.2
 **Source: ~8,400 LOC | Tests: 376 | Tools: 16**
 
 Added:
