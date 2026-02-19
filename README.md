@@ -6,7 +6,7 @@
 
 ### A local-first AI agent that runs on your machine, talks on every platform, and keeps your keys to yourself.
 
-**Your AI. Your model. Your machine.**
+<h4>Your AI. Your model. Your machine.</h4>
 
 6 channels. 4 providers. 16 tools. Shared memory everywhere. ~8,700 lines of Python. Zero SDK dependencies.
 
