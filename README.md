@@ -8,7 +8,7 @@
 
 **Your AI. Your machine. Your keys.**
 
-6 channels. 4 providers. 16 tools. Shared memory everywhere. ~8,400 lines of Python. Zero SDK dependencies.
+6 channels. 4 providers. 16 tools. Shared memory everywhere. ~8,600 lines of Python. Zero SDK dependencies.
 
 [![PyPI](https://img.shields.io/pypi/v/micropaw?style=for-the-badge)](https://pypi.org/project/micropaw/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?style=for-the-badge)](https://python.org)
@@ -20,9 +20,11 @@
 
 ---
 
+> **100% free with Ollama** — Run MicroPaw entirely on your machine with zero API keys, zero cost, zero data leaving your network. Just `ollama pull llama3.1` (or `phi3` / `gemma2:2b` on lighter hardware) and go. Cloud providers (Claude, GPT-4o, Gemini) are optional.
+
 ```bash
 pip install micropaw
-paw setup     # pick provider, paste key
+paw setup     # pick a provider — Ollama is free, cloud keys are optional
 paw chat      # start talking
 ```
 
@@ -84,7 +86,7 @@ paw setup && paw chat
 
 - **Zero SDK dependencies** — All 4 AI providers via raw httpx. No `anthropic`, `openai`, or `google-genai` packages. Switching providers is a config change.
 
-- **14 built-in tools** — Web search (Brave → SearXNG → DuckDuckGo), browser automation, file I/O, shell, HTTP requests, memory, vision, PDF, sessions, delegation, cron scheduling, email (Gmail), calendar (Google Calendar) — all security-hardened.
+- **16 built-in tools** — Web search (Brave → SearXNG → DuckDuckGo), browser automation, file I/O, shell, HTTP requests, memory, contacts, user files, vision, PDF, sessions, delegation, cron scheduling, email (Gmail), calendar (Google Calendar) — all security-hardened.
 
 - **Raw WebSocket** — WebChat channel implements RFC 6455 from scratch. No aiohttp. ~100 LOC.
 
@@ -101,15 +103,15 @@ paw setup && paw chat
 | | **MicroPaw** | **OpenClaw** | **NanoClaw** | **PicoClaw** | **MimiClaw** |
 |---|---|---|---|---|---|
 | **Language** | Python | TypeScript | TypeScript | Go | C |
-| **Codebase** | ~8,400 LOC | ~430k LOC | ~500 LOC | ~4k LOC | ~15k LOC |
+| **Codebase** | ~8,600 LOC | ~430k LOC | ~500 LOC | ~4k LOC | ~15k LOC |
 | **Channels** | 6 | 15+ | 1 (WhatsApp) | 5 | 3 |
-| **Tools** | 14 | 25 + 53 skills | SDK-dependent | 6 | 6 |
+| **Tools** | 16 | 25 + 53 skills | SDK-dependent | 6 | 6 |
 | **AI SDKs** | None — raw httpx | Internal framework | Anthropic SDK | None — raw HTTP | None — raw HTTP |
 | **RAG / Vectors** | sqlite-vec ANN + fallback | sqlite-vec + BM25 | No | No | No |
 | **Telemetry** | None, ever | Local JSONL (opt-out) | None | None | None |
 | **License** | MIT | MIT | MIT | MIT | MIT |
 
-**MicroPaw sits in the sweet spot** — full-featured like OpenClaw (RAG, 6 channels, 16 tools, scheduling, email, calendar, multi-agent delegation) but lightweight like PicoClaw (~8,400 LOC, zero SDK dependencies). No telemetry, no bloat, no wrappers.
+**MicroPaw sits in the sweet spot** — full-featured like OpenClaw (RAG, 6 channels, 16 tools, scheduling, email, calendar, multi-agent delegation) but lightweight like PicoClaw (~8,600 LOC, zero SDK dependencies). No telemetry, no bloat, no wrappers.
 
 ---
 
@@ -187,7 +189,7 @@ paw start
 
 **Fully local (no internet):**
 ```bash
-ollama pull llama3.1
+ollama pull llama3.1          # or phi3 / gemma2:2b on lighter hardware
 pip install micropaw
 paw setup    # select Ollama
 paw chat
@@ -208,6 +210,8 @@ paw chat
 | `file_write` | Create and modify files |
 | `shell` | Execute commands (40+ dangerous patterns blocked) |
 | `memory` | Save, search, list, delete facts across sessions |
+| `contacts` | Store and search contacts — auto-resolves names for email/calendar |
+| `files` | Save, read, list, delete user files in `~/.micropaw/files/` |
 | `vision` | Analyze images via provider vision API |
 | `pdf_read` | Extract text from PDFs with page ranges |
 | `sessions` | List and export conversation history |
@@ -484,7 +488,7 @@ docker compose --profile full up                     # Everything
 <summary><strong>Architecture</strong></summary>
 
 ```
-src/micropaw/          ~8,400 LOC source + ~4,200 LOC tests
+src/micropaw/          ~8,600 LOC source + ~4,200 LOC tests
  cli.py                 Click CLI (14 commands)
  config.py              Single Pydantic config model
  connector.py           Guided channel setup + live validation
@@ -513,7 +517,7 @@ Full decision log: [`DECISIONS.md`](DECISIONS.md)
 
 ```bash
 pip install ".[dev]"
-pytest                 # 334 tests
+pytest                 # 376 tests
 ruff check src/
 mypy src/
 ```
