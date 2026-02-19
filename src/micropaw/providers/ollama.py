@@ -9,7 +9,7 @@ from collections.abc import AsyncGenerator
 
 import httpx
 
-from micropaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef, parse_sse, retry_on_transient
+from micropaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef, parse_sse
 
 logger = logging.getLogger(__name__)
 
@@ -77,12 +77,7 @@ class OllamaProvider(AIProvider):
         resp.raise_for_status()
         return resp.json()
 
-    async def chat(self, messages: list[Message], tools: list[ToolDef] | None = None) -> AIResponse:
-        body = self._build_body(messages, tools, stream=False)
-        logger.debug("Calling Ollama %s", self.model)
-
-        data = await retry_on_transient(self._do_chat, body)
-
+    def _parse_response(self, data: dict) -> AIResponse:
         msg = data.get("message", {})
         return AIResponse(
             content=msg.get("content", ""),
@@ -128,6 +123,3 @@ class OllamaProvider(AIProvider):
             tool_calls=tool_calls,
             usage={"input": input_tokens, "output": output_tokens},
         )
-
-    async def close(self) -> None:
-        await self._client.aclose()

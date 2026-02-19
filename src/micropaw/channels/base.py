@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
+
+logger = logging.getLogger(__name__)
 
 MessageHandler = Callable[[str, str, str, str | None], Awaitable[str]]
 StreamHandler = Callable[[str, str, str, str | None, Callable[[str], Awaitable[None]] | None], Awaitable[str]]
@@ -35,6 +39,44 @@ class Channel(ABC):
 
     async def send_typing(self, chat_id: str) -> None:
         pass
+
+
+async def stream_response(
+    handler: StreamHandler,
+    text: str,
+    user_id: str,
+    platform: str,
+    channel_id: str | None,
+    edit_fn: Callable[[str], Awaitable[None]],
+    send_fn: Callable[[str], Awaitable[None]],
+    max_msg_len: int,
+    edit_interval: float,
+) -> None:
+    """Handle streaming: accumulate chunks with throttled edits, then finalize."""
+    accumulated = ""
+    last_edit = 0.0
+
+    async def on_chunk(chunk: str) -> None:
+        nonlocal accumulated, last_edit
+        accumulated += chunk
+        now = time.monotonic()
+        if now - last_edit >= edit_interval:
+            last_edit = now
+            try:
+                await edit_fn(accumulated[:max_msg_len - 4] + " ...")
+            except Exception as e:
+                logger.debug("%s stream edit failed: %s", platform, e)
+
+    response = await handler(text, user_id, platform, channel_id, on_chunk)
+
+    for i, part in enumerate(chunk_text(response, max_msg_len)):
+        try:
+            if i == 0:
+                await edit_fn(part)
+            else:
+                await send_fn(part)
+        except Exception as e:
+            logger.error("%s send error: %s", platform, e)
 
 
 def chunk_text(text: str, max_len: int) -> list[str]:

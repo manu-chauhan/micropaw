@@ -135,6 +135,11 @@ class Agent:
                 parts.append(f"- {tool.name}: {tool.description}")
             parts.append("\nUse tools for real-world actions. Don't use tools when a text response suffices.")
 
+        # Skills: multi-step workflow hints from SKILLS.md
+        skills = _read_file(CONFIG_DIR / "SKILLS.md", max_len=4096)
+        if skills:
+            parts.append(f"\nWorkflow guidelines:\n{skills}")
+
         # Memories
         if recent_memories:
             parts.append("\nThings you remember:")

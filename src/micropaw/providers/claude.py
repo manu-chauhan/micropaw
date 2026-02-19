@@ -9,7 +9,7 @@ from collections.abc import AsyncGenerator
 
 import httpx
 
-from micropaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef, parse_sse, retry_on_transient
+from micropaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef, parse_sse
 
 logger = logging.getLogger(__name__)
 
@@ -98,12 +98,7 @@ class ClaudeProvider(AIProvider):
         resp.raise_for_status()
         return resp.json()
 
-    async def chat(self, messages: list[Message], tools: list[ToolDef] | None = None) -> AIResponse:
-        body = self._build_body(messages, tools)
-        logger.debug("Calling Claude %s", self.model)
-
-        data = await retry_on_transient(self._do_chat, body)
-
+    def _parse_response(self, data: dict) -> AIResponse:
         content = ""
         tool_calls: list[ToolCall] = []
         for block in data.get("content", []):
@@ -111,7 +106,6 @@ class ClaudeProvider(AIProvider):
                 content += block["text"]
             elif block["type"] == "tool_use":
                 tool_calls.append(ToolCall(id=block["id"], name=block["name"], arguments=block.get("input", {})))
-
         usage = data.get("usage", {})
         return AIResponse(
             content=content,
@@ -182,6 +176,3 @@ class ClaudeProvider(AIProvider):
             tool_calls=tool_calls,
             usage={"input": input_tokens, "output": output_tokens},
         )
-
-    async def close(self) -> None:
-        await self._client.aclose()

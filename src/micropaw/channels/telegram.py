@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import logging
-import time
 from typing import Any
 
-from micropaw.channels.base import Channel, chunk_text
+from micropaw.channels.base import Channel, chunk_text, stream_response
 
 logger = logging.getLogger(__name__)
 
@@ -69,36 +68,15 @@ class TelegramChannel(Channel):
                     chat_id=chat.id, text="...",
                     reply_to_message_id=update.message.message_id if is_group else None,
                 )
-                accumulated = ""
-                last_edit = 0.0
-
-                async def on_chunk(chunk: str) -> None:
-                    nonlocal accumulated, last_edit
-                    accumulated += chunk
-                    now = time.monotonic()
-                    if now - last_edit >= STREAM_EDIT_INTERVAL:
-                        last_edit = now
-                        try:
-                            await context.bot.edit_message_text(
-                                chat_id=chat.id, message_id=placeholder.message_id,
-                                text=accumulated[:MAX_MSG_LEN - 4] + " ...",
-                            )
-                        except Exception as e:
-                            logger.debug("Telegram stream edit failed: %s", e)
-
                 await send_typing()
-                response = await self._stream_handler(text, user_id, "telegram", channel_id, on_chunk)
-
-                for i, chunk in enumerate(chunk_text(response, MAX_MSG_LEN)):
-                    try:
-                        if i == 0:
-                            await context.bot.edit_message_text(
-                                chat_id=chat.id, message_id=placeholder.message_id, text=chunk,
-                            )
-                        else:
-                            await context.bot.send_message(chat_id=chat.id, text=chunk)
-                    except Exception as e:
-                        logger.error("Telegram send error: %s", e)
+                await stream_response(
+                    self._stream_handler, text, user_id, "telegram", channel_id,
+                    edit_fn=lambda t: context.bot.edit_message_text(
+                        chat_id=chat.id, message_id=placeholder.message_id, text=t,
+                    ),
+                    send_fn=lambda t: context.bot.send_message(chat_id=chat.id, text=t),
+                    max_msg_len=MAX_MSG_LEN, edit_interval=STREAM_EDIT_INTERVAL,
+                )
 
             elif self._handler:
                 await send_typing()

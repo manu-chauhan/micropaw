@@ -8,7 +8,7 @@ from collections.abc import AsyncGenerator
 
 import httpx
 
-from micropaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef, parse_sse, retry_on_transient
+from micropaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef, parse_sse
 
 logger = logging.getLogger(__name__)
 
@@ -104,12 +104,7 @@ class GeminiProvider(AIProvider):
         resp.raise_for_status()
         return resp.json()
 
-    async def chat(self, messages: list[Message], tools: list[ToolDef] | None = None) -> AIResponse:
-        body = self._build_body(messages, tools)
-        logger.debug("Calling Gemini %s", self.model)
-
-        data = await retry_on_transient(self._do_chat, body)
-
+    def _parse_response(self, data: dict) -> AIResponse:
         content, tool_calls = self._parse_candidates(data)
         meta = data.get("usageMetadata", {})
         return AIResponse(
@@ -150,6 +145,3 @@ class GeminiProvider(AIProvider):
             tool_calls=tool_calls,
             usage={"input": usage_meta.get("promptTokenCount", 0), "output": usage_meta.get("candidatesTokenCount", 0)},
         )
-
-    async def close(self) -> None:
-        await self._client.aclose()

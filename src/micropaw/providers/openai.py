@@ -9,7 +9,7 @@ from collections.abc import AsyncGenerator
 
 import httpx
 
-from micropaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef, parse_sse, retry_on_transient
+from micropaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef, parse_sse
 
 logger = logging.getLogger(__name__)
 
@@ -88,18 +88,12 @@ class OpenAIProvider(AIProvider):
         resp.raise_for_status()
         return resp.json()
 
-    async def chat(self, messages: list[Message], tools: list[ToolDef] | None = None) -> AIResponse:
-        body = self._build_body(messages, tools)
-        logger.debug("Calling OpenAI %s", self.model)
-
-        data = await retry_on_transient(self._do_chat, body)
-
+    def _parse_response(self, data: dict) -> AIResponse:
         choices = data.get("choices") or []
         if not choices:
             return AIResponse(content="", tool_calls=[], usage={}, stop_reason="error")
         choice = choices[0]
         msg = choice.get("message", {})
-
         tool_calls: list[ToolCall] = []
         for tc in msg.get("tool_calls") or []:
             try:
@@ -107,7 +101,6 @@ class OpenAIProvider(AIProvider):
             except (json.JSONDecodeError, KeyError):
                 args = {}
             tool_calls.append(ToolCall(id=tc["id"], name=tc["function"]["name"], arguments=args))
-
         usage = data.get("usage", {})
         return AIResponse(
             content=msg.get("content") or "",
@@ -172,6 +165,3 @@ class OpenAIProvider(AIProvider):
             final_tool_calls.append(ToolCall(id=entry["id"], name=entry["name"], arguments=args))
 
         yield AIResponse(content=content, tool_calls=final_tool_calls, usage=usage)
-
-    async def close(self) -> None:
-        await self._client.aclose()

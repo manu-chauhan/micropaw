@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from typing import Any
 
-from micropaw.channels.base import Channel, chunk_text
+from micropaw.channels.base import Channel, chunk_text, stream_response
 
 logger = logging.getLogger(__name__)
 
@@ -59,30 +58,12 @@ class DiscordChannel(Channel):
 
             if self._stream_handler:
                 placeholder = await message.channel.send("...")
-                accumulated = ""
-                last_edit = 0.0
-
-                async def on_chunk(chunk: str) -> None:
-                    nonlocal accumulated, last_edit
-                    accumulated += chunk
-                    now = time.monotonic()
-                    if now - last_edit >= STREAM_EDIT_INTERVAL:
-                        last_edit = now
-                        try:
-                            await placeholder.edit(content=accumulated[:MAX_MSG_LEN - 4] + " ...")
-                        except Exception as e:
-                            logger.debug("Discord stream edit failed: %s", e)
-
-                response = await self._stream_handler(text, user_id, "discord", channel_id, on_chunk)
-
-                for i, chunk in enumerate(chunk_text(response, MAX_MSG_LEN)):
-                    try:
-                        if i == 0:
-                            await placeholder.edit(content=chunk)
-                        else:
-                            await message.channel.send(chunk)
-                    except Exception as e:
-                        logger.error("Discord send error: %s", e)
+                await stream_response(
+                    self._stream_handler, text, user_id, "discord", channel_id,
+                    edit_fn=lambda t: placeholder.edit(content=t),
+                    send_fn=lambda t: message.channel.send(t),
+                    max_msg_len=MAX_MSG_LEN, edit_interval=STREAM_EDIT_INTERVAL,
+                )
 
             elif self._handler:
                 async with message.channel.typing():

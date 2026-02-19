@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from typing import Any
 
-from micropaw.channels.base import Channel, chunk_text
+from micropaw.channels.base import Channel, chunk_text, stream_response
 
 logger = logging.getLogger(__name__)
 
@@ -60,35 +59,14 @@ class SlackChannel(Channel):
 
             if self._stream_handler:
                 placeholder = await say(text="...", thread_ts=thread_ts)
-                accumulated = ""
-                last_edit = 0.0
-
-                async def on_chunk(chunk: str) -> None:
-                    nonlocal accumulated, last_edit
-                    accumulated += chunk
-                    now = time.monotonic()
-                    if now - last_edit >= STREAM_EDIT_INTERVAL:
-                        last_edit = now
-                        try:
-                            await client.chat_update(
-                                channel=channel_id, ts=placeholder["ts"],
-                                text=accumulated[:MAX_MSG_LEN - 4] + " ...",
-                            )
-                        except Exception as e:
-                            logger.debug("Slack stream edit failed: %s", e)
-
-                response = await self._stream_handler(text, user_id, "slack", channel_id, on_chunk)
-
-                for i, chunk in enumerate(chunk_text(response, MAX_MSG_LEN)):
-                    try:
-                        if i == 0:
-                            await client.chat_update(
-                                channel=channel_id, ts=placeholder["ts"], text=chunk,
-                            )
-                        else:
-                            await say(text=chunk, thread_ts=thread_ts)
-                    except Exception as e:
-                        logger.error("Slack send error: %s", e)
+                await stream_response(
+                    self._stream_handler, text, user_id, "slack", channel_id,
+                    edit_fn=lambda t: client.chat_update(
+                        channel=channel_id, ts=placeholder["ts"], text=t,
+                    ),
+                    send_fn=lambda t: say(text=t, thread_ts=thread_ts),
+                    max_msg_len=MAX_MSG_LEN, edit_interval=STREAM_EDIT_INTERVAL,
+                )
 
             elif self._handler:
                 response = await self._handler(text, user_id, "slack", channel_id)

@@ -60,7 +60,7 @@ paw setup && paw chat
 
 - **Proactive heartbeat** — Drop tasks in `~/.micropaw/HEARTBEAT.md` and MicroPaw picks them up every 30 minutes. No prompting needed — it just does the work.
 
-- **Custom persona** — Create `~/.micropaw/SOUL.md` for personality and `~/.micropaw/USER.md` for user context. Your assistant, your rules.
+- **Custom persona & skills** — Create `~/.micropaw/SOUL.md` for personality, `~/.micropaw/USER.md` for user context, and `~/.micropaw/SKILLS.md` for multi-step workflow hints. Your assistant, your rules.
 
 ### Reliability
 
@@ -105,7 +105,7 @@ paw setup && paw chat
 | **Language** | Python | TypeScript | TypeScript | Go | C |
 | **Codebase** | ~8,600 LOC | ~430k LOC | ~500 LOC | ~4k LOC | ~15k LOC |
 | **Channels** | 6 | 15+ | 1 (WhatsApp) | 5 | 3 |
-| **Tools** | 16 | 25 + 53 skills | SDK-dependent | 6 | 6 |
+| **Tools** | 16 (48 actions) | 25 + 53 prompt templates | SDK-dependent | 6 | 6 |
 | **AI SDKs** | None — raw httpx | Internal framework | Anthropic SDK | None — raw HTTP | None — raw HTTP |
 | **RAG / Vectors** | sqlite-vec ANN + fallback | sqlite-vec + BM25 | No | No | No |
 | **Telemetry** | None, ever | Local JSONL (opt-out) | None | None | None |
@@ -431,6 +431,7 @@ Config file: `~/.micropaw/config.json` (0600 permissions).
 Or use persona files for richer customization:
 - `~/.micropaw/SOUL.md` — personality, values, behavioral guidelines (overrides `personality` field)
 - `~/.micropaw/USER.md` — user preferences, timezone, language, personal context
+- `~/.micropaw/SKILLS.md` — multi-step workflow hints (e.g., "when asked to email someone by name, search contacts first")
 
 ### Custom API Base URLs
 

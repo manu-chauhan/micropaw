@@ -89,18 +89,35 @@ class AIProvider(ABC):
     """Abstract base class for AI providers.
 
     All providers normalize to the same Message/AIResponse/ToolCall types.
+    Subclasses implement _build_body, _do_chat, and _parse_response;
+    the template chat() handles logging and retry.
     """
 
     name: str
+    model: str
 
-    @abstractmethod
+    def _build_body(self, messages: list[Message], tools: list[ToolDef] | None) -> dict:
+        """Convert normalized messages/tools into the provider's API body format."""
+        raise NotImplementedError
+
+    async def _do_chat(self, body: dict) -> dict:
+        """POST the body to the provider's API and return the raw JSON response."""
+        raise NotImplementedError
+
+    def _parse_response(self, data: dict) -> AIResponse:
+        """Parse the provider's raw JSON response into an AIResponse."""
+        raise NotImplementedError
+
     async def chat(
         self,
         messages: list[Message],
         tools: list[ToolDef] | None = None,
     ) -> AIResponse:
         """Send messages and get a response, optionally with tool use."""
-        ...
+        body = self._build_body(messages, tools)
+        logger.debug("Calling %s %s", self.name, self.model)
+        data = await retry_on_transient(self._do_chat, body)
+        return self._parse_response(data)
 
     async def chat_stream(
         self,
@@ -119,6 +136,8 @@ class AIProvider(ABC):
 
     async def close(self) -> None:
         """Close any HTTP clients held by this provider."""
+        if hasattr(self, "_client"):
+            await self._client.aclose()
 
 
 def parse_sse(line: str, prefix: str = "data: ") -> dict | None:
