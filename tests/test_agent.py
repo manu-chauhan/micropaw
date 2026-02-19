@@ -427,3 +427,83 @@ class TestSystemPrompt:
         agent = Agent(config, provider, registry, store)
         prompt = agent._build_system_prompt("terminal")
         assert "Spanish" in prompt
+
+    def test_includes_location(self):
+        provider = MockProvider()
+        config = Config()
+        config.persona.location = "San Francisco, CA"
+        registry = ToolRegistry()
+        store = MagicMock()
+        store.get_recent_memories = AsyncMock(return_value=[])
+        agent = Agent(config, provider, registry, store)
+        prompt = agent._build_system_prompt("terminal")
+        assert "San Francisco" in prompt
+        assert "near me" in prompt
+
+    def test_no_location_when_empty(self):
+        provider = MockProvider()
+        config = Config()
+        registry = ToolRegistry()
+        store = MagicMock()
+        store.get_recent_memories = AsyncMock(return_value=[])
+        agent = Agent(config, provider, registry, store)
+        prompt = agent._build_system_prompt("terminal")
+        assert "location" not in prompt.lower()
+
+
+class TestToolResult:
+    @pytest.mark.asyncio
+    async def test_tool_returning_tool_result(self):
+        """Agent handles ToolResult with media from a tool."""
+        from micropaw.providers.base import MediaItem
+        from micropaw.tools.base import ToolResult
+
+        class ScreenshotTool(Tool):
+            name = "screenshot"
+            description = "Take a screenshot"
+            parameters: dict[str, Any] = {"type": "object", "properties": {}}
+
+            async def execute(self, args, context):
+                return ToolResult(
+                    text="Screenshot of example.com",
+                    media=[MediaItem(type="image", data=b"fakepng", mime_type="image/png")],
+                )
+
+        provider = MockProvider([
+            AIResponse(
+                content="",
+                tool_calls=[ToolCall(id="tc1", name="screenshot", arguments={})],
+                usage={"input": 10, "output": 5},
+            ),
+            AIResponse(content="I can see the page.", tool_calls=[], usage={"input": 20, "output": 10}),
+        ])
+        agent = _make_agent(provider, tools=[ScreenshotTool()])
+        result = await agent.handle_message("take a screenshot", "user1", "terminal")
+        assert result == "I can see the page."
+        # Verify tool message was saved with media
+        save_calls = agent.store.save_message.call_args_list
+        tool_msgs = [c for c in save_calls if c[0][1].role == "tool"]
+        assert len(tool_msgs) == 1
+        assert tool_msgs[0][0][1].content == "Screenshot of example.com"
+        assert len(tool_msgs[0][0][1].media) == 1
+        assert tool_msgs[0][0][1].media[0].mime_type == "image/png"
+
+    @pytest.mark.asyncio
+    async def test_tool_returning_string_still_works(self):
+        """Existing tools returning str continue to work."""
+        provider = MockProvider([
+            AIResponse(
+                content="",
+                tool_calls=[ToolCall(id="tc1", name="echo", arguments={"text": "hello"})],
+                usage={"input": 10, "output": 5},
+            ),
+            AIResponse(content="Got it.", tool_calls=[], usage={"input": 20, "output": 10}),
+        ])
+        agent = _make_agent(provider, tools=[EchoTool()])
+        result = await agent.handle_message("echo hello", "user1", "terminal")
+        assert result == "Got it."
+        save_calls = agent.store.save_message.call_args_list
+        tool_msgs = [c for c in save_calls if c[0][1].role == "tool"]
+        assert len(tool_msgs) == 1
+        assert tool_msgs[0][0][1].content == "echo: hello"
+        assert tool_msgs[0][0][1].media == []

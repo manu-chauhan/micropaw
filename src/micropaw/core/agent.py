@@ -15,7 +15,7 @@ from micropaw.core.context import ContextManager
 from micropaw.core.conversation import ConversationManager
 from micropaw.memory.store import MemoryStore
 from micropaw.providers.base import AIProvider, AIResponse, Message
-from micropaw.tools.base import ToolContext, ToolRegistry
+from micropaw.tools.base import ToolContext, ToolRegistry, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +115,9 @@ class Agent:
         if user_ctx:
             parts.append(f"\nAbout the user:\n{user_ctx}")
 
+        if self.config.persona.location:
+            parts.append(f"User's location: {self.config.persona.location}. Use this for local queries like 'near me'.")
+
         # Platform hints
         hints = {
             "terminal": "Chatting in a local terminal. The user is a developer.",
@@ -190,6 +193,14 @@ class Agent:
         await self.conversations.save_message(conv_id, Message(role="user", content=text))
         return conv_id, messages
 
+    async def _cleanup_browse_session(self, conv_id: str) -> None:
+        """Close any browser session opened during this agent turn."""
+        try:
+            from micropaw.tools.web_browse import close_session
+            await close_session(conv_id)
+        except Exception:
+            pass
+
     async def handle_message(
         self,
         text: str,
@@ -206,31 +217,34 @@ class Agent:
         tool_context = self._build_tool_context(conv_id, user_id, platform)
 
         response: AIResponse | None = None
-        for _ in range(self.max_tool_iterations):
-            try:
-                response = await self.provider.chat(messages, tool_defs)
-            except Exception as e:
-                logger.error("AI provider error: %s", e)
-                error_msg = _classify_error(e)
-                await self.conversations.save_message(conv_id, Message(role="assistant", content=error_msg))
-                return error_msg
+        try:
+            for _ in range(self.max_tool_iterations):
+                try:
+                    response = await self.provider.chat(messages, tool_defs)
+                except Exception as e:
+                    logger.error("AI provider error: %s", e)
+                    error_msg = _classify_error(e)
+                    await self.conversations.save_message(conv_id, Message(role="assistant", content=error_msg))
+                    return error_msg
 
-            self._accumulate_usage(response.usage)
+                self._accumulate_usage(response.usage)
 
-            if not response.tool_calls:
-                reply = response.content or "I'm not sure how to respond to that."
-                await self.conversations.save_message(conv_id, Message(role="assistant", content=reply))
-                return reply
+                if not response.tool_calls:
+                    reply = response.content or "I'm not sure how to respond to that."
+                    await self.conversations.save_message(conv_id, Message(role="assistant", content=reply))
+                    return reply
 
-            messages = await self._execute_tools(messages, response, tool_context, conv_id)
-            await _safe_typing(send_typing)
+                messages = await self._execute_tools(messages, response, tool_context, conv_id)
+                await _safe_typing(send_typing)
 
-        fallback = (
-            response.content if response and response.content
-            else "I've been working on this for a while. Here's what I have so far."
-        )
-        await self.conversations.save_message(conv_id, Message(role="assistant", content=fallback))
-        return fallback
+            fallback = (
+                response.content if response and response.content
+                else "I've been working on this for a while. Here's what I have so far."
+            )
+            await self.conversations.save_message(conv_id, Message(role="assistant", content=fallback))
+            return fallback
+        finally:
+            await self._cleanup_browse_session(conv_id)
 
     async def handle_message_stream(
         self,
@@ -249,42 +263,45 @@ class Agent:
         tool_context = self._build_tool_context(conv_id, user_id, platform)
 
         response: AIResponse | None = None
-        for _ in range(self.max_tool_iterations):
-            try:
-                final_response: AIResponse | None = None
-                async for item in self.provider.chat_stream(messages, tool_defs):
-                    if isinstance(item, str):
-                        if on_chunk:
-                            await on_chunk(item)
-                    elif isinstance(item, AIResponse):
-                        final_response = item
+        try:
+            for _ in range(self.max_tool_iterations):
+                try:
+                    final_response: AIResponse | None = None
+                    async for item in self.provider.chat_stream(messages, tool_defs):
+                        if isinstance(item, str):
+                            if on_chunk:
+                                await on_chunk(item)
+                        elif isinstance(item, AIResponse):
+                            final_response = item
 
-                if not final_response:
-                    final_response = AIResponse(content="", tool_calls=[], usage={})
-                response = final_response
+                    if not final_response:
+                        final_response = AIResponse(content="", tool_calls=[], usage={})
+                    response = final_response
 
-            except Exception as e:
-                logger.error("AI provider error: %s", e)
-                error_msg = _classify_error(e)
-                await self.conversations.save_message(conv_id, Message(role="assistant", content=error_msg))
-                if on_chunk:
-                    await on_chunk(error_msg)
-                return error_msg
+                except Exception as e:
+                    logger.error("AI provider error: %s", e)
+                    error_msg = _classify_error(e)
+                    await self.conversations.save_message(conv_id, Message(role="assistant", content=error_msg))
+                    if on_chunk:
+                        await on_chunk(error_msg)
+                    return error_msg
 
-            self._accumulate_usage(response.usage)
+                self._accumulate_usage(response.usage)
 
-            if not response.tool_calls:
-                reply = response.content or "I'm not sure how to respond to that."
-                await self.conversations.save_message(conv_id, Message(role="assistant", content=reply))
-                return reply
+                if not response.tool_calls:
+                    reply = response.content or "I'm not sure how to respond to that."
+                    await self.conversations.save_message(conv_id, Message(role="assistant", content=reply))
+                    return reply
 
-            # Tool calls: switch to batch mode
-            messages = await self._execute_tools(messages, response, tool_context, conv_id)
-            await _safe_typing(send_typing)
+                # Tool calls: switch to batch mode
+                messages = await self._execute_tools(messages, response, tool_context, conv_id)
+                await _safe_typing(send_typing)
 
-        fallback = response.content if response and response.content else "I've been working on this for a while."
-        await self.conversations.save_message(conv_id, Message(role="assistant", content=fallback))
-        return fallback
+            fallback = response.content if response and response.content else "I've been working on this for a while."
+            await self.conversations.save_message(conv_id, Message(role="assistant", content=fallback))
+            return fallback
+        finally:
+            await self._cleanup_browse_session(conv_id)
 
     async def _execute_tools(
         self,
@@ -313,22 +330,32 @@ class Agent:
                     except Exception as e:
                         result = f"Tool error: {e}"
                         logger.error("[%s] %s", tc.name, e)
-                    if ck and not result.startswith("Tool error:"):
-                        self._tool_cache[ck] = result
+                    if ck:
+                        text = result.text if isinstance(result, ToolResult) else result
+                        if not text.startswith("Tool error:"):
+                            self._tool_cache[ck] = result
             else:
                 result = f"Unknown tool: {tc.name}"
                 logger.warning("Unknown tool called: %s", tc.name)
 
+            # Normalize to text + media
+            if isinstance(result, ToolResult):
+                content_text = result.text
+                media = result.media
+            else:
+                content_text = result
+                media = []
+
             # RAG: auto-ingest large file/PDF reads in background
             if (
                 tc.name in _INGEST_TOOLS
-                and len(result) > _MIN_INGEST_SIZE
-                and not result.startswith("Error")
+                and len(content_text) > _MIN_INGEST_SIZE
+                and not content_text.startswith("Error")
             ):
                 source = tc.arguments.get("path") or tc.arguments.get("url") or "unknown"
-                asyncio.create_task(self._auto_ingest(source, result, "_global"))
+                asyncio.create_task(self._auto_ingest(source, content_text, "_global"))
 
-            tool_msg = Message(role="tool", content=result, tool_call_id=tc.id)
+            tool_msg = Message(role="tool", content=content_text, tool_call_id=tc.id, media=media)
             messages.append(tool_msg)
             await self.conversations.save_message(conv_id, tool_msg)
 

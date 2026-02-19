@@ -92,6 +92,13 @@ def run_setup() -> None:
     if name:
         config.persona.name = name
 
+    location = questionary.text(
+        "Your location? (optional, helps with 'near me' queries, e.g. 'NYC' or '94102')",
+        default="",
+    ).ask()
+    if location and location.strip():
+        config.persona.location = location.strip()
+
     # Permissions
     allow_shell = questionary.confirm(
         "Allow shell command execution?", default=False

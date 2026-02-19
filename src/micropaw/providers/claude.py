@@ -40,6 +40,14 @@ class ClaudeProvider(AIProvider):
             "content-type": "application/json",
         }
 
+    @staticmethod
+    def _image_block(media) -> dict:
+        return {
+            "type": "image",
+            "source": {"type": "base64", "media_type": media.mime_type,
+                        "data": base64.b64encode(media.data).decode()},
+        }
+
     def _build_body(self, messages: list[Message], tools: list[ToolDef] | None) -> dict:
         system_msg = next((m for m in messages if m.role == "system"), None)
         non_system = [m for m in messages if m.role != "system"]
@@ -59,21 +67,21 @@ class ClaudeProvider(AIProvider):
                     })
                 api_messages.append({"role": "assistant", "content": blocks})
             elif msg.role == "tool":
-                api_messages.append({
-                    "role": "user",
-                    "content": [{"type": "tool_result", "tool_use_id": msg.tool_call_id, "content": msg.content}],
-                })
-            elif msg.role == "user" and msg.media:
-                blocks = []
-                for media in msg.media:
-                    blocks.append({
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media.mime_type,
-                            "data": base64.b64encode(media.data).decode(),
-                        },
+                if msg.media:
+                    result_content = [self._image_block(m) for m in msg.media]
+                    if msg.content:
+                        result_content.append({"type": "text", "text": msg.content})
+                    api_messages.append({
+                        "role": "user",
+                        "content": [{"type": "tool_result", "tool_use_id": msg.tool_call_id, "content": result_content}],
                     })
+                else:
+                    api_messages.append({
+                        "role": "user",
+                        "content": [{"type": "tool_result", "tool_use_id": msg.tool_call_id, "content": msg.content}],
+                    })
+            elif msg.role == "user" and msg.media:
+                blocks = [self._image_block(m) for m in msg.media]
                 blocks.append({"type": "text", "text": msg.content})
                 api_messages.append({"role": "user", "content": blocks})
             else:

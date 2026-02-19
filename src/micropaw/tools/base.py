@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
-from micropaw.providers.base import ToolDef
+from micropaw.providers.base import MediaItem, ToolDef
+
+
+@dataclass(slots=True)
+class ToolResult:
+    """Structured result from a tool execution — text + optional media."""
+    text: str
+    media: list[MediaItem] = field(default_factory=list)
 
 
 @dataclass(slots=True)

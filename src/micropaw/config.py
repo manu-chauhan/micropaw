@@ -123,6 +123,7 @@ class PermissionsConfig(BaseModel):
 class PersonaConfig(BaseModel):
     name: str = "MicroPaw"
     personality: str = "friendly, helpful, and clever"
+    location: str = ""  # e.g. "San Francisco, CA" — used for "near me" queries
     system_prompt_extra: str = ""
 
 
@@ -219,6 +220,8 @@ _ENV_OVERRIDES: list[tuple[str, list[str]]] = [
     ("WHATSAPP_VERIFY_TOKEN", ["channels", "whatsapp", "verify_token"]),
     ("WHATSAPP_APP_SECRET", ["channels", "whatsapp", "app_secret"]),
     ("WEBCHAT_AUTH_TOKEN", ["channels", "webchat", "auth_token"]),
+    # Location
+    ("MICROPAW_LOCATION", ["persona", "location"]),
     # Search
     ("BRAVE_API_KEY", ["search", "brave_api_key"]),
     ("SEARXNG_URL", ["search", "searxng_url"]),

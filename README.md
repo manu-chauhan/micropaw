@@ -8,11 +8,11 @@
 
 **Your AI. Your machine. Your keys.**
 
-6 channels. 4 providers. 16 tools. Shared memory everywhere. ~8,600 lines of Python. Zero SDK dependencies.
+6 channels. 4 providers. 16 tools. Shared memory everywhere. ~8,700 lines of Python. Zero SDK dependencies.
 
 [![PyPI](https://img.shields.io/pypi/v/micropaw?style=for-the-badge)](https://pypi.org/project/micropaw/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?style=for-the-badge)](https://python.org)
-[![Tests](https://img.shields.io/badge/tests-376%20passed-brightgreen?style=for-the-badge)]()
+[![Tests](https://img.shields.io/badge/tests-380%20passed-brightgreen?style=for-the-badge)]()
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)](LICENSE)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/manuchauhan)
 
@@ -38,6 +38,52 @@ paw setup && paw chat
 
 ---
 
+## What Can You Do?
+
+```
+┌─ Search & Browse ──────────┐  ┌─ Files & Knowledge ─────────┐  ┌─ Communicate ──────────────┐
+│ Web search (3 engines)     │  │ Read files & PDFs           │  │ Gmail (read/send/search)   │
+│ Browse pages interactively │  │ YouTube transcripts         │  │ Google Calendar            │
+│ Click, type, scroll        │  │ Save/manage user files      │  │ Scheduled reminders        │
+│ Take & analyze screenshots │  │ RAG — ask later, anywhere   │  │ Proactive heartbeat tasks  │
+└────────────────────────────┘  └─────────────────────────────┘  └────────────────────────────┘
+
+┌─ Memory & Context ─────────┐  ┌─ System ────────────────────┐  ┌─ Intelligence ─────────────┐
+│ Cross-channel memory       │  │ Shell commands (hardened)    │  │ Multi-agent delegation     │
+│ Contacts book              │  │ HTTP requests (SSRF-safe)   │  │ Context compaction         │
+│ Vector search (sqlite-vec) │  │ Vision (image analysis)     │  │ Streaming on all channels  │
+│ Auto-embed everything      │  │ Location-aware ("near me")  │  │ Provider failover chain    │
+└────────────────────────────┘  └─────────────────────────────┘  └────────────────────────────┘
+```
+
+### See It in Action
+
+```
+You:      "Find pizza places near me and check the menu of the top result"
+
+MicroPaw: [web_search] "pizza near San Francisco"
+          → Found 5 results. Tony's Pizza Napoletana rated 4.8★
+
+          [web_browse] → opens tonys-pizza.com
+          [scroll]     → scrolls to menu section
+          [screenshot] → captures menu
+
+          "Tony's Pizza Napoletana (4.8★, 0.3 mi away) has a great
+           Neapolitan-style menu. The Margherita is $18, Marinara $15.
+           Want me to check hours or find more options?"
+```
+
+```
+You (Telegram, Day 1):   "Read this report" → attaches quarterly.pdf
+MicroPaw:                 ✓ PDF chunked → embedded → stored for RAG
+
+You (Discord, Day 3):    "What did Q4 revenue look like?"
+MicroPaw:                "Revenue grew 23% in Q4, driven by..."
+                          (auto-retrieved from the PDF you read on Telegram)
+```
+
+---
+
 ## Highlights
 
 ### Intelligence
@@ -45,6 +91,8 @@ paw setup && paw chat
 - **Same brain, everywhere** — Start a conversation on Telegram, pick it up on Discord, ask from WhatsApp. Everything stays on your machine.
 
 - **RAG out of the box** — Read a PDF, paste a YouTube URL, or browse a web page. Documents are auto-chunked, embedded, and searchable across all channels. Ask about them days later from any platform.
+
+- **Interactive web browsing** — Browse pages, click links, type into search boxes, scroll, and take screenshots. Multimodal providers (Claude, GPT-4o, Gemini) can analyze screenshots to make decisions. Sessions persist across tool calls within a conversation turn.
 
 - **YouTube transcripts** — Paste a YouTube link and MicroPaw extracts the full transcript automatically. No API key, no extra dependency. Auto-indexed for RAG.
 
@@ -103,7 +151,7 @@ paw setup && paw chat
 | | **MicroPaw** | **OpenClaw** | **NanoClaw** | **PicoClaw** | **MimiClaw** |
 |---|---|---|---|---|---|
 | **Language** | Python | TypeScript | TypeScript | Go | C |
-| **Codebase** | ~8,600 LOC | ~430k LOC | ~500 LOC | ~4k LOC | ~15k LOC |
+| **Codebase** | ~8,700 LOC | ~430k LOC | ~500 LOC | ~4k LOC | ~15k LOC |
 | **Channels** | 6 | 15+ | 1 (WhatsApp) | 5 | 3 |
 | **Tools** | 16 (48 actions) | 25 + 53 prompt templates | SDK-dependent | 6 | 6 |
 | **AI SDKs** | None — raw httpx | Internal framework | Anthropic SDK | None — raw HTTP | None — raw HTTP |
@@ -111,7 +159,7 @@ paw setup && paw chat
 | **Telemetry** | None, ever | Local JSONL (opt-out) | None | None | None |
 | **License** | MIT | MIT | MIT | MIT | MIT |
 
-**MicroPaw sits in the sweet spot** — full-featured like OpenClaw (RAG, 6 channels, 16 tools, scheduling, email, calendar, multi-agent delegation) but lightweight like PicoClaw (~8,600 LOC, zero SDK dependencies). No telemetry, no bloat, no wrappers.
+**MicroPaw sits in the sweet spot** — full-featured like OpenClaw (RAG, 6 channels, 16 tools, scheduling, email, calendar, multi-agent delegation) but lightweight like PicoClaw (~8,700 LOC, zero SDK dependencies). No telemetry, no bloat, no wrappers.
 
 ---
 
@@ -204,7 +252,7 @@ paw chat
 | Tool | What it does |
 |------|-------------|
 | `web_search` | Brave -> SearXNG -> DuckDuckGo fallback chain |
-| `web_browse` | Full browser automation via Playwright |
+| `web_browse` | Browse, click, type, scroll, screenshot — interactive Playwright sessions |
 | `http_request` | HTTP requests with SSRF protection per hop |
 | `file_read` | Read files with path traversal protection |
 | `file_write` | Create and modify files |
@@ -423,6 +471,7 @@ Config file: `~/.micropaw/config.json` (0600 permissions).
   "persona": {
     "name": "MicroPaw",
     "personality": "friendly, helpful, and clever",
+    "location": "San Francisco, CA",
     "system_prompt_extra": "Always respond in Spanish."
   }
 }
@@ -489,7 +538,7 @@ docker compose --profile full up                     # Everything
 <summary><strong>Architecture</strong></summary>
 
 ```
-src/micropaw/          ~8,600 LOC source + ~4,200 LOC tests
+src/micropaw/          ~8,700 LOC source + ~4,300 LOC tests
  cli.py                 Click CLI (14 commands)
  config.py              Single Pydantic config model
  connector.py           Guided channel setup + live validation
@@ -518,7 +567,7 @@ Full decision log: [`DECISIONS.md`](DECISIONS.md)
 
 ```bash
 pip install ".[dev]"
-pytest                 # 376 tests
+pytest                 # 380 tests
 ruff check src/
 mypy src/
 ```
