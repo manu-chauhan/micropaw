@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator
@@ -118,3 +119,19 @@ class AIProvider(ABC):
 
     async def close(self) -> None:
         """Close any HTTP clients held by this provider."""
+
+
+def parse_sse(line: str, prefix: str = "data: ") -> dict | None:
+    """Parse an SSE or NDJSON line into a dict, returning None on skip/error."""
+    if prefix:
+        if not line.startswith(prefix):
+            return None
+        raw = line[len(prefix):]
+    else:
+        raw = line.strip()
+    if not raw or raw == "[DONE]":
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return None

@@ -36,6 +36,14 @@ def _cache_key(tool_name: str, args: dict) -> tuple:
     return (tool_name, _freeze(args))
 
 
+async def _safe_typing(send_typing: Callable[[], Awaitable[None]] | None) -> None:
+    if send_typing:
+        try:
+            await send_typing()
+        except Exception:
+            pass
+
+
 class Agent:
     """Core agent loop: chat with the LLM, execute tools, repeat until done."""
 
@@ -94,25 +102,17 @@ class Agent:
 
         # Persona: SOUL.md overrides default personality if present
         from micropaw.config import CONFIG_DIR
-        soul_file = CONFIG_DIR / "SOUL.md"
-        if soul_file.exists():
-            soul = soul_file.read_text()[:2048].strip()
-            if soul:
-                parts.append(soul)
-            else:
-                parts.append(f"You are {self.config.persona.personality}.")
-        else:
-            parts.append(f"You are {self.config.persona.personality}.")
+        def _read_file(path: Path, max_len: int = 2048) -> str:
+            return path.read_text()[:max_len].strip() if path.exists() else ""
 
+        soul = _read_file(CONFIG_DIR / "SOUL.md")
+        parts.append(soul or f"You are {self.config.persona.personality}.")
         parts.append("Help users by chatting naturally and using tools when needed.")
         parts.append("Keep responses concise and conversational.")
 
-        # User context: USER.md provides user preferences if present
-        user_file = CONFIG_DIR / "USER.md"
-        if user_file.exists():
-            user_context = user_file.read_text()[:2048].strip()
-            if user_context:
-                parts.append(f"\nAbout the user:\n{user_context}")
+        user_ctx = _read_file(CONFIG_DIR / "USER.md")
+        if user_ctx:
+            parts.append(f"\nAbout the user:\n{user_ctx}")
 
         # Platform hints
         hints = {
@@ -163,12 +163,7 @@ class Agent:
         send_typing: Callable[[], Awaitable[None]] | None = None,
     ) -> tuple[str, list[Message]]:
         """Load history, build system prompt, prepare message list."""
-        if send_typing:
-            try:
-                await send_typing()
-            except Exception:
-                pass
-
+        await _safe_typing(send_typing)
         conv_id = self.conversations.get_conversation_id(platform, user_id, channel_id)
         history = await self.conversations.load_history(conv_id, platform, user_id)
         # Memories and RAG are global — shared across all channels
@@ -222,12 +217,7 @@ class Agent:
                 return reply
 
             messages = await self._execute_tools(messages, response, tool_context, conv_id)
-
-            if send_typing:
-                try:
-                    await send_typing()
-                except Exception:
-                    pass
+            await _safe_typing(send_typing)
 
         fallback = response.content if response and response.content else "I've been working on this for a while. Here's what I have so far."
         await self.conversations.save_message(conv_id, Message(role="assistant", content=fallback))
@@ -281,12 +271,7 @@ class Agent:
 
             # Tool calls: switch to batch mode
             messages = await self._execute_tools(messages, response, tool_context, conv_id)
-
-            if send_typing:
-                try:
-                    await send_typing()
-                except Exception:
-                    pass
+            await _safe_typing(send_typing)
 
         fallback = response.content if response and response.content else "I've been working on this for a while."
         await self.conversations.save_message(conv_id, Message(role="assistant", content=fallback))
@@ -349,6 +334,15 @@ class Agent:
             logger.error("RAG: auto-ingest failed for %s: %s", source, e)
 
 
+_HTTP_ERRORS = {
+    401: "Invalid API key. Run 'micropaw setup' to fix it.",
+    403: "Access denied by the AI provider. Check your API key permissions.",
+    429: "Rate limited by the AI provider. Wait a moment and try again.",
+    500: "The AI provider had an internal error. Try again.",
+    503: "The AI provider is temporarily unavailable. Try again shortly.",
+}
+
+
 def _classify_error(e: Exception) -> str:
     """Turn a provider exception into a user-friendly message."""
     if isinstance(e, httpx.ConnectError):
@@ -356,18 +350,7 @@ def _classify_error(e: Exception) -> str:
     if isinstance(e, httpx.TimeoutException):
         return "The AI provider timed out. Try again, or switch to a faster model."
     if isinstance(e, httpx.HTTPStatusError):
-        status = e.response.status_code
-        if status == 401:
-            return "Invalid API key. Run 'micropaw setup' to fix it."
-        if status == 403:
-            return "Access denied by the AI provider. Check your API key permissions."
-        if status == 429:
-            return "Rate limited by the AI provider. Wait a moment and try again."
-        if status == 500:
-            return "The AI provider had an internal error. Try again."
-        if status == 503:
-            return "The AI provider is temporarily unavailable. Try again shortly."
-        return f"AI provider error (HTTP {status}). Try again or check your config."
+        return _HTTP_ERRORS.get(e.response.status_code, f"AI provider error (HTTP {e.response.status_code}). Try again or check your config.")
     return "Something went wrong talking to the AI provider. Please try again."
 
 

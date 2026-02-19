@@ -71,10 +71,22 @@ CREATE TABLE IF NOT EXISTS kv_meta (
     value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS contacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    email TEXT DEFAULT '',
+    phone TEXT DEFAULT '',
+    company TEXT DEFAULT '',
+    notes TEXT DEFAULT '',
+    created_at REAL DEFAULT (unixepoch('now')),
+    updated_at REAL DEFAULT (unixepoch('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_memories_key ON memories(key);
 CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_source ON document_chunks(source, user_id);
+CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts(name COLLATE NOCASE);
 """
 
 
@@ -514,6 +526,57 @@ class MemoryStore:
             rows = await cursor.fetchall()
 
         return [{"source": r[0], "chunk": r[1], "content": r[2]} for r in rows]
+
+    # --- Contacts ---
+
+    @staticmethod
+    def _contact_row(r) -> dict:
+        return {"id": r[0], "name": r[1], "email": r[2], "phone": r[3], "company": r[4], "notes": r[5]}
+
+    async def add_contact(self, name: str, email: str = "", phone: str = "", company: str = "", notes: str = "") -> int:
+        cursor = await self.db.execute(
+            "INSERT INTO contacts (name, email, phone, company, notes) VALUES (?, ?, ?, ?, ?)",
+            (name, email, phone, company, notes),
+        )
+        await self.db.commit()
+        return cursor.lastrowid
+
+    async def search_contacts(self, query: str) -> list[dict]:
+        q = f"%{query}%"
+        async with self.db.execute(
+            "SELECT id, name, email, phone, company, notes FROM contacts "
+            "WHERE name LIKE ? COLLATE NOCASE OR email LIKE ? COLLATE NOCASE OR company LIKE ? COLLATE NOCASE "
+            "ORDER BY name COLLATE NOCASE LIMIT 50",
+            (q, q, q),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [self._contact_row(r) for r in rows]
+
+    async def get_all_contacts(self, limit: int = 50) -> list[dict]:
+        async with self.db.execute(
+            "SELECT id, name, email, phone, company, notes FROM contacts ORDER BY name COLLATE NOCASE LIMIT ?",
+            (limit,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [self._contact_row(r) for r in rows]
+
+    async def update_contact(self, contact_id: int, **fields) -> bool:
+        allowed = {"name", "email", "phone", "company", "notes"}
+        updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+        if not updates:
+            return False
+        updates["updated_at"] = "strftime('%s','now')"
+        sets = ", ".join(f"{k} = ?" for k in updates if k != "updated_at")
+        sets += ", updated_at = CAST(strftime('%s','now') AS REAL)"
+        vals = [updates[k] for k in updates if k != "updated_at"]
+        cursor = await self.db.execute(f"UPDATE contacts SET {sets} WHERE id = ?", (*vals, contact_id))
+        await self.db.commit()
+        return cursor.rowcount > 0
+
+    async def delete_contact(self, contact_id: int) -> bool:
+        cursor = await self.db.execute("DELETE FROM contacts WHERE id = ?", (contact_id,))
+        await self.db.commit()
+        return cursor.rowcount > 0
 
     async def close(self) -> None:
         if self._db:

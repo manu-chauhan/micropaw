@@ -76,6 +76,9 @@ class Gateway:
         from micropaw.tools.memory_tool import set_store as set_memory_store
         set_memory_store(self.store)
 
+        from micropaw.tools.contacts_tool import set_store as set_contacts_store
+        set_contacts_store(self.store)
+
         from micropaw.tools.sessions import set_store as set_sessions_store
         set_sessions_store(self.store)
 

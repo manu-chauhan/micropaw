@@ -15,6 +15,22 @@ logger = logging.getLogger(__name__)
 _CAL = "https://www.googleapis.com/calendar/v3"
 
 
+def _add_date_params(params: dict, args: dict) -> None:
+    for key, param, default_time in [("start_date", "timeMin", "T00:00:00Z"), ("end_date", "timeMax", "T23:59:59Z")]:
+        if d := args.get(key):
+            params[param] = d if "T" in d else f"{d}{default_time}"
+
+
+def _format_event_list(events: list[dict], title: str, empty_msg: str) -> str:
+    if not events:
+        return empty_msg
+    lines = [f"{title} ({len(events)}):"]
+    for ev in events:
+        lines.append("")
+        lines.append(_format_event(ev))
+    return "\n".join(lines)
+
+
 def _format_event(ev: dict) -> str:
     """Format a single calendar event for display."""
     summary = ev.get("summary", "(no title)")
@@ -42,23 +58,10 @@ def _format_event(ev: dict) -> str:
 
 async def _list_events(token: str, args: dict) -> str:
     params: dict[str, Any] = {"singleEvents": "true", "orderBy": "startTime", "maxResults": 25}
-    if args.get("start_date"):
-        sd = args["start_date"]
-        params["timeMin"] = f"{sd}T00:00:00Z" if "T" not in sd else sd
-    if args.get("end_date"):
-        ed = args["end_date"]
-        params["timeMax"] = f"{ed}T23:59:59Z" if "T" not in ed else ed
-
+    _add_date_params(params, args)
     try:
         data = await api_get(token, f"{_CAL}/calendars/primary/events", params)
-        events = data.get("items", [])
-        if not events:
-            return "No events found for the specified date range."
-        lines = [f"Calendar events ({len(events)}):"]
-        for ev in events:
-            lines.append("")
-            lines.append(_format_event(ev))
-        return "\n".join(lines)
+        return _format_event_list(data.get("items", []), "Calendar events", "No events found for the specified date range.")
     except httpx.HTTPStatusError as e:
         return api_error(e, "Calendar")
     except Exception as e:
@@ -119,25 +122,11 @@ async def _search_events(token: str, args: dict) -> str:
     query = args.get("query", "")
     if not query:
         return "Error: 'search' requires 'query'."
-
     params: dict[str, Any] = {"q": query, "singleEvents": "true", "orderBy": "startTime", "maxResults": 20}
-    if args.get("start_date"):
-        sd = args["start_date"]
-        params["timeMin"] = f"{sd}T00:00:00Z" if "T" not in sd else sd
-    if args.get("end_date"):
-        ed = args["end_date"]
-        params["timeMax"] = f"{ed}T23:59:59Z" if "T" not in ed else ed
-
+    _add_date_params(params, args)
     try:
         data = await api_get(token, f"{_CAL}/calendars/primary/events", params)
-        events = data.get("items", [])
-        if not events:
-            return f"No events matching: {query}"
-        lines = [f"Search results ({len(events)} events):"]
-        for ev in events:
-            lines.append("")
-            lines.append(_format_event(ev))
-        return "\n".join(lines)
+        return _format_event_list(data.get("items", []), "Search results", f"No events matching: {query}")
     except httpx.HTTPStatusError as e:
         return api_error(e, "Calendar")
     except Exception as e:

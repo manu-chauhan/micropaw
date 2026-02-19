@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import base64
-import json
 import logging
 import uuid
 from collections.abc import AsyncGenerator
 
 import httpx
 
-from micropaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef, retry_on_transient
+from micropaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef, parse_sse, retry_on_transient
 
 logger = logging.getLogger(__name__)
 
@@ -99,11 +98,8 @@ class OllamaProvider(AIProvider):
         async with self._client.stream("POST", self._url(), json=body) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
-                if not line.strip():
-                    continue
-                try:
-                    chunk = json.loads(line)
-                except json.JSONDecodeError:
+                chunk = parse_sse(line, prefix="")
+                if chunk is None:
                     continue
 
                 msg = chunk.get("message", {})

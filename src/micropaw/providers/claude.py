@@ -9,7 +9,7 @@ from collections.abc import AsyncGenerator
 
 import httpx
 
-from micropaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef, retry_on_transient
+from micropaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef, parse_sse, retry_on_transient
 
 logger = logging.getLogger(__name__)
 
@@ -130,15 +130,8 @@ class ClaudeProvider(AIProvider):
         async with self._client.stream("POST", self._api_url, headers=self._headers(), json=body) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                raw = line[6:]
-                if raw == "[DONE]":
-                    break
-
-                try:
-                    event = json.loads(raw)
-                except json.JSONDecodeError:
+                event = parse_sse(line)
+                if event is None:
                     continue
                 etype = event.get("type", "")
 

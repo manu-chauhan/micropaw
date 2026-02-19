@@ -388,9 +388,31 @@
 **Config:** `GoogleConfig` with `client_id`, `client_secret`. Env vars: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`.
 **Files changed:** New `google_auth.py`, rewritten `email_tool.py` + `calendar_tool.py`, updated `config.py`, `gateway.py`, `setup_wizard.py`.
 
-### Metrics (v0.3.0-dev)
-- Source LOC: ~8,200
-- Test LOC: ~4,000
-- Tests: 347 passing
-- Tools: 14 (email, calendar share unified Google OAuth2)
+### D36: Contacts Tool (SQLite-backed address book)
+**Decided:** 2026-02-19
+**Rationale:** Email/calendar tools require knowing exact addresses. A contacts tool lets the LLM auto-resolve "email Alice" by searching contacts first. If a person has multiple emails (work/personal) or multiple contacts match, the LLM presents options to the user.
+**Design:**
+- New `contacts` table in SQLite: `id`, `name`, `email`, `phone`, `company`, `notes`, timestamps.
+- CRUD methods on `MemoryStore`: `add_contact`, `search_contacts`, `get_all_contacts`, `update_contact`, `delete_contact`.
+- Case-insensitive LIKE search across name, email, company.
+- `ContactsTool` follows `memory_tool.py` pattern: module-level `_store` + `set_store()`, actions: add/search/list/update/delete.
+- Tool description guides LLM: "Search contacts to find email addresses before sending email."
+**Files:** `contacts_tool.py` (new), `store.py` (table + methods), `cli.py` + `gateway.py` (registration + wiring).
+
+### D37: Files Tool (persistent user file storage)
+**Decided:** 2026-02-19
+**Rationale:** Users need a way to save notes, documents, and code snippets that persist across sessions. Merges "notes" and "file sync" concepts into one simple tool.
+**Design:**
+- Files stored at `~/.micropaw/files/` (filesystem, no database).
+- Actions: save (write content), read (with 50KB display truncation), list (directory listing with sizes), delete.
+- Subdirectories supported (e.g. `notes/meeting.md`).
+- Path traversal security: `resolve()` + parent check prevents `../` escape.
+- No file size limit on save.
+**Files:** `files_tool.py` (new), `cli.py` (registration).
+
+### Metrics (v0.1.2)
+- Source LOC: ~8,400
+- Test LOC: ~4,200
+- Tests: 376 passing
+- Tools: 16 (+ contacts, files)
 - Dependencies: 8 core, 7 optional extras

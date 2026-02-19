@@ -92,6 +92,13 @@ async def _fetch_headers(token: str, msg_ids: list[str]) -> list[dict]:
     return results
 
 
+def _format_email_list(headers: list[dict], title: str) -> str:
+    lines = [f"{title} ({len(headers)}):"]
+    for h in headers:
+        lines.append(f"\n- ID: {h['id']}\n  From: {h['from']}\n  Subject: {h['subject']}\n  Date: {h['date']}")
+    return "\n".join(lines)
+
+
 async def _inbox(token: str, count: int, filter_type: str) -> str:
     q = "in:inbox is:unread" if filter_type == "unread" else "in:inbox"
     try:
@@ -104,11 +111,7 @@ async def _inbox(token: str, count: int, filter_type: str) -> str:
         return "No unread messages." if filter_type == "unread" else "No messages found."
 
     headers = await _fetch_headers(token, [m["id"] for m in messages])
-    label = "Unread" if filter_type == "unread" else "Recent"
-    lines = [f"{label} emails ({len(headers)}):"]
-    for h in headers:
-        lines.append(f"\n- ID: {h['id']}\n  From: {h['from']}\n  Subject: {h['subject']}\n  Date: {h['date']}")
-    return "\n".join(lines)
+    return _format_email_list(headers, "Unread emails" if filter_type == "unread" else "Recent emails")
 
 
 async def _read(token: str, message_id: str) -> str:
@@ -157,10 +160,7 @@ async def _search(token: str, query: str) -> str:
         return f"No messages matching: {query}"
 
     headers = await _fetch_headers(token, [m["id"] for m in messages])
-    lines = [f"Search results ({len(headers)} messages):"]
-    for h in headers:
-        lines.append(f"\n- ID: {h['id']}\n  From: {h['from']}\n  Subject: {h['subject']}\n  Date: {h['date']}")
-    return "\n".join(lines)
+    return _format_email_list(headers, "Search results")
 
 
 class EmailTool(Tool):
