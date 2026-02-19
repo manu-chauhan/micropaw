@@ -251,6 +251,8 @@ class Gateway:
             import uuid
             new_id = f"terminal:terminal-user:{uuid.uuid4().hex[:8]}"
             self.agent.conversations.reset_terminal_session(new_id)
+            self.agent.session_usage = {"input": 0, "output": 0}
+            self.agent.message_count = 0
 
     async def _bus_consumer(self) -> None:
         """Consume outbound bus messages and route to channels."""

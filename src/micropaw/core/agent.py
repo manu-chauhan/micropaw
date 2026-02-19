@@ -66,17 +66,22 @@ class Agent:
         )
         self.max_tool_iterations = config.context.max_tool_iterations
         self.last_usage: dict[str, int] = {"input": 0, "output": 0}
+        self.session_usage: dict[str, int] = {"input": 0, "output": 0}
+        self.message_count: int = 0
         self._tool_cache: dict[tuple, str] = {}
 
     def _reset_usage(self) -> None:
         """Reset per-message usage counter and tool cache."""
         self.last_usage = {"input": 0, "output": 0}
+        self.message_count += 1
         self._tool_cache.clear()
 
     def _accumulate_usage(self, usage: dict) -> None:
         """Accumulate token usage from the latest response."""
         self.last_usage["input"] += usage.get("input", 0)
         self.last_usage["output"] += usage.get("output", 0)
+        self.session_usage["input"] += usage.get("input", 0)
+        self.session_usage["output"] += usage.get("output", 0)
 
     def _build_tool_context(self, conv_id: str, user_id: str, platform: str) -> ToolContext:
         return ToolContext(
@@ -138,8 +143,11 @@ class Agent:
                 parts.append(f"- {tool.name}: {tool.description}")
             parts.append("\nUse tools for real-world actions. Don't use tools when a text response suffices.")
 
-        # Skills: multi-step workflow hints from SKILLS.md
-        skills = _read_file(CONFIG_DIR / "SKILLS.md", max_len=4096)
+        # Skills: user override first, then bundled default
+        skills_path = CONFIG_DIR / "SKILLS.md"
+        if not skills_path.exists():
+            skills_path = Path(__file__).resolve().parent.parent / "SKILLS.md"
+        skills = _read_file(skills_path, max_len=4096)
         if skills:
             parts.append(f"\nWorkflow guidelines:\n{skills}")
 

@@ -448,7 +448,7 @@ class TestSystemPrompt:
         store.get_recent_memories = AsyncMock(return_value=[])
         agent = Agent(config, provider, registry, store)
         prompt = agent._build_system_prompt("terminal")
-        assert "location" not in prompt.lower()
+        assert "User's location:" not in prompt
 
 
 class TestToolResult:

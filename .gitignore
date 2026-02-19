@@ -28,3 +28,4 @@ Thumbs.db
 
 # Config (contains API keys)
 # Note: .env.example is tracked
+.claude/

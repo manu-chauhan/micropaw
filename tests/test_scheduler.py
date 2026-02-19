@@ -426,8 +426,8 @@ class TestPersonaFiles:
         with patch("micropaw.config.CONFIG_DIR", tmp_path):
             prompt = agent._build_system_prompt("terminal")
 
-        # 2048 chars max for soul + other parts
-        assert len(prompt) < 3000
+        # 2048 chars max for soul + other parts + bundled SKILLS.md (~1900)
+        assert len(prompt) < 5000
 
     def test_empty_soul_file_uses_default(self, tmp_path):
         from micropaw.config import Config

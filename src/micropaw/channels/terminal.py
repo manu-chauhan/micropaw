@@ -38,6 +38,7 @@ class TerminalChannel(Channel):
         self._running = False
         self._session_id: str = uuid.uuid4().hex[:8]
         self._total_usage: dict[str, int] = {"input": 0, "output": 0}
+        self._last_delta: dict[str, int] = {"input": 0, "output": 0}
         self._message_count: int = 0
         # Set by gateway for tool visibility and config access
         self._registry: Any = None
@@ -110,6 +111,7 @@ class TerminalChannel(Channel):
         elif command == "/new":
             self._session_id = uuid.uuid4().hex[:8]
             self._total_usage = {"input": 0, "output": 0}
+            self._last_delta = {"input": 0, "output": 0}
             self._message_count = 0
             if self._on_new_conversation:
                 await self._on_new_conversation()
@@ -161,6 +163,7 @@ class TerminalChannel(Channel):
         response = await self._handler(text, "terminal-user", "terminal", None)
         console.print(" " * 40, end="\r")
         self._print_response(response)
+        self._show_usage_hint()
 
     async def _handle_streaming(self, text: str) -> None:
         first_chunk = True
@@ -184,6 +187,7 @@ class TerminalChannel(Channel):
             # Streaming didn't yield chunks — print the full response
             console.print(" " * 40, end="\r")
             self._print_response(response)
+        self._show_usage_hint()
 
     def _print_response(self, response: str) -> None:
         console.print()
@@ -194,8 +198,17 @@ class TerminalChannel(Channel):
             console.print(response)
         console.print()
 
+    def _show_usage_hint(self) -> None:
+        """Show dim right-aligned token usage after each response."""
+        delta = self._last_delta["input"] + self._last_delta["output"]
+        total = self._total_usage["input"] + self._total_usage["output"]
+        if delta > 0:
+            console.print(f"[dim]  +{delta:,} tokens ({total:,} total)[/dim]", justify="right")
+            console.print()
+
     def track_usage(self, usage: dict[str, int]) -> None:
         """Track token usage from agent responses."""
+        self._last_delta = usage.copy()
         self._total_usage["input"] += usage.get("input", 0)
         self._total_usage["output"] += usage.get("output", 0)
 

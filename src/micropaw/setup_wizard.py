@@ -256,6 +256,17 @@ def run_setup() -> None:
     save_config(config)
     console.print("\n[green]Config saved![/green]")
 
+    # Copy default SKILLS.md if not already present
+    from pathlib import Path
+
+    from micropaw.config import CONFIG_DIR
+    skills_dst = CONFIG_DIR / "SKILLS.md"
+    if not skills_dst.exists():
+        skills_src = Path(__file__).resolve().parent / "SKILLS.md"
+        if skills_src.exists():
+            skills_dst.write_text(skills_src.read_text())
+            console.print("[dim]Default workflow skills installed to ~/.micropaw/SKILLS.md — customize anytime.[/dim]")
+
     # Offer channel connection
     connect_channel = questionary.confirm(
         "Connect a messaging channel (Telegram, Discord, etc.)?", default=False
