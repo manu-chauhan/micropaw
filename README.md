@@ -41,19 +41,19 @@ paw setup && paw chat
 ## What Can You Do?
 
 ```
-┌─ Search & Browse ──────────┐  ┌─ Files & Knowledge ─────────┐  ┌─ Communicate ──────────────┐
-│ Web search (3 engines)     │  │ Read files & PDFs           │  │ Gmail (read/send/search)   │
-│ Browse pages interactively │  │ YouTube transcripts         │  │ Google Calendar            │
-│ Click, type, scroll        │  │ Save/manage user files      │  │ Scheduled reminders        │
-│ Take & analyze screenshots │  │ RAG — ask later, anywhere   │  │ Proactive heartbeat tasks  │
-└────────────────────────────┘  └─────────────────────────────┘  └────────────────────────────┘
+┌─ 🔍 Search & Browse ──────┐  ┌─ 📁 Files & Knowledge ────┐  ┌─ 📬 Communicate ──────────┐
+│ Web search (3 engines)     │  │ Read files & PDFs          │  │ Gmail (read/send/search)   │
+│ Browse pages interactively │  │ YouTube transcripts        │  │ Google Calendar            │
+│ Click, type, scroll        │  │ Save/manage user files     │  │ Scheduled reminders        │
+│ Take & analyze screenshots │  │ RAG — ask later, anywhere  │  │ Proactive heartbeat tasks  │
+└────────────────────────────┘  └────────────────────────────┘  └────────────────────────────┘
 
-┌─ Memory & Context ─────────┐  ┌─ System ────────────────────┐  ┌─ Intelligence ─────────────┐
-│ Cross-channel memory       │  │ Shell commands (hardened)    │  │ Multi-agent delegation     │
-│ Contacts book              │  │ HTTP requests (SSRF-safe)   │  │ Context compaction         │
-│ Vector search (sqlite-vec) │  │ Vision (image analysis)     │  │ Streaming on all channels  │
-│ Auto-embed everything      │  │ Location-aware ("near me")  │  │ Provider failover chain    │
-└────────────────────────────┘  └─────────────────────────────┘  └────────────────────────────┘
+┌─ 🧠 Memory & Context ─────┐  ┌─ 🛠️ System ────────────────┐  ┌─ 🤖 Intelligence ─────────┐
+│ Cross-channel memory       │  │ Shell commands (hardened)   │  │ Multi-agent delegation     │
+│ Contacts book              │  │ HTTP requests (SSRF-safe)  │  │ Context compaction         │
+│ Vector search (sqlite-vec) │  │ Vision (image analysis)    │  │ Streaming on all channels  │
+│ Auto-embed everything      │  │ Location-aware ("near me") │  │ Provider failover chain    │
+└────────────────────────────┘  └────────────────────────────┘  └────────────────────────────┘
 ```
 
 ### See It in Action
