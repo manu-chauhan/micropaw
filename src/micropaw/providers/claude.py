@@ -71,10 +71,8 @@ class ClaudeProvider(AIProvider):
                     result_content = [self._image_block(m) for m in msg.media]
                     if msg.content:
                         result_content.append({"type": "text", "text": msg.content})
-                    api_messages.append({
-                        "role": "user",
-                        "content": [{"type": "tool_result", "tool_use_id": msg.tool_call_id, "content": result_content}],
-                    })
+                    tool_result = {"type": "tool_result", "tool_use_id": msg.tool_call_id, "content": result_content}
+                    api_messages.append({"role": "user", "content": [tool_result]})
                 else:
                     api_messages.append({
                         "role": "user",

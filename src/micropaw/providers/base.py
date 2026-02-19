@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from abc import ABC, abstractmethod
+from abc import ABC
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from typing import Any
