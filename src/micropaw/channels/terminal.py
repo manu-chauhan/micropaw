@@ -17,10 +17,6 @@ from micropaw.channels.base import Channel
 
 console = Console()
 
-# Callback types
-MessageHandler = Callable[[str, str, str, str | None], Awaitable[str]]
-StreamHandler = Callable[[str, str, str, str | None, Callable[[str], Awaitable[None]] | None], Awaitable[str]]
-
 SLASH_COMMANDS = {
     "/help": "Show available commands",
     "/new": "Start a fresh conversation",
@@ -37,10 +33,8 @@ class TerminalChannel(Channel):
     name = "terminal"
 
     def __init__(self) -> None:
+        super().__init__()
         self._running = False
-        self._handler: MessageHandler | None = None
-        self._stream_handler: StreamHandler | None = None
-        # Session-level tracking
         self._session_id: str = uuid.uuid4().hex[:8]
         self._total_usage: dict[str, int] = {"input": 0, "output": 0}
         self._message_count: int = 0
@@ -49,12 +43,6 @@ class TerminalChannel(Channel):
         self._config: Any = None
         # Callback to notify agent of conversation reset
         self._on_new_conversation: Callable[[], Awaitable[None]] | None = None
-
-    def set_handler(self, handler: MessageHandler) -> None:
-        self._handler = handler
-
-    def set_stream_handler(self, handler: StreamHandler) -> None:
-        self._stream_handler = handler
 
     async def start(self) -> None:
         self._running = True

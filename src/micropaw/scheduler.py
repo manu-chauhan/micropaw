@@ -192,16 +192,7 @@ class Scheduler:
                     logger.error("Heartbeat task failed: %s", e)
 
     async def _deliver_heartbeat(self, content: str) -> None:
-        """Deliver heartbeat result: terminal first, then first active channel."""
-        if not self._bus or self._bus.closed:
-            return
-        for ch in self._channels:
-            if ch.name == "terminal":
-                await self._bus.publish_outbound(OutboundMessage("terminal", "", content))
-                return
-        if self._channels:
-            ch = self._channels[0]
-            await self._bus.publish_outbound(OutboundMessage(ch.name, "", content))
+        await self._deliver("terminal", "", content)
 
     # -- CRUD (used by both CLI and LLM tool) --
 

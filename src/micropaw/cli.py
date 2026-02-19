@@ -492,14 +492,8 @@ def remove(job_id):
 
 
 def _fmt(seconds: int) -> str:
-    """Format seconds as human-readable interval."""
-    if seconds >= 86400 and seconds % 86400 == 0:
-        return f"{seconds // 86400}d"
-    if seconds >= 3600 and seconds % 3600 == 0:
-        return f"{seconds // 3600}h"
-    if seconds >= 60 and seconds % 60 == 0:
-        return f"{seconds // 60}m"
-    return f"{seconds}s"
+    from micropaw.tools.cron_tool import _fmt_interval
+    return _fmt_interval(seconds)
 
 
 if __name__ == "__main__":

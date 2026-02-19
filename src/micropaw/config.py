@@ -155,20 +155,12 @@ class SchedulerConfig(BaseModel):
     max_jobs: int = 50
 
 
-class EmailConfig(BaseModel):
+class GoogleConfig(BaseModel):
     enabled: bool = False
-    email_address: str = ""
-    password: str = ""  # Gmail App Password
-    imap_host: str = "imap.gmail.com"
-    imap_port: int = 993
-    smtp_host: str = "smtp.gmail.com"
-    smtp_port: int = 465
-
-
-class CalendarConfig(BaseModel):
-    enabled: bool = False
-    client_id: str = ""  # Google Cloud OAuth2 client ID
-    client_secret: str = ""  # Google Cloud OAuth2 client secret
+    client_id: str = ""       # Google Cloud OAuth2 client ID
+    client_secret: str = ""   # Google Cloud OAuth2 client secret
+    gmail_enabled: bool = True
+    calendar_enabled: bool = True
 
 
 class ContextConfig(BaseModel):
@@ -195,8 +187,7 @@ class Config(BaseModel):
     search: SearchConfig = SearchConfig()
     context: ContextConfig = ContextConfig()
     scheduler: SchedulerConfig = SchedulerConfig()
-    email: EmailConfig = EmailConfig()
-    calendar: CalendarConfig = CalendarConfig()
+    google: GoogleConfig = GoogleConfig()
     fallback_providers: list[str] = []
 
 
@@ -231,12 +222,9 @@ _ENV_OVERRIDES: list[tuple[str, list[str]]] = [
     # Search
     ("BRAVE_API_KEY", ["search", "brave_api_key"]),
     ("SEARXNG_URL", ["search", "searxng_url"]),
-    # Email
-    ("MICROPAW_EMAIL_ADDRESS", ["email", "email_address"]),
-    ("MICROPAW_EMAIL_PASSWORD", ["email", "password"]),
-    # Calendar
-    ("GOOGLE_CLIENT_ID", ["calendar", "client_id"]),
-    ("GOOGLE_CLIENT_SECRET", ["calendar", "client_secret"]),
+    # Google (Gmail + Calendar)
+    ("GOOGLE_CLIENT_ID", ["google", "client_id"]),
+    ("GOOGLE_CLIENT_SECRET", ["google", "client_secret"]),
 ]
 
 
@@ -284,6 +272,21 @@ def load_config() -> Config:
             _logger.warning("Config file corrupt, using defaults: %s", e)
         except OSError as e:
             _logger.warning("Config file unreadable, using defaults: %s", e)
+
+    # Migrate old email+calendar config → unified google config
+    if ("calendar" in raw or "email" in raw) and "google" not in raw:
+        cal = raw.pop("calendar", {})
+        email_cfg = raw.pop("email", {})
+        raw["google"] = {
+            "enabled": cal.get("enabled", False) or email_cfg.get("enabled", False),
+            "client_id": cal.get("client_id", ""),
+            "client_secret": cal.get("client_secret", ""),
+            "gmail_enabled": email_cfg.get("enabled", False),
+            "calendar_enabled": cal.get("enabled", False),
+        }
+    # Clean stale keys
+    raw.pop("calendar", None)
+    raw.pop("email", None)
 
     _apply_env_overrides(raw)
     raw.pop("config_version", None)
@@ -336,14 +339,9 @@ def display_config(config: Config) -> dict:
     if search_key:
         data["search"]["brave_api_key"] = _redact(search_key)
 
-    # Redact email password
-    email_pw = data.get("email", {}).get("password", "")
-    if email_pw:
-        data["email"]["password"] = _redact(email_pw)
-
-    # Redact calendar client secret
-    cal_secret = data.get("calendar", {}).get("client_secret", "")
-    if cal_secret:
-        data["calendar"]["client_secret"] = _redact(cal_secret)
+    # Redact Google client secret
+    google_secret = data.get("google", {}).get("client_secret", "")
+    if google_secret:
+        data["google"]["client_secret"] = _redact(google_secret)
 
     return data

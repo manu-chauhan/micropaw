@@ -1,214 +1,175 @@
-"""Email tool — read, send, search Gmail via IMAP/SMTP with App Passwords."""
+"""Email tool — Gmail REST API v1 via OAuth2 (shared with calendar)."""
 
 from __future__ import annotations
 
-import asyncio
-import email as email_lib
-import email.utils
-import imaplib
+import base64
 import logging
 import re
-import smtplib
-from email.header import decode_header
 from email.message import EmailMessage
 from typing import Any
 
+import httpx
+
 from micropaw.tools.base import Tool, ToolContext
+from micropaw.tools.google_auth import authorize, ensure_token, api_get, api_post, api_error
 
 logger = logging.getLogger(__name__)
 
+_GMAIL = "https://gmail.googleapis.com/gmail/v1"
 _MAX_BODY = 10_000
 _MAX_INBOX = 50
-
-# Injected at startup
-_config: Any = None
-
-
-def set_email_config(config: Any) -> None:
-    global _config
-    _config = config
-
-
-def _decode_header_value(raw: str) -> str:
-    """Decode RFC 2047 encoded header value."""
-    parts = decode_header(raw)
-    decoded = []
-    for data, charset in parts:
-        if isinstance(data, bytes):
-            decoded.append(data.decode(charset or "utf-8", errors="replace"))
-        else:
-            decoded.append(data)
-    return " ".join(decoded)
 
 
 def _strip_html(html: str) -> str:
     """Crude HTML-to-text: strip tags, decode entities."""
     text = re.sub(r"<br\s*/?>", "\n", html, flags=re.I)
     text = re.sub(r"<[^>]+>", "", text)
-    text = re.sub(r"&nbsp;", " ", text)
-    text = re.sub(r"&amp;", "&", text)
-    text = re.sub(r"&lt;", "<", text)
-    text = re.sub(r"&gt;", ">", text)
+    for entity, char in [("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">")]:
+        text = text.replace(entity, char)
     text = re.sub(r"&#\d+;", "", text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
-def _extract_body(msg: email_lib.message.Message) -> str:
-    """Extract plain text body from email message."""
-    if msg.is_multipart():
-        for part in msg.walk():
-            ct = part.get_content_type()
-            if ct == "text/plain":
-                payload = part.get_payload(decode=True)
-                if payload:
-                    charset = part.get_content_charset() or "utf-8"
-                    return payload.decode(charset, errors="replace")
-        # Fallback: try HTML
-        for part in msg.walk():
-            ct = part.get_content_type()
-            if ct == "text/html":
-                payload = part.get_payload(decode=True)
-                if payload:
-                    charset = part.get_content_charset() or "utf-8"
-                    return _strip_html(payload.decode(charset, errors="replace"))
-    else:
-        payload = msg.get_payload(decode=True)
-        if payload:
-            charset = msg.get_content_charset() or "utf-8"
-            text = payload.decode(charset, errors="replace")
-            if msg.get_content_type() == "text/html":
-                return _strip_html(text)
-            return text
+def _b64_decode(data: str) -> str:
+    """Decode Gmail's base64url-encoded body data."""
+    return base64.urlsafe_b64decode(data + "==").decode("utf-8", errors="replace")
+
+
+def _extract_body(payload: dict) -> str:
+    """Extract text body from Gmail message payload."""
+    mime = payload.get("mimeType", "")
+
+    # Single-part message
+    if mime in ("text/plain", "text/html"):
+        data = payload.get("body", {}).get("data", "")
+        if data:
+            text = _b64_decode(data)
+            return _strip_html(text) if mime == "text/html" else text
+
+    # Multipart — prefer text/plain, fallback to text/html
+    for preferred in ("text/plain", "text/html"):
+        for part in payload.get("parts", []):
+            if part.get("mimeType") == preferred:
+                data = part.get("body", {}).get("data", "")
+                if data:
+                    text = _b64_decode(data)
+                    return _strip_html(text) if preferred == "text/html" else text
+            # Nested multipart
+            for sub in part.get("parts", []):
+                if sub.get("mimeType") == preferred:
+                    data = sub.get("body", {}).get("data", "")
+                    if data:
+                        text = _b64_decode(data)
+                        return _strip_html(text) if preferred == "text/html" else text
+
     return "(no text content)"
 
 
-def _imap_connect() -> imaplib.IMAP4_SSL:
-    """Create and authenticate IMAP connection."""
-    imap = imaplib.IMAP4_SSL(_config.imap_host, _config.imap_port)
-    imap.login(_config.email_address, _config.password)
-    imap.select("INBOX")
-    return imap
+def _get_header(headers: list[dict], name: str) -> str:
+    """Get header value by name from Gmail headers list."""
+    for h in headers:
+        if h.get("name", "").lower() == name.lower():
+            return h.get("value", "")
+    return ""
 
 
-def _imap_inbox(count: int, filter_type: str) -> str:
-    """List recent emails from inbox."""
-    try:
-        imap = _imap_connect()
+async def _fetch_headers(token: str, msg_ids: list[str]) -> list[dict]:
+    """Batch-fetch message headers (metadata only)."""
+    results = []
+    for mid in msg_ids:
         try:
-            criterion = "UNSEEN" if filter_type == "unread" else "ALL"
-            _, data = imap.uid("search", None, criterion)
-            uids = data[0].split()
-            if not uids:
-                return "No messages found." if filter_type == "all" else "No unread messages."
-
-            uids = uids[-count:]  # Most recent
-            uids.reverse()
-
-            lines = [f"{'Unread' if filter_type == 'unread' else 'Recent'} emails ({len(uids)}):"]
-            for uid in uids:
-                _, msg_data = imap.uid("fetch", uid, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")
-                raw = msg_data[0][1]
-                msg = email_lib.message_from_bytes(raw)
-                frm = _decode_header_value(msg.get("From", "?"))
-                subj = _decode_header_value(msg.get("Subject", "(no subject)"))
-                date = msg.get("Date", "?")
-                lines.append(f"\n- UID: {uid.decode()}\n  From: {frm}\n  Subject: {subj}\n  Date: {date}")
-            return "\n".join(lines)
-        finally:
-            imap.logout()
-    except imaplib.IMAP4.error as e:
-        return f"Error: IMAP error: {e}"
-    except Exception as e:
-        return f"Error: {e}"
+            data = await api_get(token, f"{_GMAIL}/users/me/messages/{mid}", {"format": "metadata", "metadataHeaders": "From,Subject,Date"})
+            hdrs = data.get("payload", {}).get("headers", [])
+            results.append({
+                "id": mid,
+                "from": _get_header(hdrs, "From"),
+                "subject": _get_header(hdrs, "Subject") or "(no subject)",
+                "date": _get_header(hdrs, "Date"),
+                "snippet": data.get("snippet", ""),
+            })
+        except Exception as e:
+            logger.debug("Failed to fetch message %s: %s", mid, e)
+    return results
 
 
-def _imap_read(uid: str) -> str:
-    """Read a specific email by UID."""
+async def _inbox(token: str, count: int, filter_type: str) -> str:
+    q = "in:inbox is:unread" if filter_type == "unread" else "in:inbox"
     try:
-        imap = _imap_connect()
-        try:
-            _, msg_data = imap.uid("fetch", uid.encode(), "(RFC822)")
-            if not msg_data or not msg_data[0]:
-                return f"Error: Message UID {uid} not found."
-            raw = msg_data[0][1]
-            msg = email_lib.message_from_bytes(raw)
+        data = await api_get(token, f"{_GMAIL}/users/me/messages", {"q": q, "maxResults": count})
+    except httpx.HTTPStatusError as e:
+        return api_error(e, "Gmail")
 
-            frm = _decode_header_value(msg.get("From", "?"))
-            to = _decode_header_value(msg.get("To", "?"))
-            subj = _decode_header_value(msg.get("Subject", "(no subject)"))
-            date = msg.get("Date", "?")
-            body = _extract_body(msg)
-            if len(body) > _MAX_BODY:
-                body = body[:_MAX_BODY] + "\n... (truncated)"
+    messages = data.get("messages", [])
+    if not messages:
+        return "No unread messages." if filter_type == "unread" else "No messages found."
 
-            return (
-                f"From: {frm}\nTo: {to}\nSubject: {subj}\nDate: {date}\n\n{body}"
-            )
-        finally:
-            imap.logout()
-    except imaplib.IMAP4.error as e:
-        return f"Error: IMAP error: {e}"
-    except Exception as e:
-        return f"Error: {e}"
+    headers = await _fetch_headers(token, [m["id"] for m in messages])
+    label = "Unread" if filter_type == "unread" else "Recent"
+    lines = [f"{label} emails ({len(headers)}):"]
+    for h in headers:
+        lines.append(f"\n- ID: {h['id']}\n  From: {h['from']}\n  Subject: {h['subject']}\n  Date: {h['date']}")
+    return "\n".join(lines)
 
 
-def _imap_search(query: str) -> str:
-    """Search emails using IMAP search criteria."""
+async def _read(token: str, message_id: str) -> str:
     try:
-        imap = _imap_connect()
-        try:
-            _, data = imap.uid("search", None, query)
-            uids = data[0].split()
-            if not uids:
-                return f"No messages matching: {query}"
+        data = await api_get(token, f"{_GMAIL}/users/me/messages/{message_id}", {"format": "full"})
+    except httpx.HTTPStatusError as e:
+        return f"Error: Message {message_id} not found." if e.response.status_code == 404 else api_error(e, "Gmail")
 
-            uids = uids[-20:]  # Last 20 results
-            uids.reverse()
+    hdrs = data.get("payload", {}).get("headers", [])
+    body = _extract_body(data.get("payload", {}))
+    if len(body) > _MAX_BODY:
+        body = body[:_MAX_BODY] + "\n... (truncated)"
 
-            lines = [f"Search results ({len(uids)} messages):"]
-            for uid in uids:
-                _, msg_data = imap.uid("fetch", uid, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")
-                raw = msg_data[0][1]
-                msg = email_lib.message_from_bytes(raw)
-                frm = _decode_header_value(msg.get("From", "?"))
-                subj = _decode_header_value(msg.get("Subject", "(no subject)"))
-                date = msg.get("Date", "?")
-                lines.append(f"\n- UID: {uid.decode()}\n  From: {frm}\n  Subject: {subj}\n  Date: {date}")
-            return "\n".join(lines)
-        finally:
-            imap.logout()
-    except imaplib.IMAP4.error as e:
-        return f"Error: IMAP search error: {e}"
-    except Exception as e:
-        return f"Error: {e}"
+    return (
+        f"From: {_get_header(hdrs, 'From')}\n"
+        f"To: {_get_header(hdrs, 'To')}\n"
+        f"Subject: {_get_header(hdrs, 'Subject')}\n"
+        f"Date: {_get_header(hdrs, 'Date')}\n\n{body}"
+    )
 
 
-def _smtp_send(to: str, subject: str, body: str) -> str:
-    """Send an email via SMTP."""
+async def _send(token: str, to: str, subject: str, body: str) -> str:
+    msg = EmailMessage()
+    msg["To"] = to
+    msg["Subject"] = subject or "(no subject)"
+    msg.set_content(body)
+
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
     try:
-        msg = EmailMessage()
-        msg["From"] = _config.email_address
-        msg["To"] = to
-        msg["Subject"] = subject or "(no subject)"
-        msg.set_content(body)
-
-        with smtplib.SMTP_SSL(_config.smtp_host, _config.smtp_port, timeout=30) as smtp:
-            smtp.login(_config.email_address, _config.password)
-            smtp.send_message(msg)
-
-        return f"Email sent to {to} with subject: {subject}"
-    except smtplib.SMTPAuthenticationError:
-        return "Error: SMTP authentication failed. Check your email address and App Password."
+        result = await api_post(token, f"{_GMAIL}/users/me/messages/send", {"raw": raw})
+        return f"Email sent to {to} (ID: {result.get('id', '?')})"
+    except httpx.HTTPStatusError as e:
+        return api_error(e, "Gmail")
     except Exception as e:
         return f"Error sending email: {e}"
+
+
+async def _search(token: str, query: str) -> str:
+    try:
+        data = await api_get(token, f"{_GMAIL}/users/me/messages", {"q": query, "maxResults": 20})
+    except httpx.HTTPStatusError as e:
+        return api_error(e, "Gmail")
+
+    messages = data.get("messages", [])
+    if not messages:
+        return f"No messages matching: {query}"
+
+    headers = await _fetch_headers(token, [m["id"] for m in messages])
+    lines = [f"Search results ({len(headers)} messages):"]
+    for h in headers:
+        lines.append(f"\n- ID: {h['id']}\n  From: {h['from']}\n  Subject: {h['subject']}\n  Date: {h['date']}")
+    return "\n".join(lines)
 
 
 class EmailTool(Tool):
     name = "email"
     description = (
-        "Manage email. Actions: 'inbox' (list recent messages), "
-        "'read' (read a specific message by UID), 'send' (send an email), "
-        "'search' (search messages by IMAP query, e.g. 'FROM john', 'SUBJECT meeting', 'SINCE 01-Feb-2026')."
+        "Manage email (Gmail). Actions: 'authorize' (one-time Google sign-in), "
+        "'inbox' (list recent messages), 'read' (read a message by ID), "
+        "'send' (send an email), 'search' (Gmail search syntax, "
+        "e.g. 'from:alice subject:meeting after:2026/02/01')."
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -216,7 +177,7 @@ class EmailTool(Tool):
             "action": {
                 "type": "string",
                 "description": "The action to perform",
-                "enum": ["inbox", "read", "send", "search"],
+                "enum": ["authorize", "inbox", "read", "send", "search"],
             },
             "count": {
                 "type": "integer",
@@ -229,7 +190,7 @@ class EmailTool(Tool):
             },
             "message_id": {
                 "type": "string",
-                "description": "Email UID to read (for read action)",
+                "description": "Message ID to read (from inbox/search results)",
             },
             "to": {
                 "type": "string",
@@ -245,41 +206,38 @@ class EmailTool(Tool):
             },
             "query": {
                 "type": "string",
-                "description": "IMAP search query (for search). Examples: 'FROM john', 'SUBJECT meeting', 'SINCE 01-Feb-2026', 'UNSEEN'",
+                "description": "Gmail search query (for search). Examples: 'from:alice', 'subject:meeting', 'is:unread after:2026/02/01'",
             },
         },
         "required": ["action"],
     }
 
     async def execute(self, args: dict[str, Any], context: ToolContext) -> str:
-        if _config is None or not _config.password:
-            return "Error: Email not configured. Run 'paw setup' to configure email."
-
         action = args["action"]
 
+        if action == "authorize":
+            return await authorize()
+
+        token, err = await ensure_token("Gmail")
+        if err:
+            return err
+
         if action == "inbox":
-            count = min(args.get("count", 10), _MAX_INBOX)
-            filter_type = args.get("filter", "all")
-            return await asyncio.to_thread(_imap_inbox, count, filter_type)
-
+            return await _inbox(token, min(args.get("count", 10), _MAX_INBOX), args.get("filter", "all"))
         elif action == "read":
-            msg_id = args.get("message_id", "")
-            if not msg_id:
-                return "Error: 'read' requires 'message_id' (use inbox first to get UIDs)."
-            return await asyncio.to_thread(_imap_read, msg_id)
-
+            mid = args.get("message_id", "")
+            if not mid:
+                return "Error: 'read' requires 'message_id' (use inbox first to get IDs)."
+            return await _read(token, mid)
         elif action == "send":
-            to = args.get("to", "")
-            subject = args.get("subject", "")
-            body = args.get("body", "")
+            to, subject, body = args.get("to", ""), args.get("subject", ""), args.get("body", "")
             if not to or not body:
                 return "Error: 'send' requires 'to' and 'body'."
-            return await asyncio.to_thread(_smtp_send, to, subject, body)
-
+            return await _send(token, to, subject, body)
         elif action == "search":
             query = args.get("query", "")
             if not query:
                 return "Error: 'search' requires 'query'."
-            return await asyncio.to_thread(_imap_search, query)
+            return await _search(token, query)
 
         return f"Unknown action: {action}"

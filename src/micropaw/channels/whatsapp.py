@@ -7,7 +7,7 @@ import hmac
 import json
 import logging
 import secrets
-from typing import Any, Callable, Awaitable
+from typing import Any
 
 import httpx
 
@@ -17,8 +17,6 @@ logger = logging.getLogger(__name__)
 
 MAX_MSG_LEN = 4000
 API_VERSION = "v21.0"
-
-MessageHandler = Callable[[str, str, str, str | None], Awaitable[str]]
 
 
 class WhatsAppChannel(Channel):
@@ -33,20 +31,14 @@ class WhatsAppChannel(Channel):
         host: str = "0.0.0.0",
         port: int = 8080,
     ) -> None:
+        super().__init__()
         self.token = token
         self.phone_id = phone_id
         self.verify_token = verify_token
         self.app_secret = app_secret
         self.host = host
         self.port = port
-        self._handler: MessageHandler | None = None
         self._server: Any = None
-
-    def set_handler(self, handler: MessageHandler) -> None:
-        self._handler = handler
-
-    def set_stream_handler(self, handler: Any) -> None:
-        pass  # WhatsApp doesn't support streaming edits
 
     async def start(self) -> None:
         """Start webhook server for WhatsApp."""

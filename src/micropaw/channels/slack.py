@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Callable, Awaitable
+from typing import Any
 
 from micropaw.channels.base import Channel, chunk_text
 
@@ -14,29 +14,19 @@ logger = logging.getLogger(__name__)
 MAX_MSG_LEN = 4000
 STREAM_EDIT_INTERVAL = 1.0
 
-MessageHandler = Callable[[str, str, str, str | None], Awaitable[str]]
-StreamHandler = Callable[[str, str, str, str | None, Callable[[str], Awaitable[None]] | None], Awaitable[str]]
-
 
 class SlackChannel(Channel):
     name = "slack"
 
     def __init__(self, bot_token: str, app_token: str, signing_secret: str = "") -> None:
+        super().__init__()
         self.bot_token = bot_token
         self.app_token = app_token
         self.signing_secret = signing_secret
-        self._handler: MessageHandler | None = None
-        self._stream_handler: StreamHandler | None = None
         self._app: Any = None
         self._socket_handler: Any = None
         self._task: asyncio.Task | None = None
         self._watcher: asyncio.Task | None = None
-
-    def set_handler(self, handler: MessageHandler) -> None:
-        self._handler = handler
-
-    def set_stream_handler(self, handler: StreamHandler) -> None:
-        self._stream_handler = handler
 
     async def start(self) -> None:
         try:

@@ -5,37 +5,26 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Callable, Awaitable
+from typing import Any
 
 from micropaw.channels.base import Channel, chunk_text
 
 logger = logging.getLogger(__name__)
 
 STREAM_EDIT_INTERVAL = 0.8
-
 MAX_MSG_LEN = 2000
-
-MessageHandler = Callable[[str, str, str, str | None], Awaitable[str]]
-StreamHandler = Callable[[str, str, str, str | None, Callable[[str], Awaitable[None]] | None], Awaitable[str]]
 
 
 class DiscordChannel(Channel):
     name = "discord"
 
     def __init__(self, token: str, allowed_users: list[str] | None = None) -> None:
+        super().__init__()
         self.token = token
         self.allowed_users = set(allowed_users) if allowed_users else set()
         self._client: Any = None
         self._task: asyncio.Task | None = None
         self._watcher: asyncio.Task | None = None
-        self._handler: MessageHandler | None = None
-        self._stream_handler: StreamHandler | None = None
-
-    def set_handler(self, handler: MessageHandler) -> None:
-        self._handler = handler
-
-    def set_stream_handler(self, handler: StreamHandler) -> None:
-        self._stream_handler = handler
 
     async def start(self) -> None:
         try:

@@ -103,10 +103,5 @@ class SubAgent:
 
 
 def _short_args(args: dict[str, Any]) -> str:
-    parts = []
-    for k, v in args.items():
-        s = str(v)
-        if len(s) > 50:
-            s = s[:47] + "..."
-        parts.append(f"{k}={s}")
-    return ", ".join(parts) if parts else "(no args)"
+    from micropaw.core.agent import _summarize_args
+    return _summarize_args(args)

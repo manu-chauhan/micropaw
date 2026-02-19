@@ -85,13 +85,9 @@ class Gateway:
         from micropaw.tools.web_search import set_search_config
         set_search_config(self.config.search)
 
-        from micropaw.tools.email_tool import set_email_config
-        if self.config.email.enabled and self.config.email.password:
-            set_email_config(self.config.email)
-
-        from micropaw.tools.calendar_tool import set_calendar_config
-        if self.config.calendar.enabled and self.config.calendar.client_id:
-            set_calendar_config(self.config.calendar)
+        from micropaw.tools.google_auth import set_google_config
+        if self.config.google.enabled and self.config.google.client_id:
+            set_google_config(self.config.google)
 
         from micropaw.bus import MessageBus
         from micropaw.tools.delegate import set_delegate_deps
@@ -197,8 +193,7 @@ class Gateway:
                 return ch
         return None
 
-    async def _handle_message(self, text: str, user_id: str, platform: str, channel_id: str | None) -> str:
-        """Route a message to the agent (non-streaming)."""
+    def _validate(self, text: str, user_id: str) -> str | None:
         if not self.agent:
             return "Agent not initialized."
         if not self._rate_limiter.check(user_id):
@@ -206,6 +201,12 @@ class Gateway:
         max_size = self.config.context.max_message_size
         if len(text) > max_size:
             return f"Message too long ({len(text):,} chars). Maximum is {max_size:,} characters."
+        return None
+
+    async def _handle_message(self, text: str, user_id: str, platform: str, channel_id: str | None) -> str:
+        err = self._validate(text, user_id)
+        if err:
+            return err
         self._record_channel_activity(platform, user_id, channel_id)
         logger.info("[%s] %s: %s", platform, user_id, text[:80])
         response = await self.agent.handle_message(text, user_id, platform, channel_id)
@@ -217,14 +218,9 @@ class Gateway:
         self, text: str, user_id: str, platform: str, channel_id: str | None,
         on_chunk=None,
     ) -> str:
-        """Route a message to the agent (streaming)."""
-        if not self.agent:
-            return "Agent not initialized."
-        if not self._rate_limiter.check(user_id):
-            return "You're sending messages too fast. Please wait a moment."
-        max_size = self.config.context.max_message_size
-        if len(text) > max_size:
-            return f"Message too long ({len(text):,} chars). Maximum is {max_size:,} characters."
+        err = self._validate(text, user_id)
+        if err:
+            return err
         self._record_channel_activity(platform, user_id, channel_id)
         logger.info("[%s] %s: %s", platform, user_id, text[:80])
         response = await self.agent.handle_message_stream(text, user_id, platform, channel_id, on_chunk=on_chunk)
@@ -349,28 +345,25 @@ class Gateway:
             return OllamaEmbedding(host, cfg.model or _DEFAULT_OLLAMA_MODEL)
         return NullEmbedding()
 
-    async def stop(self) -> None:
-        # Close scheduler
-        if hasattr(self, "_scheduler"):
-            self._scheduler._running = False
-        if hasattr(self, "_scheduler_task") and self._scheduler_task and not self._scheduler_task.done():
-            self._scheduler_task.cancel()
+    @staticmethod
+    async def _cancel_task(task: asyncio.Task | None) -> None:
+        if task and not task.done():
+            task.cancel()
             try:
-                await self._scheduler_task
+                await task
             except asyncio.CancelledError:
                 pass
+
+    async def stop(self) -> None:
+        if hasattr(self, "_scheduler"):
+            self._scheduler._running = False
+        await self._cancel_task(getattr(self, "_scheduler_task", None))
         if hasattr(self, "_scheduler"):
             await self._scheduler.close()
 
-        # Close bus and consumer
         if hasattr(self, "_bus"):
             self._bus.close()
-        if hasattr(self, "_bus_task") and self._bus_task and not self._bus_task.done():
-            self._bus_task.cancel()
-            try:
-                await self._bus_task
-            except asyncio.CancelledError:
-                pass
+        await self._cancel_task(getattr(self, "_bus_task", None))
 
         for channel in self.channels:
             try:

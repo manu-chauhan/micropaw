@@ -3,35 +3,37 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any, Awaitable, Callable
+
+MessageHandler = Callable[[str, str, str, str | None], Awaitable[str]]
+StreamHandler = Callable[[str, str, str, str | None, Callable[[str], Awaitable[None]] | None], Awaitable[str]]
 
 
 class Channel(ABC):
-    """Abstract base class for messaging channels.
-
-    In MicroPaw, channels are thin adapters: they receive messages from
-    external platforms, publish them to the message bus, consume outbound
-    replies from the bus, and deliver them back to the platform.
-    """
+    """Abstract base class for messaging channels."""
 
     name: str
 
-    @abstractmethod
-    async def start(self) -> None:
-        """Start the channel and begin listening for messages."""
-        ...
+    def __init__(self) -> None:
+        self._handler: MessageHandler | None = None
+        self._stream_handler: StreamHandler | None = None
+
+    def set_handler(self, handler: MessageHandler) -> None:
+        self._handler = handler
+
+    def set_stream_handler(self, handler: StreamHandler) -> None:
+        self._stream_handler = handler
 
     @abstractmethod
-    async def stop(self) -> None:
-        """Stop the channel and clean up resources."""
-        ...
+    async def start(self) -> None: ...
 
     @abstractmethod
-    async def send_message(self, chat_id: str, text: str) -> None:
-        """Send a message to a conversation."""
-        ...
+    async def stop(self) -> None: ...
+
+    @abstractmethod
+    async def send_message(self, chat_id: str, text: str) -> None: ...
 
     async def send_typing(self, chat_id: str) -> None:
-        """Send a typing indicator. Override if supported."""
         pass
 
 

@@ -13,8 +13,6 @@ import logging
 import secrets
 import struct
 import uuid
-from typing import Callable, Awaitable
-
 from micropaw.channels.base import Channel
 
 logger = logging.getLogger(__name__)
@@ -22,11 +20,8 @@ logger = logging.getLogger(__name__)
 MAX_CONNECTIONS = 50
 MAX_MSG_LENGTH = 10_000
 MAX_FRAME_SIZE = 1_048_576  # 1MB max WebSocket frame
-MAX_HEADERS = 50  # Max HTTP headers before rejecting
+MAX_HEADERS = 50
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-
-MessageHandler = Callable[[str, str, str, str | None], Awaitable[str]]
-StreamHandler = Callable[[str, str, str, str | None, Callable[[str], Awaitable[None]] | None], Awaitable[str]]
 
 
 # ---------------------------------------------------------------------------
@@ -135,20 +130,13 @@ class WebChatChannel(Channel):
         auth_token: str = "",
         allowed_origins: list[str] | None = None,
     ) -> None:
+        super().__init__()
         self.host = host
         self.port = port
         self.auth_token = auth_token or secrets.token_urlsafe(32)
         self.allowed_origins = allowed_origins or []
-        self._handler: MessageHandler | None = None
-        self._stream_handler: StreamHandler | None = None
         self._server: asyncio.Server | None = None
         self._connections: dict[str, asyncio.StreamWriter] = {}
-
-    def set_handler(self, handler: MessageHandler) -> None:
-        self._handler = handler
-
-    def set_stream_handler(self, handler: StreamHandler) -> None:
-        self._stream_handler = handler
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(self._handle_connection, self.host, self.port)

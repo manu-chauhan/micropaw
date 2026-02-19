@@ -364,23 +364,33 @@
    - **Fix:** Added `_last_chat_ids` registry to Scheduler, populated by Gateway on every incoming message via `record_activity()`. `_deliver_all()` now broadcasts to all active channels: originating channel (stored chat_id), terminal (no chat_id needed), and all other channels using their last-known chat_id from recent user activity.
    - **Files:** `scheduler.py`, `gateway.py`
 
-### D33: Email Tool (Gmail via IMAP/SMTP)
-**Decided:** 2026-02-17
-**Rationale:** Gap analysis identified email as the main missing feature vs OpenClaw. Gmail is the target provider.
-**Design:** Multi-action tool (inbox/read/send/search) using Python stdlib `imaplib`/`smtplib`/`email`. Gmail App Passwords for auth (no OAuth complexity). Sync calls wrapped via `asyncio.to_thread()`. UID-based message identification. `BODY.PEEK` to avoid marking messages as read. Body truncated at 10KB.
-**Dependencies:** Zero — all stdlib.
-**Config:** `EmailConfig` with email_address, password, imap/smtp host/port. Env vars: `MICROPAW_EMAIL_ADDRESS`, `MICROPAW_EMAIL_PASSWORD`.
+### D33: Email Tool (Gmail via IMAP/SMTP) — *Superseded by D35*
+**Decided:** 2026-02-17 → **Replaced:** 2026-02-19
+**Original:** IMAP/SMTP with Gmail App Passwords, stdlib `imaplib`/`smtplib`. Separate `EmailConfig`.
+**Why replaced:** Clunky setup (manual App Password), separate auth from calendar, two config sections.
 
-### D34: Calendar Tool (Google Calendar via REST API v3)
-**Decided:** 2026-02-17
-**Rationale:** Calendar integration closes the last major feature gap vs competitors. Google Calendar is the target.
-**Design:** Multi-action tool (authorize/list/create/delete/search) using raw httpx to Google Calendar REST API. OAuth2 with one-time browser auth flow: local HTTP server captures redirect code, exchanges for tokens, stores in `~/.micropaw/google_tokens.json` with 0o600 permissions. Auto-refresh on token expiry. Supports timed and all-day events.
-**Dependencies:** Zero new — uses httpx (already core), `http.server`/`webbrowser` (stdlib).
-**Config:** `CalendarConfig` with client_id, client_secret. Env vars: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`.
+### D34: Calendar Tool (Google Calendar via REST API v3) — *Superseded by D35*
+**Decided:** 2026-02-17 → **Replaced:** 2026-02-19
+**Original:** Inline OAuth2 flow in calendar_tool.py, separate `CalendarConfig`.
+**Why replaced:** Duplicated OAuth2 logic, not shared with email.
+
+### D35: Unified Google OAuth2 for Gmail + Calendar
+**Decided:** 2026-02-19
+**Rationale:** D33 (IMAP/SMTP) and D34 (inline OAuth2) used two separate auth mechanisms with two setup sections. Google OAuth2 supports multiple scopes in a single consent screen — one browser sign-in grants access to both Gmail API and Calendar API.
+**Design:**
+- **Shared `google_auth.py` module** (~140 LOC): Token management, browser OAuth2 flow, scope tracking, auto-refresh. Used by both email and calendar tools.
+- **Gmail REST API v1** replaces IMAP/SMTP: `httpx` to `gmail.googleapis.com/gmail/v1`. Actions: authorize, inbox, read, send, search. MIME encoding via stdlib `email.message`.
+- **Calendar tool** imports from `google_auth` instead of inline OAuth2 (~100 LOC removed).
+- **Unified `GoogleConfig`** replaces `EmailConfig` + `CalendarConfig`: `enabled`, `client_id`, `client_secret`, `gmail_enabled`, `calendar_enabled`. Config migration in `load_config()` handles old keys.
+- **Scope tracking**: Token file stores granted `scopes` string. `needs_reauth()` detects when newly-enabled services require re-authorization.
+- **Single setup section** in `paw setup`: one prompt for Google Cloud credentials, checkbox for Gmail/Calendar, option to open console URL in browser.
+**Dependencies:** Zero new — uses httpx (core), `http.server`/`webbrowser`/`email` (stdlib).
+**Config:** `GoogleConfig` with `client_id`, `client_secret`. Env vars: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`.
+**Files changed:** New `google_auth.py`, rewritten `email_tool.py` + `calendar_tool.py`, updated `config.py`, `gateway.py`, `setup_wizard.py`.
 
 ### Metrics (v0.3.0-dev)
-- Source LOC: ~7,700
-- Test LOC: ~3,900
-- Tests: 334 passing
-- Tools: 14 (added email, calendar)
+- Source LOC: ~8,200
+- Test LOC: ~4,000
+- Tests: 347 passing
+- Tools: 14 (email, calendar share unified Google OAuth2)
 - Dependencies: 8 core, 7 optional extras
