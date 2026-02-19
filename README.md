@@ -43,7 +43,7 @@ paw setup && paw chat
 ```
 ┌─ 🔍 Search & Browse ──────┐  ┌─ 📁 Files & Knowledge ────┐  ┌─ 📬 Communicate ──────────┐
 │ Web search (3 engines)     │  │ Read files & PDFs          │  │ Gmail (read/send/search)   │
-│ Browse pages interactively │  │ YouTube transcripts        │  │ Google Calendar            │
+│ Browse pages interactively │  │ YouTube video Q&A          │  │ Google Calendar            │
 │ Click, type, scroll        │  │ Save/manage user files     │  │ Scheduled reminders        │
 │ Take & analyze screenshots │  │ RAG — ask later, anywhere  │  │ Proactive heartbeat tasks  │
 └────────────────────────────┘  └────────────────────────────┘  └────────────────────────────┘
@@ -287,10 +287,6 @@ Disable any tool:
 | **GPT-4o** | Cloud | Yes | Yes | Yes |
 | **Gemini** | Cloud | Yes | Yes | Yes |
 | **Ollama** | Local | Yes | Yes | Yes |
-
-```
-Primary: Claude -> Fallback: GPT-4o -> Fallback: Ollama
-```
 
 Override models: `CLAUDE_MODEL`, `OPENAI_MODEL`, `GEMINI_MODEL`, `OLLAMA_MODEL`
 
