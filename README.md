@@ -161,6 +161,8 @@ MicroPaw:                "Revenue grew 23% in Q4, driven by..."
 
 **MicroPaw sits in the sweet spot** — full-featured like OpenClaw (RAG, 6 channels, 16 tools, scheduling, email, calendar, multi-agent delegation) but lightweight like PicoClaw (~8,700 LOC, zero SDK dependencies). No telemetry, no bloat, no wrappers.
 
+> Started at **4,667 LOC** in the first commit. Grew to **~8,700 source + ~4,300 test LOC** while adding 6 channels, 16 tools, RAG, multi-agent delegation, scheduling, email, calendar — and 380 tests. Every feature earned its lines.
+
 ---
 
 ## One AI, Every Platform
