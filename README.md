@@ -426,7 +426,7 @@ MicroPaw > [delegate] "Research quantum computing breakthroughs"
 | `paw export` | Export conversations (JSON/Markdown) |
 | `paw reset` | Delete all config and data |
 
-Terminal slash commands: `/help`, `/new`, `/tools`, `/usage`, `/clear`, `/config`, `quit`
+Terminal commands: `/help`, `/new`, `/tools`, `/usage`, `/clear`, `/config`, `!cmd` (shell escape), `quit`
 
 ---
 

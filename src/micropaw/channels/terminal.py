@@ -85,7 +85,12 @@ class TerminalChannel(Channel):
                 handled = await self._handle_command(line)
                 if handled:
                     continue
-
+            # Shell escape: !ls, !pwd, etc.
+            if line.startswith("!"):
+                cmd = line[1:].strip()
+                if cmd:
+                    await self._run_shell(cmd)
+                continue
             self._message_count += 1
 
             if self._stream_handler:
@@ -104,6 +109,7 @@ class TerminalChannel(Channel):
             table.add_column("Description")
             for name, desc in SLASH_COMMANDS.items():
                 table.add_row(name, desc)
+            table.add_row("!cmd", "Run a shell command (e.g. !ls -la)")
             table.add_row("quit", "Exit MicroPaw")
             console.print(table)
             return True
@@ -217,3 +223,23 @@ class TerminalChannel(Channel):
 
     async def send_message(self, chat_id: str, text: str) -> None:
         self._print_response(text)
+
+    async def _run_shell(self, cmd: str) -> None:
+        """Run a shell command and print output. Timeout after 30s."""
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+            if stdout:
+                console.print(stdout.decode(errors="replace").rstrip())
+            if stderr:
+                console.print(f"[red]{stderr.decode(errors='replace').rstrip()}[/red]")
+        except TimeoutError:
+            proc.kill()
+            console.print("[red]Command timed out (30s limit).[/red]")
+        except Exception as e:
+            console.print(f"[red]{e}[/red]")
+
