@@ -74,6 +74,13 @@ MicroPaw: [web_search] "pizza near San Francisco"
 ```
 
 ```
+
+```
+You:      !ls -la ~/Downloads     ← run shell commands without leaving the chat
+You:      "summarize that PDF"    ← then ask the AI about what you see
+```
+
+```
 You (Telegram, Day 1):   "Read this report" → attaches quarterly.pdf
 MicroPaw:                 ✓ PDF chunked → embedded → stored for RAG
 
