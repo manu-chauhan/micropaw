@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "micropaw"
 version = "0.2.0"
 description = "Feature-rich lightweight personal AI assistant — your AI, your machine, your keys"
-readme = "README.md"
+readme = "PYPI_README.md"
 license = "MIT"
 requires-python = ">=3.11"
 authors = [
