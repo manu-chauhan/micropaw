@@ -1292,6 +1292,12 @@ class TestStoreCorruptJson:
 # ---------------------------------------------------------------------------
 
 class TestChannelSendTool:
+    def setup_method(self):
+        import micropaw.tools.channel_send as cs
+        cs._bus = None
+        cs._channel_registry = {}
+        cs._send_count = 0
+
     def _make_context(self) -> ToolContext:
         return ToolContext(conversation_id="dm:owner", user_id="user1", platform="terminal")
 
@@ -1396,3 +1402,53 @@ class TestChannelSendTool:
         cs._channel_registry = {}
         update_channel_chat_id("discord", "discord:789")
         assert cs._channel_registry["discord"] == "discord:789"
+
+    @pytest.mark.asyncio
+    async def test_send_cap_enforced(self):
+        import micropaw.tools.channel_send as cs
+        from micropaw.bus import MessageBus
+        from micropaw.tools.channel_send import ChannelSendTool
+
+        bus = MessageBus()
+        cs._bus = bus
+        cs._channel_registry = {"telegram": "telegram:123"}
+
+        tool = ChannelSendTool()
+        for i in range(5):
+            result = await tool.execute({"channel": "telegram", "message": f"msg{i}"}, self._make_context())
+            assert "sent" in result.lower()
+        # 6th should be blocked
+        result = await tool.execute({"channel": "telegram", "message": "spam"}, self._make_context())
+        assert "maximum" in result.lower()
+        bus.close()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_clears_state(self):
+        import micropaw.tools.channel_send as cs
+        from micropaw.bus import MessageBus
+        from micropaw.tools.channel_send import cleanup
+
+        cs._bus = MessageBus()
+        cs._channel_registry = {"telegram": "telegram:123"}
+        cs._send_count = 3
+
+        cleanup()
+        assert cs._bus is None
+        assert cs._channel_registry == {}
+        assert cs._send_count == 0
+
+    @pytest.mark.asyncio
+    async def test_set_deps_clears_stale_state(self):
+        import micropaw.tools.channel_send as cs
+        from micropaw.bus import MessageBus
+        from micropaw.tools.channel_send import set_channel_send_deps
+
+        cs._channel_registry = {"old_channel": "stale:123"}
+        cs._send_count = 4
+        new_bus = MessageBus()
+
+        set_channel_send_deps(new_bus)
+        assert cs._bus is new_bus
+        assert cs._channel_registry == {}
+        assert cs._send_count == 0
+        new_bus.close()

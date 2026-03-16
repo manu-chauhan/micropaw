@@ -18,8 +18,10 @@ _send_count: int = 0
 
 
 def set_channel_send_deps(bus: MessageBus) -> None:
-    global _bus
+    global _bus, _send_count
     _bus = bus
+    _channel_registry.clear()
+    _send_count = 0
 
 
 def update_channel_chat_id(channel: str, chat_id: str) -> None:
@@ -36,6 +38,14 @@ def get_active_channels() -> list[str]:
 def reset_send_count() -> None:
     """Reset per-turn send counter (called by agent at start of each message)."""
     global _send_count
+    _send_count = 0
+
+
+def cleanup() -> None:
+    """Clear all state (called by Gateway.stop())."""
+    global _bus, _send_count
+    _bus = None
+    _channel_registry.clear()
     _send_count = 0
 
 

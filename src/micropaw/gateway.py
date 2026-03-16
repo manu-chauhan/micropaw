@@ -402,6 +402,9 @@ class Gateway:
             self._bus.close()
         await self._cancel_task(getattr(self, "_bus_task", None))
 
+        from micropaw.tools.channel_send import cleanup as cleanup_channel_send
+        cleanup_channel_send()
+
         for channel in self.channels:
             try:
                 await asyncio.wait_for(channel.stop(), timeout=5.0)
