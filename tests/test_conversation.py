@@ -97,6 +97,17 @@ class TestConversationManager:
         mgr.rejoin_channel("terminal")
         assert mgr.get_conversation_id("terminal", "terminal-user") == _DM_CONV_ID
 
+    def test_rejoin_after_newall_doesnt_affect_other_channels(self):
+        """Terminal /rejoin after /newall only affects terminal, not Telegram."""
+        store = MagicMock()
+        mgr = ConversationManager(store)
+        mgr.new_all_sessions("dm:owner:newall")
+        mgr.rejoin_channel("terminal")
+        # Terminal pinned to base
+        assert mgr.get_conversation_id("terminal", "terminal-user") == _DM_CONV_ID
+        # Telegram still on newall conversation
+        assert mgr.get_conversation_id("telegram", "user123") == "dm:owner:newall"
+
     def test_new_then_newall_then_rejoin(self):
         """/new → /newall → /rejoin returns to base dm:owner."""
         store = MagicMock()
@@ -107,6 +118,16 @@ class TestConversationManager:
         assert mgr.get_conversation_id("terminal", "terminal-user") == "dm:owner:fresh"
         mgr.rejoin_channel("terminal")
         assert mgr.get_conversation_id("terminal", "terminal-user") == _DM_CONV_ID
+
+    def test_new_after_rejoin_cancels_pin(self):
+        """/rejoin then /new should branch again (rejoin pin cleared)."""
+        store = MagicMock()
+        mgr = ConversationManager(store)
+        mgr.new_all_sessions("dm:owner:global")
+        mgr.rejoin_channel("terminal")
+        assert mgr.get_conversation_id("terminal", "terminal-user") == _DM_CONV_ID
+        mgr.new_channel_session("terminal", "dm:terminal:branch2")
+        assert mgr.get_conversation_id("terminal", "terminal-user") == "dm:terminal:branch2"
 
     @pytest.mark.asyncio
     async def test_load_history(self):

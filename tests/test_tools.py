@@ -1452,3 +1452,164 @@ class TestChannelSendTool:
         assert cs._channel_registry == {}
         assert cs._send_count == 0
         new_bus.close()
+
+
+# ---------------------------------------------------------------------------
+# SubAgent tests
+# ---------------------------------------------------------------------------
+
+class TestSubAgent:
+    def _make_provider(self, responses):
+        from micropaw.providers.base import AIResponse, ToolCall
+        from tests.test_agent import MockProvider
+        return MockProvider(responses)
+
+    def _make_registry(self, tools):
+        reg = ToolRegistry()
+        for t in tools:
+            reg.register(t)
+        return reg
+
+    @pytest.mark.asyncio
+    async def test_simple_response(self):
+        from micropaw.core.subagent import SubAgent
+        from micropaw.providers.base import AIResponse
+
+        provider = self._make_provider([
+            AIResponse(content="Done!", tool_calls=[], usage={"input": 5, "output": 3}),
+        ])
+        agent = SubAgent(provider)
+        result = await agent.run("Do something")
+        assert result == "Done!"
+
+    @pytest.mark.asyncio
+    async def test_tool_call_with_string_result(self):
+        from micropaw.core.subagent import SubAgent
+        from micropaw.providers.base import AIResponse, ToolCall
+
+        provider = self._make_provider([
+            AIResponse(
+                content="",
+                tool_calls=[ToolCall(id="tc1", name="test_tool", arguments={"text": "hello"})],
+                usage={"input": 5, "output": 3},
+            ),
+            AIResponse(content="Got: result: hello", tool_calls=[], usage={"input": 10, "output": 5}),
+        ])
+        context = ToolContext(conversation_id="dm:owner", user_id="user1", platform="terminal")
+        registry = self._make_registry([FakeTool()])
+        agent = SubAgent(provider, registry=registry, tool_context=context)
+        result = await agent.run("Use the tool")
+        assert "Got:" in result
+
+    @pytest.mark.asyncio
+    async def test_tool_call_with_toolresult(self):
+        """SubAgent handles ToolResult without crashing (normalizes to text)."""
+        from micropaw.core.subagent import SubAgent
+        from micropaw.providers.base import AIResponse, MediaItem, ToolCall
+        from micropaw.tools.base import ToolResult
+
+        class MediaTool(Tool):
+            name = "screenshot"
+            description = "Take screenshot"
+            parameters: dict[str, Any] = {"type": "object", "properties": {}}
+
+            async def execute(self, args, context):
+                return ToolResult(
+                    text="Screenshot taken",
+                    media=[MediaItem(type="image", data=b"png", mime_type="image/png")],
+                )
+
+        provider = self._make_provider([
+            AIResponse(
+                content="",
+                tool_calls=[ToolCall(id="tc1", name="screenshot", arguments={})],
+                usage={"input": 5, "output": 3},
+            ),
+            AIResponse(content="I see the page.", tool_calls=[], usage={"input": 10, "output": 5}),
+        ])
+        context = ToolContext(conversation_id="dm:owner", user_id="user1", platform="terminal")
+        registry = self._make_registry([MediaTool()])
+        agent = SubAgent(provider, registry=registry, tool_context=context)
+        result = await agent.run("Take a screenshot")
+        assert result == "I see the page."
+
+    @pytest.mark.asyncio
+    async def test_max_iterations(self):
+        from micropaw.core.subagent import SubAgent
+        from micropaw.providers.base import AIResponse
+
+        provider = self._make_provider([
+            AIResponse(content="", tool_calls=[], usage={"input": 5, "output": 0}),
+        ] * 30)
+        agent = SubAgent(provider, max_iterations=3)
+        result = await agent.run("Loop")
+        assert "maximum iterations" in result.lower()
+
+
+# ---------------------------------------------------------------------------
+# DelegateTool tests
+# ---------------------------------------------------------------------------
+
+class TestDelegateTool:
+    @pytest.mark.asyncio
+    async def test_inline_mode(self):
+        import micropaw.tools.delegate as dt
+        from micropaw.providers.base import AIResponse
+        from micropaw.tools.delegate import DelegateTool
+        from tests.test_agent import MockProvider
+
+        provider = MockProvider([
+            AIResponse(content="Research complete.", tool_calls=[], usage={"input": 10, "output": 5}),
+        ])
+        dt._provider = provider
+        dt._registry = None
+        dt._max_iterations = 5
+
+        tool = DelegateTool()
+        context = ToolContext(conversation_id="dm:owner", user_id="u1", platform="terminal", chat_id="terminal:terminal-user")
+        result = await tool.execute({"task": "Research X", "mode": "inline"}, context)
+        assert "Research complete" in result
+
+    @pytest.mark.asyncio
+    async def test_background_mode_publishes_to_bus(self):
+        import asyncio
+
+        import micropaw.tools.delegate as dt
+        from micropaw.bus import MessageBus
+        from micropaw.providers.base import AIResponse
+        from micropaw.tools.delegate import DelegateTool
+        from tests.test_agent import MockProvider
+
+        provider = MockProvider([
+            AIResponse(content="BG done.", tool_calls=[], usage={"input": 10, "output": 5}),
+        ])
+        bus = MessageBus()
+        dt._provider = provider
+        dt._bus = bus
+        dt._registry = None
+        dt._max_iterations = 5
+
+        tool = DelegateTool()
+        context = ToolContext(conversation_id="dm:owner", user_id="u1", platform="telegram", chat_id="telegram:12345")
+        result = await tool.execute({"task": "BG task", "mode": "background"}, context)
+        assert "delegated" in result.lower()
+
+        # Give background task time to complete
+        await asyncio.sleep(0.1)
+        msg = await bus.consume_outbound()
+        assert msg is not None
+        assert msg.channel == "telegram"
+        assert msg.chat_id == "telegram:12345"
+        assert "BG done" in msg.content
+        bus.close()
+
+    @pytest.mark.asyncio
+    async def test_no_provider(self):
+        import micropaw.tools.delegate as dt
+        from micropaw.tools.delegate import DelegateTool
+
+        dt._provider = None
+        tool = DelegateTool()
+        context = ToolContext(conversation_id="dm:owner", user_id="u1", platform="terminal", chat_id="terminal:terminal-user")
+        result = await tool.execute({"task": "test"}, context)
+        assert "error" in result.lower()

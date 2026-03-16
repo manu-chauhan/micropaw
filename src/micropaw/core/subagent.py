@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 from micropaw.providers.base import AIProvider, Message
-from micropaw.tools.base import Tool, ToolContext, ToolDef, ToolRegistry
+from micropaw.tools.base import Tool, ToolContext, ToolDef, ToolRegistry, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +88,9 @@ class SubAgent:
                             result = f"Tool error: {e}"
                     else:
                         result = f"Unknown tool: {tc.name}"
-                    messages.append(Message(role="tool", content=result, tool_call_id=tc.id))
+                    # Normalize ToolResult → text (sub-agents don't forward media)
+                    content = result.text if isinstance(result, ToolResult) else result
+                    messages.append(Message(role="tool", content=content, tool_call_id=tc.id))
                 continue
 
             if response.content and response.content.strip():
