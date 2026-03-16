@@ -121,7 +121,9 @@ class Gateway:
             if channel.name == "terminal":
                 channel._registry = self.registry
                 channel._config = self.config
-                channel._on_new_conversation = self._reset_terminal_conversation
+                channel._on_new = self._on_new
+                channel._on_rejoin = self._on_rejoin
+                channel._on_newall = self._on_newall
                 update_channel_chat_id("terminal", "terminal")
                 terminal_coro = (channel, channel.start())
             else:
@@ -253,12 +255,24 @@ class Gateway:
             if terminal and hasattr(terminal, "track_usage"):
                 terminal.track_usage(self.agent.last_usage)
 
-    async def _reset_terminal_conversation(self) -> None:
-        """Reset the DM conversation ID so /new starts fresh."""
+    async def _on_new(self) -> None:
+        """Branch terminal into a fresh conversation (/new)."""
+        if self.agent:
+            import uuid
+            new_id = f"dm:terminal:{uuid.uuid4().hex[:8]}"
+            self.agent.conversations.new_channel_session("terminal", new_id)
+
+    async def _on_rejoin(self) -> None:
+        """Return terminal to the shared conversation (/rejoin)."""
+        if self.agent:
+            self.agent.conversations.rejoin_channel("terminal")
+
+    async def _on_newall(self) -> None:
+        """Start a fresh conversation for all channels (/newall)."""
         if self.agent:
             import uuid
             new_id = f"dm:owner:{uuid.uuid4().hex[:8]}"
-            self.agent.conversations.reset_dm_session(new_id)
+            self.agent.conversations.new_all_sessions(new_id)
             self.agent.session_usage = {"input": 0, "output": 0}
             self.agent.message_count = 0
 

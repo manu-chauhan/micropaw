@@ -37,27 +37,56 @@ class TestConversationManager:
         assert group_cid != dm_cid
         assert group_cid == "telegram:-100123"
 
-    def test_dm_override(self):
+    def test_new_channel_session_only_affects_that_channel(self):
+        """/new on terminal branches only terminal."""
         store = MagicMock()
         mgr = ConversationManager(store)
-        mgr.reset_dm_session("dm:owner:abc123")
-        cid = mgr.get_conversation_id("terminal", "terminal-user")
-        assert cid == "dm:owner:abc123"
+        mgr.new_channel_session("terminal", "dm:terminal:abc123")
+        assert mgr.get_conversation_id("terminal", "terminal-user") == "dm:terminal:abc123"
+        # Other channels unaffected
+        assert mgr.get_conversation_id("telegram", "user123") == _DM_CONV_ID
 
-    def test_dm_override_applies_across_channels(self):
-        """After /new, the override applies to all DM channels."""
+    def test_rejoin_returns_to_shared(self):
+        """/rejoin clears per-channel override."""
         store = MagicMock()
         mgr = ConversationManager(store)
-        mgr.reset_dm_session("dm:owner:fresh")
+        mgr.new_channel_session("terminal", "dm:terminal:abc123")
+        assert mgr.get_conversation_id("terminal", "terminal-user") == "dm:terminal:abc123"
+        mgr.rejoin_channel("terminal")
+        assert mgr.get_conversation_id("terminal", "terminal-user") == _DM_CONV_ID
+
+    def test_rejoin_noop_when_not_branched(self):
+        """/rejoin when already on shared is harmless."""
+        store = MagicMock()
+        mgr = ConversationManager(store)
+        mgr.rejoin_channel("terminal")  # no-op
+        assert mgr.get_conversation_id("terminal", "terminal-user") == _DM_CONV_ID
+
+    def test_newall_resets_everything(self):
+        """/newall clears per-channel overrides and sets global."""
+        store = MagicMock()
+        mgr = ConversationManager(store)
+        mgr.new_channel_session("terminal", "dm:terminal:branch1")
+        mgr.new_all_sessions("dm:owner:fresh")
+        # Terminal override cleared, global override applied
         assert mgr.get_conversation_id("terminal", "terminal-user") == "dm:owner:fresh"
         assert mgr.get_conversation_id("telegram", "user123") == "dm:owner:fresh"
 
-    def test_dm_override_doesnt_affect_groups(self):
+    def test_newall_doesnt_affect_groups(self):
         store = MagicMock()
         mgr = ConversationManager(store)
-        mgr.reset_dm_session("dm:owner:override")
+        mgr.new_all_sessions("dm:owner:override")
         cid = mgr.get_conversation_id("telegram", "user123", channel_id="-100456")
         assert cid == "telegram:-100456"
+
+    def test_channel_override_takes_priority_over_global(self):
+        """Per-channel override wins over global override."""
+        store = MagicMock()
+        mgr = ConversationManager(store)
+        mgr.new_all_sessions("dm:owner:global")
+        mgr.new_channel_session("terminal", "dm:terminal:local")
+        assert mgr.get_conversation_id("terminal", "terminal-user") == "dm:terminal:local"
+        assert mgr.get_conversation_id("telegram", "user123") == "dm:owner:global"
 
     @pytest.mark.asyncio
     async def test_load_history(self):

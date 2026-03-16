@@ -93,7 +93,7 @@ MicroPaw:                "Revenue grew 23% in Q4, driven by..."
 
 - **Same brain, everywhere** — Start a conversation on Telegram, pick it up on Discord, ask from WhatsApp. Everything stays on your machine.
 
-- **Cross-channel conversations** — All your DM conversations share a single thread. Chat on Terminal, continue on Telegram, pick up on Discord — same history, same context. Group chats stay isolated. Use `/new` on any channel to start fresh.
+- **Cross-channel conversations** — All your DM conversations share a single thread. Chat on Terminal, continue on Telegram, pick up on Discord — same history, same context. Group chats stay isolated. `/new` branches this channel into a fresh conversation, `/rejoin` returns to the shared thread, `/newall` starts fresh everywhere.
 
 - **Cross-channel messaging** — Tell MicroPaw "send this to my Telegram" from Terminal, or "forward that to Discord" from anywhere. The `channel_send` tool routes messages to any active channel instantly.
 
@@ -419,7 +419,7 @@ MicroPaw > [delegate] "Research quantum computing breakthroughs"
 | `paw export` | Export conversations (JSON/Markdown) |
 | `paw reset` | Delete all config and data |
 
-Terminal commands: `/help`, `/new` (fresh conversation across all channels), `/tools`, `/usage`, `/clear`, `/config`, `!cmd` (shell escape), `quit`
+Terminal commands: `/help`, `/new` (fresh conversation, this channel), `/rejoin` (back to shared), `/newall` (fresh everywhere), `/tools`, `/usage`, `/clear`, `/config`, `!cmd` (shell escape), `quit`
 
 ---
 

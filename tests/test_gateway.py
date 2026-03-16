@@ -102,17 +102,35 @@ class TestGatewayHandleMessage:
 
 
 class TestGatewayTerminalConversation:
-    @pytest.mark.asyncio
-    async def test_reset_terminal_conversation(self):
+    def _make_gw(self):
         config = Config()
-        provider = MagicMock()
-        registry = MagicMock()
-        gw = Gateway(config, provider, registry, [])
+        gw = Gateway(config, MagicMock(), MagicMock(), [])
         gw.agent = MagicMock()
         gw.agent.conversations = MagicMock()
-        gw.agent.conversations.reset_dm_session = MagicMock()
+        gw.agent.conversations.new_channel_session = MagicMock()
+        gw.agent.conversations.rejoin_channel = MagicMock()
+        gw.agent.conversations.new_all_sessions = MagicMock()
+        return gw
 
-        await gw._reset_terminal_conversation()
-        gw.agent.conversations.reset_dm_session.assert_called_once()
-        call_args = gw.agent.conversations.reset_dm_session.call_args[0]
-        assert call_args[0].startswith("dm:owner:")
+    @pytest.mark.asyncio
+    async def test_on_new_branches_terminal(self):
+        gw = self._make_gw()
+        await gw._on_new()
+        gw.agent.conversations.new_channel_session.assert_called_once()
+        args = gw.agent.conversations.new_channel_session.call_args[0]
+        assert args[0] == "terminal"
+        assert args[1].startswith("dm:terminal:")
+
+    @pytest.mark.asyncio
+    async def test_on_rejoin_clears_terminal(self):
+        gw = self._make_gw()
+        await gw._on_rejoin()
+        gw.agent.conversations.rejoin_channel.assert_called_once_with("terminal")
+
+    @pytest.mark.asyncio
+    async def test_on_newall_resets_all(self):
+        gw = self._make_gw()
+        await gw._on_newall()
+        gw.agent.conversations.new_all_sessions.assert_called_once()
+        args = gw.agent.conversations.new_all_sessions.call_args[0]
+        assert args[0].startswith("dm:owner:")
