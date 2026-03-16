@@ -135,5 +135,6 @@ class WhatsAppChannel(Channel):
             logger.info("WhatsApp channel stopped.")
 
     async def send_message(self, chat_id: str, text: str) -> None:
+        to = chat_id.replace("whatsapp:", "", 1)
         for chunk in chunk_text(text, MAX_MSG_LEN):
-            await self._send(chat_id, chunk)
+            await self._send(to, chunk)

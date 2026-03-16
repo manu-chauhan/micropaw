@@ -96,9 +96,11 @@ class Scheduler:
                     await self._deliver_all(platform, chat_id, f"Reminder: {description}")
                 else:
                     # Recurring jobs need agent processing (e.g., "check inbox for new emails")
+                    # Pass None as channel_id so DM jobs use the unified conversation,
+                    # not a double-prefixed orphan like "telegram:telegram:12345".
                     response = await self._handler(
                         f"You have a scheduled task to perform. Do it now and report the result: {description}",
-                        user_id, platform, chat_id,
+                        user_id, platform, None,
                     )
                     await self._deliver(platform, chat_id, f"[Cron #{job_id}] {response}")
             except Exception as e:

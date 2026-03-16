@@ -46,8 +46,13 @@ class ConversationManager:
         self._channel_overrides[platform] = new_id
 
     def rejoin_channel(self, platform: str) -> None:
-        """Return this channel to the shared conversation (/rejoin)."""
+        """Return this channel to the base shared conversation (/rejoin).
+
+        Clears both per-channel override and global override so the channel
+        goes back to the original dm:owner conversation.
+        """
         self._channel_overrides.pop(platform, None)
+        self._global_override = None
 
     def new_all_sessions(self, new_id: str) -> None:
         """Start a fresh conversation for all channels (/newall)."""

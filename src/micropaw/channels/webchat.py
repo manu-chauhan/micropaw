@@ -309,7 +309,8 @@ class WebChatChannel(Channel):
         logger.info("WebChat channel stopped.")
 
     async def send_message(self, chat_id: str, text: str) -> None:
-        writer = self._connections.get(chat_id)
+        key = chat_id.replace("webchat:", "", 1)
+        writer = self._connections.get(key)
         if writer:
             try:
                 writer.write(_ws_text(json.dumps({"type": "message", "text": text})))

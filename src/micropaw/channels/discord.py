@@ -126,7 +126,16 @@ class DiscordChannel(Channel):
 
     async def send_message(self, chat_id: str, text: str) -> None:
         if self._client:
-            channel = self._client.get_channel(int(chat_id.replace("discord:", "")))
+            target_id = int(chat_id.replace("discord:", ""))
+            # Try cached channel first (server channels), fall back to DM
+            channel = self._client.get_channel(target_id)
+            if not channel:
+                try:
+                    user = await self._client.fetch_user(target_id)
+                    channel = await user.create_dm()
+                except Exception as e:
+                    logger.error("Discord DM resolve failed for %s: %s", target_id, e)
+                    return
             if channel:
                 for chunk in chunk_text(text, MAX_MSG_LEN):
                     await channel.send(chunk)

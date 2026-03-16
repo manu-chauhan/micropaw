@@ -88,6 +88,26 @@ class TestConversationManager:
         assert mgr.get_conversation_id("terminal", "terminal-user") == "dm:terminal:local"
         assert mgr.get_conversation_id("telegram", "user123") == "dm:owner:global"
 
+    def test_rejoin_after_newall_returns_to_base(self):
+        """/newall then /rejoin goes back to dm:owner (not stuck on newall ID)."""
+        store = MagicMock()
+        mgr = ConversationManager(store)
+        mgr.new_all_sessions("dm:owner:newall")
+        assert mgr.get_conversation_id("terminal", "terminal-user") == "dm:owner:newall"
+        mgr.rejoin_channel("terminal")
+        assert mgr.get_conversation_id("terminal", "terminal-user") == _DM_CONV_ID
+
+    def test_new_then_newall_then_rejoin(self):
+        """/new → /newall → /rejoin returns to base dm:owner."""
+        store = MagicMock()
+        mgr = ConversationManager(store)
+        mgr.new_channel_session("terminal", "dm:terminal:branch")
+        mgr.new_all_sessions("dm:owner:fresh")
+        # newall clears channel overrides
+        assert mgr.get_conversation_id("terminal", "terminal-user") == "dm:owner:fresh"
+        mgr.rejoin_channel("terminal")
+        assert mgr.get_conversation_id("terminal", "terminal-user") == _DM_CONV_ID
+
     @pytest.mark.asyncio
     async def test_load_history(self):
         store = MagicMock()
