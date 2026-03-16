@@ -142,7 +142,7 @@ class WebChatChannel(Channel):
     async def start(self) -> None:
         self._server = await asyncio.start_server(self._handle_connection, self.host, self.port)
         logger.info("WebChat available at http://%s:%d", self.host, self.port)
-        logger.info("WebChat auth token: %s...%s", self.auth_token[:4], self.auth_token[-4:])
+        logger.debug("WebChat auth token: %s...", self.auth_token[:4])
 
     async def _handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         """Handle a new TCP connection — either HTTP or WebSocket upgrade."""

@@ -161,7 +161,8 @@ def validate_provider_key(config: Config) -> tuple[bool, str]:
             return False, "no API key configured"
         try:
             resp = httpx.get(
-                f"https://generativelanguage.googleapis.com/v1beta/models?key={key}",
+                "https://generativelanguage.googleapis.com/v1beta/models",
+                headers={"x-goog-api-key": key},
                 timeout=10,
             )
             if resp.status_code == 200:

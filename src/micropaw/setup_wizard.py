@@ -118,13 +118,14 @@ def run_setup() -> None:
     if install_browser:
         console.print("[dim]Installing Playwright...[/dim]")
         import subprocess
+        import sys as _sys
         try:
             subprocess.run(
-                ["pip", "install", "playwright"],
+                [_sys.executable, "-m", "pip", "install", "playwright"],
                 check=True, capture_output=True,
             )
             subprocess.run(
-                ["playwright", "install", "chromium"],
+                [_sys.executable, "-m", "playwright", "install", "chromium"],
                 check=True, capture_output=True,
             )
             console.print("[green]Playwright + Chromium installed. Web browsing is ready.[/green]")

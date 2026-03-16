@@ -220,10 +220,10 @@ class Gateway:
         if err:
             return err
         self._record_channel_activity(platform, user_id, channel_id)
-        logger.info("[%s] %s: %s", platform, user_id, text[:80])
+        logger.debug("[%s] %s: %s", platform, user_id, text[:80])
         response = await self.agent.handle_message(text, user_id, platform, channel_id)
         self._track_usage()
-        logger.info("[%s] MicroPaw: %s", platform, response[:80])
+        logger.debug("[%s] MicroPaw: %s", platform, response[:80])
         return response
 
     async def _handle_message_stream(
@@ -234,10 +234,10 @@ class Gateway:
         if err:
             return err
         self._record_channel_activity(platform, user_id, channel_id)
-        logger.info("[%s] %s: %s", platform, user_id, text[:80])
+        logger.debug("[%s] %s: %s", platform, user_id, text[:80])
         response = await self.agent.handle_message_stream(text, user_id, platform, channel_id, on_chunk=on_chunk)
         self._track_usage()
-        logger.info("[%s] MicroPaw: %s", platform, response[:80])
+        logger.debug("[%s] MicroPaw: %s", platform, response[:80])
         return response
 
     def _record_channel_activity(self, platform: str, user_id: str, channel_id: str | None) -> None:

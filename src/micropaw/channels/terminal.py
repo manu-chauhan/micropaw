@@ -242,6 +242,10 @@ class TerminalChannel(Channel):
 
     async def _run_shell(self, cmd: str) -> None:
         """Run a shell command and print output. Timeout after 30s."""
+        from micropaw.tools.shell import _BLOCKED_RE
+        if any(pat.search(cmd) for pat in _BLOCKED_RE):
+            console.print("[red]Blocked: this command matches a security pattern.[/red]")
+            return
         try:
             proc = await asyncio.create_subprocess_shell(
                 cmd,
@@ -254,7 +258,8 @@ class TerminalChannel(Channel):
             if stderr:
                 console.print(f"[red]{stderr.decode(errors='replace').rstrip()}[/red]")
         except TimeoutError:
-            await proc.kill()
+            proc.kill()
+            await proc.wait()
             console.print("[red]Command timed out (30s limit).[/red]")
         except Exception as e:
             console.print(f"[red]{e}[/red]")
