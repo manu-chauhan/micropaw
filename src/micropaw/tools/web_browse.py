@@ -244,7 +244,7 @@ class WebBrowseTool(Tool):
             return "Error: 'browse' action requires 'url'."
         extract = args.get("extract", "text")
 
-        if error := validate_url(url):
+        if error := await validate_url(url):
             return f"Error: {error}"
 
         # Smart YouTube detection

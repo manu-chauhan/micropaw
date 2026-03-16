@@ -383,7 +383,7 @@ class Agent:
                         logger.error("[%s] %s", tc.name, e)
                     if ck:
                         text = result.text if isinstance(result, ToolResult) else result
-                        if not text.startswith("Tool error:"):
+                        if not text.startswith(("Tool error:", "Error:")):
                             self._tool_cache[ck] = result
             else:
                 result = f"Unknown tool: {tc.name}"

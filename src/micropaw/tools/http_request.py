@@ -38,7 +38,7 @@ class HttpRequestTool(Tool):
         headers = args.get("headers") or {}
         body = args.get("body")
 
-        if error := validate_url(url):
+        if error := await validate_url(url):
             return f"Error: {error}"
 
         try:
@@ -57,7 +57,7 @@ class HttpRequestTool(Tool):
                         parsed = urlparse(url)
                         location = f"{parsed.scheme}://{parsed.netloc}{location}"
 
-                    if error := validate_url(location):
+                    if error := await validate_url(location):
                         return f"Error: Redirect blocked — {error}"
 
                     # 301/302/303 change to GET, 307/308 preserve method

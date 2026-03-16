@@ -328,7 +328,7 @@ def display_config(config: Config) -> dict:
         "telegram": ["token"],
         "discord": ["token"],
         "slack": ["bot_token", "app_token", "signing_secret"],
-        "whatsapp": ["token", "app_secret"],
+        "whatsapp": ["token", "app_secret", "verify_token"],
         "webchat": ["auth_token"],
     }
     for channel, fields in secret_fields.items():

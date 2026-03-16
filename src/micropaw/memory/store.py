@@ -319,26 +319,31 @@ class MemoryStore:
         return messages
 
     async def compact_messages(self, conversation_id: str, summary: str, keep_recent: int) -> None:
-        """Replace old messages with a summary, keeping the last N messages."""
+        """Replace old messages with a summary, keeping the last N messages.
+
+        The summary is inserted with an ID lower than all kept messages so
+        it appears first when history is loaded (ORDER BY id).
+        """
         async with self.db.execute(
             "SELECT id FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
             (conversation_id, keep_recent),
         ) as cursor:
-            keep_ids = {r[0] for r in await cursor.fetchall()}
+            keep_ids = [r[0] for r in await cursor.fetchall()]
 
         if not keep_ids:
             return
 
-        # Delete all messages except the kept ones
-        placeholders = ",".join("?" * len(keep_ids))
+        min_kept = min(keep_ids)
+
+        # Delete all messages older than the kept ones (not the kept ones themselves)
         await self.db.execute(
-            f"DELETE FROM messages WHERE conversation_id = ? AND id NOT IN ({placeholders})",
-            (conversation_id, *keep_ids),
+            "DELETE FROM messages WHERE conversation_id = ? AND id < ?",
+            (conversation_id, min_kept),
         )
-        # Insert the summary as the first message
+        # Insert summary with explicit ID below all kept messages
         await self.db.execute(
-            "INSERT INTO messages (conversation_id, role, content) VALUES (?, 'system', ?)",
-            (conversation_id, f"Previous conversation summary: {summary}"),
+            "INSERT OR REPLACE INTO messages (id, conversation_id, role, content) VALUES (?, ?, 'system', ?)",
+            (min_kept - 1, conversation_id, f"Previous conversation summary: {summary}"),
         )
         await self.db.commit()
 

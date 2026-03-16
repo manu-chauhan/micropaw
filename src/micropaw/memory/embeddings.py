@@ -82,11 +82,17 @@ class LocalEmbedding(EmbeddingProvider):
     dimensions = 768  # nomic-embed-text-v1.5
 
     def __init__(self, model: str = _DEFAULT_LOCAL_MODEL) -> None:
+        import threading
         self.model_name = model
         self._model = None
+        self._lock = threading.Lock()
 
     def _load(self):
-        if self._model is None:
+        if self._model is not None:
+            return self._model
+        with self._lock:
+            if self._model is not None:
+                return self._model
             try:
                 from fastembed import TextEmbedding
             except ImportError:

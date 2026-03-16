@@ -2,67 +2,83 @@
 
 from __future__ import annotations
 
+import pytest
+
 from micropaw.security import validate_path, validate_url
 from micropaw.tools.shell import _BLOCKED_RE, _DANGEROUS_RE
 
 
 class TestValidateUrl:
-    def test_normal_https_url(self):
-        assert validate_url("https://example.com/api") is None
+    @pytest.mark.asyncio
+    async def test_normal_https_url(self):
+        assert await validate_url("https://example.com/api") is None
 
-    def test_normal_http_url(self):
-        assert validate_url("http://example.com") is None
+    @pytest.mark.asyncio
+    async def test_normal_http_url(self):
+        assert await validate_url("http://example.com") is None
 
-    def test_blocks_ftp_scheme(self):
-        err = validate_url("ftp://files.example.com")
+    @pytest.mark.asyncio
+    async def test_blocks_ftp_scheme(self):
+        err = await validate_url("ftp://files.example.com")
         assert err is not None
         assert "scheme" in err.lower()
 
-    def test_blocks_file_scheme(self):
-        err = validate_url("file:///etc/passwd")
+    @pytest.mark.asyncio
+    async def test_blocks_file_scheme(self):
+        err = await validate_url("file:///etc/passwd")
         assert err is not None
 
-    def test_blocks_localhost(self):
-        err = validate_url("http://localhost:8080")
+    @pytest.mark.asyncio
+    async def test_blocks_localhost(self):
+        err = await validate_url("http://localhost:8080")
         assert err is not None
         assert "Blocked" in err
 
-    def test_blocks_127_0_0_1(self):
-        err = validate_url("http://127.0.0.1/admin")
+    @pytest.mark.asyncio
+    async def test_blocks_127_0_0_1(self):
+        err = await validate_url("http://127.0.0.1/admin")
         assert err is not None
 
-    def test_blocks_metadata_endpoint(self):
-        err = validate_url("http://169.254.169.254/latest/meta-data/")
+    @pytest.mark.asyncio
+    async def test_blocks_metadata_endpoint(self):
+        err = await validate_url("http://169.254.169.254/latest/meta-data/")
         assert err is not None
 
-    def test_blocks_internal_domain(self):
-        err = validate_url("http://service.internal/api")
+    @pytest.mark.asyncio
+    async def test_blocks_internal_domain(self):
+        err = await validate_url("http://service.internal/api")
         assert err is not None
         assert "internal" in err.lower()
 
-    def test_blocks_local_domain(self):
-        err = validate_url("http://printer.local")
+    @pytest.mark.asyncio
+    async def test_blocks_local_domain(self):
+        err = await validate_url("http://printer.local")
         assert err is not None
 
-    def test_empty_hostname(self):
-        err = validate_url("http:///path")
+    @pytest.mark.asyncio
+    async def test_empty_hostname(self):
+        err = await validate_url("http:///path")
         assert err is not None
 
-    def test_blocks_private_ip(self):
-        err = validate_url("http://10.0.0.1/admin")
+    @pytest.mark.asyncio
+    async def test_blocks_private_ip(self):
+        err = await validate_url("http://10.0.0.1/admin")
         assert err is not None
 
-    def test_blocks_192_168(self):
-        err = validate_url("http://192.168.1.1/")
+    @pytest.mark.asyncio
+    async def test_blocks_192_168(self):
+        err = await validate_url("http://192.168.1.1/")
         assert err is not None
 
-    def test_blocks_localhost_uppercase(self):
-        err = validate_url("http://LOCALHOST:8080/admin")
+    @pytest.mark.asyncio
+    async def test_blocks_localhost_uppercase(self):
+        err = await validate_url("http://LOCALHOST:8080/admin")
         assert err is not None
         assert "Blocked" in err
 
-    def test_blocks_localhost_mixed_case(self):
-        err = validate_url("http://Localhost:3000/")
+    @pytest.mark.asyncio
+    async def test_blocks_localhost_mixed_case(self):
+        err = await validate_url("http://Localhost:3000/")
         assert err is not None
 
 

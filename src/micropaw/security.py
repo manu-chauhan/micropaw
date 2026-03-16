@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import os
 import socket
@@ -32,7 +33,7 @@ def _is_private_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
 
 
-def validate_url(url: str) -> str | None:
+async def validate_url(url: str) -> str | None:
     """Validate a URL for SSRF protection.
 
     Returns an error string if blocked, None if safe.
@@ -68,7 +69,11 @@ def validate_url(url: str) -> str | None:
 
     # DNS resolution check — prevent DNS rebinding
     try:
-        for info in socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM):
+        loop = asyncio.get_running_loop()
+        infos = await loop.run_in_executor(
+            None, lambda: socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM),
+        )
+        for info in infos:
             addr = info[4][0]
             resolved_ip = ipaddress.ip_address(addr)
             if _is_private_ip(resolved_ip):

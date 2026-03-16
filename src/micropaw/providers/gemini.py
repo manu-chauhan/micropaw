@@ -29,13 +29,14 @@ class GeminiProvider(AIProvider):
         self.model = model
         self.max_tokens = max_tokens
         self._api_base = f"{base_url.rstrip('/')}/v1beta/models"
-        self._client = httpx.AsyncClient(timeout=120.0)
+        self._client = httpx.AsyncClient(
+            timeout=120.0,
+            headers={"x-goog-api-key": api_key},
+        )
 
     def _url(self, streaming: bool = False) -> str:
         action = "streamGenerateContent?alt=sse" if streaming else "generateContent"
-        if streaming:
-            return f"{self._api_base}/{self.model}:{action}&key={self.api_key}"
-        return f"{self._api_base}/{self.model}:{action}?key={self.api_key}"
+        return f"{self._api_base}/{self.model}:{action}"
 
     def _build_body(self, messages: list[Message], tools: list[ToolDef] | None) -> dict:
         system_text = None

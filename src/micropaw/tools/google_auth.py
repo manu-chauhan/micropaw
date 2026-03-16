@@ -148,7 +148,7 @@ async def get_access_token() -> str | None:
                 "grant_type": "refresh_token",
             })
             if resp.status_code != 200:
-                logger.error("Google token refresh failed: %s", resp.text)
+                logger.error("Google token refresh failed (HTTP %d)", resp.status_code)
                 return None
             data = resp.json()
             tokens["access_token"] = data["access_token"]
@@ -231,7 +231,7 @@ async def authorize() -> str:
                 "grant_type": "authorization_code",
             })
             if resp.status_code != 200:
-                return f"Error: Token exchange failed: {resp.text}"
+                return f"Error: Token exchange failed (HTTP {resp.status_code})"
 
             data = resp.json()
             tokens = {
