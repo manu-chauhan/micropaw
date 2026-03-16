@@ -180,8 +180,9 @@ class TestContextCompaction:
             Message(role="user", content="Hi"),
             Message(role="assistant", content="Hello"),
         ]
-        result = await ctx.compact(messages, _MockSummaryProvider())
+        result, summary = await ctx.compact(messages, _MockSummaryProvider())
         assert result == messages
+        assert summary is None
 
     @pytest.mark.asyncio
     async def test_compaction_creates_summary_message(self):
@@ -189,18 +190,16 @@ class TestContextCompaction:
         messages = [
             Message(role="system", content="System prompt"),
         ]
-        # Add enough messages to trigger compaction (> threshold + KEEP_RECENT)
         for i in range(20):
             messages.append(Message(role="user", content=f"User message {i}"))
             messages.append(Message(role="assistant", content=f"Assistant reply {i}"))
 
-        result = await ctx.compact(messages, _MockSummaryProvider())
-        # Should have: system + summary_system + last KEEP_RECENT
+        result, summary = await ctx.compact(messages, _MockSummaryProvider())
         assert len(result) < len(messages)
-        # Check summary message exists
+        assert summary is not None
+        assert "Summary:" in summary
         summary_msgs = [m for m in result if "Previous conversation summary" in m.content]
         assert len(summary_msgs) == 1
-        assert "Summary:" in summary_msgs[0].content
 
     @pytest.mark.asyncio
     async def test_compaction_keeps_system_messages(self):
@@ -210,7 +209,7 @@ class TestContextCompaction:
             messages.append(Message(role="user", content=f"msg{i}"))
             messages.append(Message(role="assistant", content=f"reply{i}"))
 
-        result = await ctx.compact(messages, _MockSummaryProvider())
+        result, _ = await ctx.compact(messages, _MockSummaryProvider())
         system_msgs = [m for m in result if m.role == "system"]
         assert any("System prompt" in m.content for m in system_msgs)
 
@@ -222,8 +221,7 @@ class TestContextCompaction:
             messages.append(Message(role="user", content=f"msg{i}"))
             messages.append(Message(role="assistant", content=f"reply{i}"))
 
-        result = await ctx.compact(messages, _MockSummaryProvider())
-        # Last message should be the most recent one
+        result, _ = await ctx.compact(messages, _MockSummaryProvider())
         non_system = [m for m in result if m.role != "system"]
         assert non_system[-1].content == "reply19"
 
@@ -240,10 +238,9 @@ class TestContextCompaction:
             Message(role="tool", content="search results here", tool_call_id="tc1"),
             Message(role="assistant", content="reply1"),
         ]
-        # Add enough to trigger compaction
         for i in range(20):
             messages.append(Message(role="user", content=f"msg{i+2}"))
             messages.append(Message(role="assistant", content=f"reply{i+2}"))
 
-        result = await ctx.compact(messages, _MockSummaryProvider())
+        result, _ = await ctx.compact(messages, _MockSummaryProvider())
         assert len(result) < len(messages)

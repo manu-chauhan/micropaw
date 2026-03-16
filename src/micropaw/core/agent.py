@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 
 from micropaw.config import Config
-from micropaw.core.context import ContextManager
+from micropaw.core.context import KEEP_RECENT, ContextManager
 from micropaw.core.conversation import ConversationManager
 from micropaw.memory.store import MemoryStore
 from micropaw.providers.base import AIProvider, AIResponse, Message
@@ -237,7 +237,9 @@ class Agent:
         messages.append(Message(role="user", content=text))
 
         # Compact context if needed
-        messages = await self.context_manager.compact(messages, self.provider)
+        messages, summary = await self.context_manager.compact(messages, self.provider)
+        if summary:
+            await self.store.compact_messages(conv_id, summary, KEEP_RECENT)
 
         await self.conversations.save_message(conv_id, Message(role="user", content=text))
         return conv_id, messages

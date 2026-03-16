@@ -29,12 +29,15 @@ class ContextManager:
         self.max_history = max_history
         self.compaction_threshold = compaction_threshold
 
-    async def compact(self, messages: list[Message], provider: AIProvider) -> list[Message]:
-        """Compact message history if it exceeds the threshold."""
+    async def compact(self, messages: list[Message], provider: AIProvider) -> tuple[list[Message], str | None]:
+        """Compact message history if it exceeds the threshold.
+
+        Returns (compacted_messages, summary_text_or_None).
+        """
         non_system = [m for m in messages if m.role != "system"]
 
         if len(non_system) <= self.compaction_threshold:
-            return messages
+            return messages, None
 
         logger.info("Compacting context: %d messages (threshold: %d)", len(non_system), self.compaction_threshold)
 
@@ -58,7 +61,7 @@ class ContextManager:
                 summary_parts.append(f"{prefix}: {content}")
 
         if not summary_parts:
-            return messages
+            return messages, None
 
         conversation_text = "\n".join(summary_parts)
 
@@ -70,12 +73,12 @@ class ContextManager:
             summary = summary_response.content
             if not summary or not summary.strip():
                 logger.warning("Context compaction returned empty summary, falling back to truncation.")
-                return system_msgs + to_keep
+                return system_msgs + to_keep, None
         except Exception as e:
             logger.warning("Context compaction failed: %s — falling back to truncation.", e)
-            return system_msgs + to_keep
+            return system_msgs + to_keep, None
 
         logger.info("Compacted %d messages into summary (%d chars)", len(to_summarize), len(summary))
 
         summary_msg = Message(role="system", content=f"Previous conversation summary: {summary}")
-        return system_msgs + [summary_msg] + to_keep
+        return system_msgs + [summary_msg] + to_keep, summary

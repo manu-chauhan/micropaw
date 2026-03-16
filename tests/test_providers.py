@@ -197,10 +197,11 @@ class TestContextCompaction:
             Message(role="user", content="msg4"),
         ]
 
-        result = await ctx.compact(messages, failing_provider)
+        result, summary = await ctx.compact(messages, failing_provider)
         # 7 non-system < KEEP_RECENT(10), so to_summarize is empty → returns unchanged
         assert len(result) == len(messages)
         assert result == messages
+        assert summary is None
 
     async def test_compaction_fallback_truncation_on_provider_failure(self):
         """If the summarization provider fails, fall back to truncation (system + recent)."""
@@ -214,11 +215,12 @@ class TestContextCompaction:
             messages.append(Message(role="user", content=f"msg{i}"))
             messages.append(Message(role="assistant", content=f"reply{i}"))
 
-        result = await ctx.compact(messages, failing_provider)
+        result, summary = await ctx.compact(messages, failing_provider)
         # Fallback: system_msgs + to_keep (last KEEP_RECENT)
         assert len(result) == 1 + KEEP_RECENT  # 1 system + 10 recent
         assert result[0].content == "You are helpful."
         assert result[-1].content == "reply19"
+        assert summary is None
 
     async def test_compaction_fallback_truncation_on_empty_summary(self):
         """If the LLM returns an empty summary, fall back to truncation."""
@@ -232,9 +234,10 @@ class TestContextCompaction:
             messages.append(Message(role="user", content=f"msg{i}"))
             messages.append(Message(role="assistant", content=f"reply{i}"))
 
-        result = await ctx.compact(messages, empty_provider)
+        result, summary = await ctx.compact(messages, empty_provider)
         assert len(result) == 1 + KEEP_RECENT
         assert result[-1].content == "reply19"
+        assert summary is None
 
     async def test_compaction_works_when_provider_succeeds(self):
         """When summarization succeeds, messages should be compacted."""
@@ -254,10 +257,7 @@ class TestContextCompaction:
             Message(role="user", content="msg4"),
         ]
 
-        result = await ctx.compact(messages, good_provider)
-        # Should be: system + summary_system + last 10 recent (but we only have 7 non-system)
-        # Since all 7 non-system < KEEP_RECENT (10), nothing gets summarized
-        # Let me use a smaller threshold that actually triggers summarization
+        result, _ = await ctx.compact(messages, good_provider)
         assert len(result) <= len(messages)
 
     async def test_compaction_below_threshold_returns_unchanged(self):
@@ -273,8 +273,9 @@ class TestContextCompaction:
             Message(role="assistant", content="hello"),
         ]
 
-        result = await ctx.compact(messages, good_provider)
+        result, summary = await ctx.compact(messages, good_provider)
         assert result == messages
+        assert summary is None
 
 
 class TestGeminiStreamingUsage:

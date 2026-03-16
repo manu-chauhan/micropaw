@@ -96,8 +96,7 @@ class SessionsTool(Tool):
 
         return f"Unknown action: {action}"
 
-    @staticmethod
-    async def _is_allowed(session_id: str, context: ToolContext) -> bool:
+    async def _is_allowed(self, session_id: str, context: ToolContext) -> bool:
         """Check if the user can access this session."""
         if session_id.startswith("dm:"):
             return True

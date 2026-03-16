@@ -318,6 +318,30 @@ class MemoryStore:
             messages.append(Message(role=role, content=content, tool_calls=tool_calls, tool_call_id=tool_call_id))
         return messages
 
+    async def compact_messages(self, conversation_id: str, summary: str, keep_recent: int) -> None:
+        """Replace old messages with a summary, keeping the last N messages."""
+        async with self.db.execute(
+            "SELECT id FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
+            (conversation_id, keep_recent),
+        ) as cursor:
+            keep_ids = {r[0] for r in await cursor.fetchall()}
+
+        if not keep_ids:
+            return
+
+        # Delete all messages except the kept ones
+        placeholders = ",".join("?" * len(keep_ids))
+        await self.db.execute(
+            f"DELETE FROM messages WHERE conversation_id = ? AND id NOT IN ({placeholders})",
+            (conversation_id, *keep_ids),
+        )
+        # Insert the summary as the first message
+        await self.db.execute(
+            "INSERT INTO messages (conversation_id, role, content) VALUES (?, 'system', ?)",
+            (conversation_id, f"Previous conversation summary: {summary}"),
+        )
+        await self.db.commit()
+
     # --- Memories ---
 
     async def save_memory(self, key: str, value: str, tags: list[str] | None = None, user_id: str = "_global") -> None:

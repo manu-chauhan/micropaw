@@ -135,7 +135,15 @@ class DiscordChannel(Channel):
 
     async def send_message(self, chat_id: str, text: str) -> None:
         if self._client:
-            target_id = int(chat_id.replace("discord:", ""))
+            raw = chat_id.replace("discord:", "", 1)
+            if not raw:
+                logger.error("Discord send_message: empty target ID")
+                return
+            try:
+                target_id = int(raw)
+            except ValueError:
+                logger.error("Discord send_message: invalid target ID %r", raw)
+                return
             # Try cached channel first (server channels), fall back to DM
             channel = self._client.get_channel(target_id)
             if not channel:

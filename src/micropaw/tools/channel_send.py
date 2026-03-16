@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 _bus: MessageBus | None = None
 _channel_registry: dict[str, str] = {}  # channel_name → last-known chat_id
 _MAX_SENDS_PER_TURN = 5
+_MAX_MSG_LENGTH = 4096
 _send_count: int = 0
 
 
@@ -84,6 +85,9 @@ class ChannelSendTool(Tool):
 
         if not message:
             return "Error: Message cannot be empty."
+
+        if len(message) > _MAX_MSG_LENGTH:
+            message = message[:_MAX_MSG_LENGTH]
 
         # Terminal needs no chat_id
         if channel == "terminal":

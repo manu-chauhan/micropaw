@@ -106,6 +106,14 @@ class TelegramChannel(Channel):
 
     async def send_message(self, chat_id: str, text: str) -> None:
         if self._app:
-            tid = chat_id.replace("telegram:", "")
+            raw = chat_id.replace("telegram:", "", 1)
+            if not raw:
+                logger.error("Telegram send_message: empty chat ID")
+                return
+            try:
+                tid = int(raw)
+            except ValueError:
+                logger.error("Telegram send_message: invalid chat ID %r", raw)
+                return
             for chunk in chunk_text(text, MAX_MSG_LEN):
-                await self._app.bot.send_message(chat_id=int(tid), text=chunk)
+                await self._app.bot.send_message(chat_id=tid, text=chunk)
