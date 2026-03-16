@@ -172,7 +172,8 @@ class Scheduler:
             return
 
         try:
-            text = heartbeat_file.read_text()
+            loop = asyncio.get_running_loop()
+            text = await loop.run_in_executor(None, heartbeat_file.read_text)
         except OSError as e:
             logger.error("Cannot read HEARTBEAT.md: %s", e)
             return

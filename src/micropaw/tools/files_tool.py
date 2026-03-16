@@ -76,6 +76,8 @@ class FilesTool(Tool):
                 return "Error: 'save' requires 'path'."
             if not content:
                 return "Error: 'save' requires 'content'."
+            if len(content) > 10_000_000:
+                return f"Error: Content too large ({len(content):,} chars, max 10,000,000)."
             target = _safe_path(rel)
             if not target:
                 return "Error: Invalid path (must stay within files directory)."

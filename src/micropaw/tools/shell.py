@@ -44,8 +44,11 @@ BLOCKED_PATTERNS = [
     r"python[23]?\s+-c\s+.*socket", r"perl\s+-e\s+.*socket", r"ruby\s+-e\s+.*socket",
     # Data exfiltration
     r"curl\s+.*-d\s+@", r"curl\s+.*--data-binary\s+@", r"wget\s+.*--post-file",
-    # Sensitive file access
-    r"cat\s+.*\.ssh/", r"cat\s+.*\.micropaw/", r"cat\s+.*\.env\b", r"cat\s+.*/etc/shadow",
+    # Sensitive file access (cat, less, more, head, tail)
+    r"(cat|less|more|head|tail)\s+.*\.ssh/",
+    r"(cat|less|more|head|tail)\s+.*\.micropaw/",
+    r"(cat|less|more|head|tail)\s+.*\.env\b",
+    r"(cat|less|more|head|tail)\s+.*/etc/shadow",
     # Code execution
     r"python[23]?\s+-c\s+.*import\s+os", r"python[23]?\s+-c\s+.*subprocess",
     r"python[23]?\s+-c\s+.*exec\(", r"python[23]?\s+-c\s+.*eval\(",

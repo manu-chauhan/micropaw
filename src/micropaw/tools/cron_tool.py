@@ -90,7 +90,10 @@ class CronTool(Tool):
             job_id = args.get("job_id")
             if not job_id:
                 return "Error: 'remove' requires 'job_id'."
-            removed = await _scheduler.remove_job(int(job_id))
+            try:
+                removed = await _scheduler.remove_job(int(job_id))
+            except (ValueError, TypeError):
+                return f"Error: Invalid job_id: {job_id!r}"
             return f"Job #{job_id} removed." if removed else f"Job #{job_id} not found."
 
         return f"Unknown action: {action}"

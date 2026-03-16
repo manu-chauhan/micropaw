@@ -110,10 +110,14 @@ async def fetch_youtube_transcript(video_id: str) -> str:
             return ""
 
         # 2. InnerTube player request (ANDROID client returns valid caption URLs)
-        player = (await client.post(
+        player_resp = await client.post(
             f"https://www.youtube.com/youtubei/v1/player?key={m.group(1)}",
             json={"context": {"client": _INNERTUBE_CLIENT}, "videoId": video_id},
-        )).json()
+        )
+        try:
+            player = player_resp.json()
+        except Exception:
+            return ""
 
         details = player.get("videoDetails", {})
         title = details.get("title", "Unknown")

@@ -64,7 +64,8 @@ class VisionTool(Tool):
             return f"Error: Image too large ({path.stat().st_size:,} bytes, max {MAX_IMAGE_SIZE:,})"
 
         try:
-            image_data = path.read_bytes()
+            import asyncio as _aio
+            image_data = await _aio.get_running_loop().run_in_executor(None, path.read_bytes)
             media = MediaItem(type="image", data=image_data, mime_type=SUPPORTED_TYPES[suffix])
             response = await _provider.chat([
                 Message(role="user", content=question, media=[media]),
