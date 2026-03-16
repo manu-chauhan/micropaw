@@ -121,7 +121,7 @@ class TerminalChannel(Channel):
             self._message_count = 0
             if self._on_new_conversation:
                 await self._on_new_conversation()
-            console.print("[dim]Started a new conversation.[/dim]\n")
+            console.print("[dim]Started a new conversation (across all channels).[/dim]\n")
             return True
 
         elif command == "/tools":

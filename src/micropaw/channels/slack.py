@@ -47,7 +47,10 @@ class SlackChannel(Channel):
                 return
 
             user_id = event.get("user", "unknown")
-            channel_id = event.get("channel", "")
+            slack_channel = event.get("channel", "")
+            # Slack DMs have channel IDs starting with "D" — treat as DMs (no channel_id)
+            # so they share the unified DM conversation with other channels
+            conv_channel_id = None if slack_channel.startswith("D") else slack_channel
             thread_ts = event.get("thread_ts") or event.get("ts", "")
 
             # Get user name
@@ -60,16 +63,16 @@ class SlackChannel(Channel):
             if self._stream_handler:
                 placeholder = await say(text="...", thread_ts=thread_ts)
                 await stream_response(
-                    self._stream_handler, text, user_id, "slack", channel_id,
+                    self._stream_handler, text, user_id, "slack", conv_channel_id,
                     edit_fn=lambda t: client.chat_update(
-                        channel=channel_id, ts=placeholder["ts"], text=t,
+                        channel=slack_channel, ts=placeholder["ts"], text=t,
                     ),
                     send_fn=lambda t: say(text=t, thread_ts=thread_ts),
                     max_msg_len=MAX_MSG_LEN, edit_interval=STREAM_EDIT_INTERVAL,
                 )
 
             elif self._handler:
-                response = await self._handler(text, user_id, "slack", channel_id)
+                response = await self._handler(text, user_id, "slack", conv_channel_id)
                 for chunk in chunk_text(response, MAX_MSG_LEN):
                     await say(text=chunk, thread_ts=thread_ts)
 

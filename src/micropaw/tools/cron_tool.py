@@ -69,7 +69,7 @@ class CronTool(Tool):
             try:
                 job_id = await _scheduler.add_job(
                     description, interval, context.user_id, context.platform,
-                    context.conversation_id, one_shot=one_shot,
+                    context.chat_id, one_shot=one_shot,
                 )
             except ValueError as e:
                 return f"Error: {e}"

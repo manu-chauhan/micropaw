@@ -80,8 +80,7 @@ class DelegateTool(Tool):
         if mode == "background":
             if _bus is None:
                 return "Error: Background mode requires message bus (not available)."
-            chat_id = f"{context.platform}:{context.conversation_id}"
-            asyncio.create_task(_run_background(agent, task, context.platform, chat_id))
+            asyncio.create_task(_run_background(agent, task, context.platform, context.chat_id))
             return f"Task delegated in background: {task[:80]}"
 
         # Inline: block until done

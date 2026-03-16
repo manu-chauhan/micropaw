@@ -22,6 +22,7 @@ class ToolContext:
     conversation_id: str
     user_id: str
     platform: str
+    chat_id: str = ""  # transport-routable address (e.g. "telegram:12345")
     allow_shell: bool = False
     allow_file_write: bool = False
     allow_web_browse: bool = True

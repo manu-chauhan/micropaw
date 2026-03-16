@@ -75,6 +75,8 @@ class Agent:
         self.last_usage = {"input": 0, "output": 0}
         self.message_count += 1
         self._tool_cache.clear()
+        from micropaw.tools.channel_send import reset_send_count
+        reset_send_count()
 
     def _accumulate_usage(self, usage: dict) -> None:
         """Accumulate token usage from the latest response."""
@@ -83,11 +85,15 @@ class Agent:
         self.session_usage["input"] += usage.get("input", 0)
         self.session_usage["output"] += usage.get("output", 0)
 
-    def _build_tool_context(self, conv_id: str, user_id: str, platform: str) -> ToolContext:
+    def _build_tool_context(
+        self, conv_id: str, user_id: str, platform: str, channel_id: str | None = None,
+    ) -> ToolContext:
+        chat_id = f"{platform}:{channel_id or user_id}"
         return ToolContext(
             conversation_id=conv_id,
             user_id=user_id,
             platform=platform,
+            chat_id=chat_id,
             allow_shell=self.config.permissions.allow_shell,
             allow_file_write=self.config.permissions.allow_file_write,
             allow_web_browse=self.config.permissions.allow_web_browse,
@@ -194,7 +200,9 @@ class Agent:
         """Load history, build system prompt, prepare message list."""
         await _safe_typing(send_typing)
         conv_id = self.conversations.get_conversation_id(platform, user_id, channel_id)
-        history = await self.conversations.load_history(conv_id, platform, user_id)
+        # Use "dm" as platform for unified DM conversations to avoid arbitrary first-writer
+        store_platform = "dm" if conv_id.startswith("dm:") else platform
+        history = await self.conversations.load_history(conv_id, store_platform, user_id)
         # Memories and RAG are global — shared across all channels
         recent_memories = await self.store.get_recent_memories(10, user_id="_global")
 
@@ -234,7 +242,7 @@ class Agent:
         conv_id, messages = await self._prepare(text, user_id, platform, channel_id, send_typing)
 
         tool_defs = self.registry.to_tool_defs()
-        tool_context = self._build_tool_context(conv_id, user_id, platform)
+        tool_context = self._build_tool_context(conv_id, user_id, platform, channel_id)
 
         response: AIResponse | None = None
         try:
@@ -280,7 +288,7 @@ class Agent:
         conv_id, messages = await self._prepare(text, user_id, platform, channel_id, send_typing)
 
         tool_defs = self.registry.to_tool_defs()
-        tool_context = self._build_tool_context(conv_id, user_id, platform)
+        tool_context = self._build_tool_context(conv_id, user_id, platform, channel_id)
 
         response: AIResponse | None = None
         try:
