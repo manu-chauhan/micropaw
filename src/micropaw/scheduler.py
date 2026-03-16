@@ -137,10 +137,8 @@ class Scheduler:
             await self._bus.publish_outbound(OutboundMessage("terminal", "", content))
             return
 
-        # Fall back to first active channel
-        if self._channels:
-            ch = self._channels[0]
-            await self._bus.publish_outbound(OutboundMessage(ch.name, chat_id, content))
+        # No compatible channel available — log and drop
+        logger.warning("No compatible channel for delivery (origin=%s)", channel)
 
     async def _deliver_all(self, origin_channel: str, origin_chat_id: str, content: str) -> None:
         """Deliver to ALL active channels — for reminders and urgent notifications."""
@@ -187,7 +185,7 @@ class Scheduler:
                     continue
                 try:
                     response = await self._handler(
-                        f"[Heartbeat task] {task}", "heartbeat", "system", None,
+                        f"[Heartbeat task] {task}", "heartbeat", "heartbeat", "heartbeat",
                     )
                     await self._deliver_heartbeat(f"[Heartbeat] {response}")
                 except Exception as e:

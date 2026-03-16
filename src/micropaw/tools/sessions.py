@@ -60,6 +60,8 @@ class SessionsTool(Tool):
             session_id = args.get("session_id", "")
             if not session_id:
                 return "Error: 'info' requires 'session_id'."
+            if not await self._is_allowed(session_id, context):
+                return f"Session not found: {session_id}"
 
             messages = await _store.export_messages(session_id)
             if not messages:
@@ -79,6 +81,8 @@ class SessionsTool(Tool):
             session_id = args.get("session_id", "")
             if not session_id:
                 return "Error: 'clear' requires 'session_id'."
+            if not await self._is_allowed(session_id, context):
+                return f"Session not found: {session_id}"
 
             # Verify session exists
             messages = await _store.export_messages(session_id)
@@ -91,3 +95,11 @@ class SessionsTool(Tool):
             return f"Cleared all messages in session: {session_id}"
 
         return f"Unknown action: {action}"
+
+    @staticmethod
+    async def _is_allowed(session_id: str, context: ToolContext) -> bool:
+        """Check if the user can access this session."""
+        if session_id.startswith("dm:"):
+            return True
+        convos = await _store.list_conversations()
+        return any(c["id"] == session_id and c["user_id"] == context.user_id for c in convos)

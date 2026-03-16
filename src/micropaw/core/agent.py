@@ -69,6 +69,7 @@ class Agent:
         self.session_usage: dict[str, int] = {"input": 0, "output": 0}
         self.message_count: int = 0
         self._tool_cache: dict[tuple, str] = {}
+        self._file_cache: dict[str, tuple[float, str]] = {}  # path → (mtime, content)
 
     def _reset_usage(self) -> None:
         """Reset per-message usage counter and tool cache."""
@@ -100,6 +101,29 @@ class Agent:
             confirm_dangerous=self.config.permissions.confirm_dangerous,
         )
 
+    def _cached_file(self, name: str, max_len: int = 2048) -> str:
+        """Read a config file with mtime-based caching (avoids blocking I/O on every message)."""
+        from micropaw.config import CONFIG_DIR
+        return self._cached_file_path(CONFIG_DIR / name, max_len)
+
+    def _cached_file_path(self, path: Path, max_len: int = 2048) -> str:
+        """Read a file with mtime-based caching."""
+        key = str(path)
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            self._file_cache.pop(key, None)
+            return ""
+        cached = self._file_cache.get(key)
+        if cached and cached[0] == mtime:
+            return cached[1]
+        try:
+            content = path.read_text()[:max_len].strip()
+        except OSError:
+            return ""
+        self._file_cache[key] = (mtime, content)
+        return content
+
     def _build_system_prompt(
         self,
         platform: str,
@@ -113,16 +137,12 @@ class Agent:
         parts.append(f"You are {self.config.persona.name}, an AI assistant.")
 
         # Persona: SOUL.md overrides default personality if present
-        from micropaw.config import CONFIG_DIR
-        def _read_file(path: Path, max_len: int = 2048) -> str:
-            return path.read_text()[:max_len].strip() if path.exists() else ""
-
-        soul = _read_file(CONFIG_DIR / "SOUL.md")
+        soul = self._cached_file("SOUL.md")
         parts.append(soul or f"You are {self.config.persona.personality}.")
         parts.append("Help users by chatting naturally and using tools when needed.")
         parts.append("Keep responses concise and conversational.")
 
-        user_ctx = _read_file(CONFIG_DIR / "USER.md")
+        user_ctx = self._cached_file("USER.md")
         if user_ctx:
             parts.append(f"\nAbout the user:\n{user_ctx}")
 
@@ -162,10 +182,11 @@ class Agent:
             parts.append("\nUse tools for real-world actions. Don't use tools when a text response suffices.")
 
         # Skills: user override first, then bundled default
+        from micropaw.config import CONFIG_DIR
         skills_path = CONFIG_DIR / "SKILLS.md"
         if not skills_path.exists():
             skills_path = Path(__file__).resolve().parent.parent / "SKILLS.md"
-        skills = _read_file(skills_path, max_len=4096)
+        skills = self._cached_file_path(skills_path, max_len=4096)
         if skills:
             parts.append(f"\nWorkflow guidelines:\n{skills}")
 

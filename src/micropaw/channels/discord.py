@@ -25,16 +25,14 @@ class DiscordChannel(Channel):
         self._task: asyncio.Task | None = None
         self._watcher: asyncio.Task | None = None
 
-    async def start(self) -> None:
-        try:
-            import discord
-        except ImportError:
-            raise RuntimeError("discord.py not installed. Install with: pip install micropaw[discord]")
+    def _create_client(self):
+        """Create a fresh discord.py client with event handlers."""
+        import discord
 
         intents = discord.Intents.default()
         intents.message_content = True
         client = discord.Client(intents=intents)
-        self._client = client
+        channel_ref = self  # avoid closure over self in nested functions
 
         @client.event
         async def on_message(message: discord.Message) -> None:
@@ -42,43 +40,32 @@ class DiscordChannel(Channel):
                 return
 
             user_id = str(message.author.id)
-            if self.allowed_users and user_id not in self.allowed_users:
+            if channel_ref.allowed_users and user_id not in channel_ref.allowed_users:
                 return
 
             is_dm = isinstance(message.channel, discord.DMChannel)
             text = message.content
 
             if not is_dm:
-                # In servers, only respond to mentions
                 if client.user not in message.mentions:
                     return
                 text = text.replace(f"<@{client.user.id}>", "").replace(f"<@!{client.user.id}>", "").strip()
 
             channel_id = str(message.channel.id) if not is_dm else None
 
-            if self._stream_handler:
+            if channel_ref._stream_handler:
                 placeholder = await message.channel.send("...")
                 await stream_response(
-                    self._stream_handler, text, user_id, "discord", channel_id,
+                    channel_ref._stream_handler, text, user_id, "discord", channel_id,
                     edit_fn=lambda t: placeholder.edit(content=t),
                     send_fn=lambda t: message.channel.send(t),
                     max_msg_len=MAX_MSG_LEN, edit_interval=STREAM_EDIT_INTERVAL,
                 )
-
-            elif self._handler:
+            elif channel_ref._handler:
                 async with message.channel.typing():
-                    response = await self._handler(text, user_id, "discord", channel_id)
+                    response = await channel_ref._handler(text, user_id, "discord", channel_id)
                 for chunk in chunk_text(response, MAX_MSG_LEN):
                     await message.channel.send(chunk)
-
-        # Start in background — client.start() blocks forever, so run as a task
-        logger.info("Discord channel starting...")
-        ready_event = asyncio.Event()
-
-        @client.event
-        async def on_ready() -> None:
-            logger.info("Discord channel connected: %s", client.user)
-            ready_event.set()
 
         @client.event
         async def on_disconnect() -> None:
@@ -88,10 +75,27 @@ class DiscordChannel(Channel):
         async def on_resumed() -> None:
             logger.info("Discord session resumed")
 
-        self._task = asyncio.create_task(client.start(self.token))
+        return client
+
+    async def start(self) -> None:
+        try:
+            import discord  # noqa: F401
+        except ImportError:
+            raise RuntimeError("discord.py not installed. Install with: pip install micropaw[discord]")
+
+        self._client = self._create_client()
+
+        logger.info("Discord channel starting...")
+        ready_event = asyncio.Event()
+
+        @self._client.event
+        async def on_ready() -> None:
+            logger.info("Discord channel connected: %s", self._client.user)
+            ready_event.set()
+
+        self._task = asyncio.create_task(self._client.start(self.token))
         self._watcher = asyncio.create_task(self._watch_task())
 
-        # Wait up to 30 seconds for the bot to connect
         try:
             await asyncio.wait_for(ready_event.wait(), timeout=30.0)
         except TimeoutError:
@@ -99,16 +103,21 @@ class DiscordChannel(Channel):
             raise RuntimeError("Discord bot failed to connect within 30 seconds")
 
     async def _watch_task(self) -> None:
-        """Monitor the background task; log and restart on crash."""
+        """Monitor the background task; log and restart on crash with a fresh client."""
         while True:
             try:
                 await self._task
-                return  # clean exit
+                return
             except asyncio.CancelledError:
                 return
             except Exception as e:
                 logger.error("Discord task crashed: %s — restarting in 5s", e)
                 await asyncio.sleep(5)
+                try:
+                    await self._client.close()
+                except Exception:
+                    pass
+                self._client = self._create_client()
                 self._task = asyncio.create_task(self._client.start(self.token))
 
     async def stop(self) -> None:

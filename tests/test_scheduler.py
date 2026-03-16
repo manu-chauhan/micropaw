@@ -366,6 +366,7 @@ class TestPersonaFiles:
         agent.config = config
         agent.registry = MagicMock()
         agent.registry.all.return_value = []
+        agent._file_cache = {}
 
         with patch("micropaw.config.CONFIG_DIR", tmp_path):
             prompt = agent._build_system_prompt("terminal")
@@ -387,6 +388,7 @@ class TestPersonaFiles:
         agent.config = config
         agent.registry = MagicMock()
         agent.registry.all.return_value = []
+        agent._file_cache = {}
 
         with patch("micropaw.config.CONFIG_DIR", tmp_path):
             prompt = agent._build_system_prompt("terminal")
@@ -403,6 +405,7 @@ class TestPersonaFiles:
         agent.config = config
         agent.registry = MagicMock()
         agent.registry.all.return_value = []
+        agent._file_cache = {}
 
         with patch("micropaw.config.CONFIG_DIR", tmp_path):
             prompt = agent._build_system_prompt("terminal")
@@ -422,6 +425,7 @@ class TestPersonaFiles:
         agent.config = config
         agent.registry = MagicMock()
         agent.registry.all.return_value = []
+        agent._file_cache = {}
 
         with patch("micropaw.config.CONFIG_DIR", tmp_path):
             prompt = agent._build_system_prompt("terminal")
@@ -441,6 +445,7 @@ class TestPersonaFiles:
         agent.config = config
         agent.registry = MagicMock()
         agent.registry.all.return_value = []
+        agent._file_cache = {}
 
         with patch("micropaw.config.CONFIG_DIR", tmp_path):
             prompt = agent._build_system_prompt("terminal")

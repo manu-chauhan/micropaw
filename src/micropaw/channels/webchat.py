@@ -233,8 +233,9 @@ class WebChatChannel(Channel):
         writer.write(handshake.encode())
         await writer.drain()
 
-        conn_id = f"webchat:{uuid.uuid4().hex[:8]}"
-        self._connections[conn_id] = writer
+        bare_id = uuid.uuid4().hex[:8]
+        conn_id = f"webchat:{bare_id}"
+        self._connections[bare_id] = writer
         logger.info("WebChat client connected: %s", conn_id)
 
         try:
@@ -270,7 +271,7 @@ class WebChatChannel(Channel):
         except (ConnectionError, asyncio.IncompleteReadError):
             pass
         finally:
-            self._connections.pop(conn_id, None)
+            self._connections.pop(bare_id, None)
             logger.info("WebChat client disconnected: %s", conn_id)
             writer.close()
 
@@ -282,16 +283,20 @@ class WebChatChannel(Channel):
             except ConnectionError:
                 pass
 
+        # Pass bare ID as user_id (strip "webchat:" prefix) so gateway
+        # builds correct chat_id without double-prefixing
+        bare_id = conn_id.removeprefix("webchat:")
+
         if self._stream_handler:
             async def on_chunk(chunk: str) -> None:
                 await send_json({"type": "chunk", "text": chunk})
 
             await send_json({"type": "typing"})
-            response = await self._stream_handler(text, conn_id, "webchat", None, on_chunk)
+            response = await self._stream_handler(text, bare_id, "webchat", None, on_chunk)
             await send_json({"type": "done", "text": response})
         elif self._handler:
             await send_json({"type": "typing"})
-            response = await self._handler(text, conn_id, "webchat", None)
+            response = await self._handler(text, bare_id, "webchat", None)
             await send_json({"type": "message", "text": response})
 
     async def stop(self) -> None:
