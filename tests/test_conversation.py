@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from micropaw.core.context import KEEP_RECENT, ContextManager
-from micropaw.core.conversation import MAX_HISTORY, ConversationManager
+from micropaw.core.conversation import MAX_HISTORY, _DM_CONV_ID, ConversationManager
 from micropaw.providers.base import AIResponse, Message, ToolCall
 
 # ---------------------------------------------------------------------------
@@ -15,11 +15,13 @@ from micropaw.providers.base import AIResponse, Message, ToolCall
 # ---------------------------------------------------------------------------
 
 class TestConversationManager:
-    def test_get_conversation_id_dm(self):
+    def test_dm_unified_across_channels(self):
+        """All DMs (channel_id=None) share a single conversation."""
         store = MagicMock()
         mgr = ConversationManager(store)
-        cid = mgr.get_conversation_id("telegram", "user123")
-        assert cid == "telegram:user123"
+        assert mgr.get_conversation_id("telegram", "user123") == _DM_CONV_ID
+        assert mgr.get_conversation_id("terminal", "terminal-user") == _DM_CONV_ID
+        assert mgr.get_conversation_id("discord", "user789") == _DM_CONV_ID
 
     def test_get_conversation_id_group(self):
         store = MagicMock()
@@ -27,19 +29,35 @@ class TestConversationManager:
         cid = mgr.get_conversation_id("discord", "user123", channel_id="channel456")
         assert cid == "discord:channel456"
 
-    def test_terminal_override(self):
+    def test_group_isolated_from_dm(self):
         store = MagicMock()
         mgr = ConversationManager(store)
-        mgr.reset_terminal_session("terminal:terminal-user:abc123")
-        cid = mgr.get_conversation_id("terminal", "terminal-user")
-        assert cid == "terminal:terminal-user:abc123"
+        group_cid = mgr.get_conversation_id("telegram", "user123", channel_id="-100123")
+        dm_cid = mgr.get_conversation_id("telegram", "user123")
+        assert group_cid != dm_cid
+        assert group_cid == "telegram:-100123"
 
-    def test_terminal_override_doesnt_affect_other_platforms(self):
+    def test_dm_override(self):
         store = MagicMock()
         mgr = ConversationManager(store)
-        mgr.reset_terminal_session("terminal:override")
-        cid = mgr.get_conversation_id("telegram", "user123")
-        assert cid == "telegram:user123"
+        mgr.reset_dm_session("dm:owner:abc123")
+        cid = mgr.get_conversation_id("terminal", "terminal-user")
+        assert cid == "dm:owner:abc123"
+
+    def test_dm_override_applies_across_channels(self):
+        """After /new, the override applies to all DM channels."""
+        store = MagicMock()
+        mgr = ConversationManager(store)
+        mgr.reset_dm_session("dm:owner:fresh")
+        assert mgr.get_conversation_id("terminal", "terminal-user") == "dm:owner:fresh"
+        assert mgr.get_conversation_id("telegram", "user123") == "dm:owner:fresh"
+
+    def test_dm_override_doesnt_affect_groups(self):
+        store = MagicMock()
+        mgr = ConversationManager(store)
+        mgr.reset_dm_session("dm:owner:override")
+        cid = mgr.get_conversation_id("telegram", "user123", channel_id="-100456")
+        assert cid == "telegram:-100456"
 
     @pytest.mark.asyncio
     async def test_load_history(self):

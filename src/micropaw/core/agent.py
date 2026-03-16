@@ -135,6 +135,18 @@ class Agent:
         if hint := hints.get(platform):
             parts.append(hint)
 
+        parts.append("Conversations are shared across all direct-message channels. "
+                      "The user can seamlessly continue chatting from any channel.")
+
+        # Active channels for cross-channel sends
+        from micropaw.tools.channel_send import get_active_channels
+        active = get_active_channels()
+        if active:
+            others = [ch for ch in active if ch != platform]
+            if others:
+                parts.append(f"Other active channels: {', '.join(others)}. "
+                             "Use the channel_send tool to send messages there.")
+
         # Tools
         tools = self.registry.all()
         if tools:

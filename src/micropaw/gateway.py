@@ -103,12 +103,17 @@ class Gateway:
             max_iterations=self.config.context.max_subagent_iterations,
         )
 
+        from micropaw.tools.channel_send import set_channel_send_deps
+        set_channel_send_deps(self._bus)
+
         # Init agent
         self.agent = Agent(self.config, self.provider, self.registry, self.store)
 
         # Wire handler callbacks to all channels
         terminal_coro = None
         other_coros: list[tuple[Channel, Any]] = []
+
+        from micropaw.tools.channel_send import update_channel_chat_id
 
         for channel in self.channels:
             channel.set_handler(self._handle_message)
@@ -117,6 +122,7 @@ class Gateway:
                 channel._registry = self.registry
                 channel._config = self.config
                 channel._on_new_conversation = self._reset_terminal_conversation
+                update_channel_chat_id("terminal", "terminal")
                 terminal_coro = (channel, channel.start())
             else:
                 other_coros.append((channel, channel.start()))
@@ -233,10 +239,12 @@ class Gateway:
         return response
 
     def _record_channel_activity(self, platform: str, user_id: str, channel_id: str | None) -> None:
-        """Record last-known chat_id per channel so the scheduler can broadcast."""
+        """Record last-known chat_id per channel so the scheduler and channel_send can route."""
+        effective_chat_id = f"{platform}:{channel_id or user_id}"
         if hasattr(self, "_scheduler"):
-            effective_chat_id = f"{platform}:{channel_id or user_id}"
             self._scheduler.record_activity(platform, effective_chat_id)
+        from micropaw.tools.channel_send import update_channel_chat_id
+        update_channel_chat_id(platform, effective_chat_id)
 
     def _track_usage(self) -> None:
         """Pass accumulated usage from agent to terminal channel."""
@@ -246,11 +254,11 @@ class Gateway:
                 terminal.track_usage(self.agent.last_usage)
 
     async def _reset_terminal_conversation(self) -> None:
-        """Reset the terminal conversation ID so /new starts fresh."""
+        """Reset the DM conversation ID so /new starts fresh."""
         if self.agent:
             import uuid
-            new_id = f"terminal:terminal-user:{uuid.uuid4().hex[:8]}"
-            self.agent.conversations.reset_terminal_session(new_id)
+            new_id = f"dm:owner:{uuid.uuid4().hex[:8]}"
+            self.agent.conversations.reset_dm_session(new_id)
             self.agent.session_usage = {"input": 0, "output": 0}
             self.agent.message_count = 0
 

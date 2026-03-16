@@ -477,5 +477,32 @@
 - Source LOC: ~8,800
 - Test LOC: ~4,700
 - Tests: 393 passing (7 skipped: browser)
-- Tools: 16 (48 actions)
+- Tools: 17 (50 actions)
 - Dependencies: 8 core, 7 optional extras
+
+---
+
+## Cross-Channel Communication
+
+### D45: Unified DM Conversations + Cross-Channel Send
+**Decided:** 2026-03-16
+**Rationale:** Personal assistant should share conversation context across all channels. Industry data shows omnichannel (shared context) yields 2x higher satisfaction vs multichannel (isolated). MicroPaw already shared memories globally — conversations were the missing piece.
+
+**Design — Unified DMs (D2-style):**
+- `get_conversation_id()` returns `"dm:owner"` for all DMs (`channel_id is None`) regardless of platform.
+- Group chats keep isolated platform-specific IDs (`"{platform}:{channel_id}"`).
+- `/new` command resets to `"dm:owner:{random}"` — works across all DM channels.
+- Single owner model: MicroPaw is a personal assistant, all DMs are the same user.
+
+**Design — Cross-Channel Send (Features A+B):**
+- `ChannelSendTool` exposes `channel_send` to the LLM: send a message to any active channel.
+- Routes through existing `MessageBus` → `_bus_consumer` → `channel.send_message()`.
+- `_channel_registry` in `channel_send.py` tracks last-known `chat_id` per channel, populated by Gateway on every incoming message.
+- Terminal auto-registered at startup (needs no `chat_id`).
+- System prompt tells the AI which other channels are active.
+
+**Impact:**
+- Chat on terminal, continue on Telegram — full history preserved.
+- "Send this to my Telegram" works naturally via `channel_send` tool.
+- Group chats remain isolated — no context leaks.
+- Zero new dependencies. ~80 LOC new (`channel_send.py`), ~15 LOC changed across 4 files.

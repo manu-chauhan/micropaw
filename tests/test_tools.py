@@ -1285,3 +1285,114 @@ class TestStoreCorruptJson:
         assert messages[0].tool_calls[0].name == "web_search"
 
         await store.close()
+
+
+# ---------------------------------------------------------------------------
+# ChannelSendTool tests
+# ---------------------------------------------------------------------------
+
+class TestChannelSendTool:
+    def _make_context(self) -> ToolContext:
+        return ToolContext(conversation_id="dm:owner", user_id="user1", platform="terminal")
+
+    @pytest.mark.asyncio
+    async def test_send_to_known_channel(self):
+        import micropaw.tools.channel_send as cs
+        from micropaw.bus import MessageBus
+        from micropaw.tools.channel_send import ChannelSendTool
+
+        bus = MessageBus()
+        cs._bus = bus
+        cs._channel_registry = {"telegram": "telegram:12345"}
+
+        tool = ChannelSendTool()
+        result = await tool.execute({"channel": "telegram", "message": "Hello!"}, self._make_context())
+        assert "sent to telegram" in result.lower()
+
+        msg = await bus.consume_outbound()
+        assert msg is not None
+        assert msg.channel == "telegram"
+        assert msg.chat_id == "telegram:12345"
+        assert msg.content == "Hello!"
+        bus.close()
+
+    @pytest.mark.asyncio
+    async def test_send_to_terminal(self):
+        import micropaw.tools.channel_send as cs
+        from micropaw.bus import MessageBus
+        from micropaw.tools.channel_send import ChannelSendTool
+
+        bus = MessageBus()
+        cs._bus = bus
+        cs._channel_registry = {"terminal": "terminal"}
+
+        tool = ChannelSendTool()
+        result = await tool.execute({"channel": "terminal", "message": "Hi terminal"}, self._make_context())
+        assert "sent to terminal" in result.lower()
+
+        msg = await bus.consume_outbound()
+        assert msg is not None
+        assert msg.channel == "terminal"
+        assert msg.chat_id == ""
+        bus.close()
+
+    @pytest.mark.asyncio
+    async def test_send_to_unknown_channel(self):
+        import micropaw.tools.channel_send as cs
+        from micropaw.bus import MessageBus
+        from micropaw.tools.channel_send import ChannelSendTool
+
+        bus = MessageBus()
+        cs._bus = bus
+        cs._channel_registry = {"terminal": "terminal"}
+
+        tool = ChannelSendTool()
+        result = await tool.execute({"channel": "slack", "message": "Hello"}, self._make_context())
+        assert "error" in result.lower()
+        assert "slack" in result.lower()
+        bus.close()
+
+    @pytest.mark.asyncio
+    async def test_send_empty_message(self):
+        import micropaw.tools.channel_send as cs
+        from micropaw.bus import MessageBus
+        from micropaw.tools.channel_send import ChannelSendTool
+
+        bus = MessageBus()
+        cs._bus = bus
+        cs._channel_registry = {"telegram": "telegram:123"}
+
+        tool = ChannelSendTool()
+        result = await tool.execute({"channel": "telegram", "message": ""}, self._make_context())
+        assert "error" in result.lower()
+        bus.close()
+
+    @pytest.mark.asyncio
+    async def test_send_without_bus(self):
+        import micropaw.tools.channel_send as cs
+        from micropaw.tools.channel_send import ChannelSendTool
+
+        cs._bus = None
+
+        tool = ChannelSendTool()
+        result = await tool.execute({"channel": "telegram", "message": "Hello"}, self._make_context())
+        assert "error" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_get_active_channels(self):
+        import micropaw.tools.channel_send as cs
+        from micropaw.tools.channel_send import get_active_channels
+
+        cs._channel_registry = {"telegram": "telegram:123", "terminal": "terminal"}
+        active = get_active_channels()
+        assert "telegram" in active
+        assert "terminal" in active
+
+    @pytest.mark.asyncio
+    async def test_update_channel_chat_id(self):
+        import micropaw.tools.channel_send as cs
+        from micropaw.tools.channel_send import update_channel_chat_id
+
+        cs._channel_registry = {}
+        update_channel_chat_id("discord", "discord:789")
+        assert cs._channel_registry["discord"] == "discord:789"

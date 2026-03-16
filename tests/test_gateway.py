@@ -110,9 +110,9 @@ class TestGatewayTerminalConversation:
         gw = Gateway(config, provider, registry, [])
         gw.agent = MagicMock()
         gw.agent.conversations = MagicMock()
-        gw.agent.conversations.reset_terminal_session = MagicMock()
+        gw.agent.conversations.reset_dm_session = MagicMock()
 
         await gw._reset_terminal_conversation()
-        gw.agent.conversations.reset_terminal_session.assert_called_once()
-        call_args = gw.agent.conversations.reset_terminal_session.call_args[0]
-        assert call_args[0].startswith("terminal:terminal-user:")
+        gw.agent.conversations.reset_dm_session.assert_called_once()
+        call_args = gw.agent.conversations.reset_dm_session.call_args[0]
+        assert call_args[0].startswith("dm:owner:")

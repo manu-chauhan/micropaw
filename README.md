@@ -8,7 +8,7 @@
 
 <h4>Your AI. Your model. Your machine.</h4>
 
-6 channels. 4 providers. 16 tools. Shared memory everywhere. ~8,800 lines of Python. Zero SDK dependencies.
+6 channels. 4 providers. 17 tools. Cross-channel conversations. Shared memory everywhere. ~8,800 lines of Python. Zero SDK dependencies.
 
 [![PyPI](https://img.shields.io/pypi/v/micropaw?style=for-the-badge)](https://pypi.org/project/micropaw/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?style=for-the-badge)](https://python.org)
@@ -49,8 +49,8 @@ paw setup && paw chat
 └────────────────────────────┘  └────────────────────────────┘  └────────────────────────────┘
 
 ┌─ 🧠 Memory & Context ─────┐  ┌─ 🛠️ System ────────────────┐  ┌─ 🤖 Intelligence ─────────┐
-│ Cross-channel memory       │  │ Shell commands (hardened)   │  │ Multi-agent delegation     │
-│ Contacts book              │  │ HTTP requests (SSRF-safe)  │  │ Context compaction         │
+│ Unified cross-channel chat │  │ Shell commands (hardened)   │  │ Multi-agent delegation     │
+│ Cross-channel messaging    │  │ HTTP requests (SSRF-safe)  │  │ Context compaction         │
 │ Vector search (sqlite-vec) │  │ Vision (image analysis)    │  │ Streaming on all channels  │
 │ Auto-embed everything      │  │ Location-aware ("near me") │  │ Provider failover chain    │
 └────────────────────────────┘  └────────────────────────────┘  └────────────────────────────┘
@@ -98,6 +98,10 @@ MicroPaw:                "Revenue grew 23% in Q4, driven by..."
 ### Intelligence
 
 - **Same brain, everywhere** — Start a conversation on Telegram, pick it up on Discord, ask from WhatsApp. Everything stays on your machine.
+
+- **Cross-channel conversations** — All your DM conversations share a single thread. Chat on Terminal, continue on Telegram, pick up on Discord — same history, same context. Group chats stay isolated. Use `/new` on any channel to start fresh.
+
+- **Cross-channel messaging** — Tell MicroPaw "send this to my Telegram" from Terminal, or "forward that to Discord" from anywhere. The `channel_send` tool routes messages to any active channel instantly.
 
 - **RAG out of the box** — Read a PDF, paste a YouTube URL, or browse a web page. Documents are auto-chunked, embedded, and searchable across all channels. Ask about them days later from any platform.
 
@@ -162,15 +166,15 @@ MicroPaw:                "Revenue grew 23% in Q4, driven by..."
 | **Language** | Python | TypeScript | TypeScript | Go | C |
 | **Codebase** | ~8,800 LOC | ~430k LOC | ~500 LOC | ~4k LOC | ~15k LOC |
 | **Channels** | 6 | 15+ | 1 (WhatsApp) | 5 | 3 |
-| **Tools** | 16 (48 actions) | 25 + 53 prompt templates | SDK-dependent | 6 | 6 |
+| **Tools** | 17 (50 actions) | 25 + 53 prompt templates | SDK-dependent | 6 | 6 |
 | **AI SDKs** | None — raw httpx | Internal framework | Anthropic SDK | None — raw HTTP | None — raw HTTP |
 | **RAG / Vectors** | sqlite-vec ANN + fallback | sqlite-vec + BM25 | No | No | No |
 | **Telemetry** | None, ever | Local JSONL (opt-out) | None | None | None |
 | **License** | MIT | MIT | MIT | MIT | MIT |
 
-**MicroPaw sits in the sweet spot** — full-featured like OpenClaw (RAG, 6 channels, 16 tools, scheduling, email, calendar, multi-agent delegation) but lightweight like PicoClaw (~8,800 LOC, zero SDK dependencies). No telemetry, no bloat, no wrappers.
+**MicroPaw sits in the sweet spot** — full-featured like OpenClaw (RAG, 6 channels, 17 tools, scheduling, email, calendar, multi-agent delegation) but lightweight like PicoClaw (~8,800 LOC, zero SDK dependencies). No telemetry, no bloat, no wrappers.
 
-> Started at **4,667 LOC** in the first commit. Grew to **~8,700 source + ~4,300 test LOC** while adding 6 channels, 16 tools, RAG, multi-agent delegation, scheduling, email, calendar — and 393 tests. Every feature earned its lines.
+> Started at **4,667 LOC** in the first commit. Grew to **~8,700 source + ~4,300 test LOC** while adding 6 channels, 17 tools, RAG, multi-agent delegation, scheduling, email, calendar — and 393 tests. Every feature earned its lines.
 
 ---
 
@@ -277,6 +281,7 @@ paw chat
 | `delegate` | Spin up sub-agents for parallel tasks |
 | `cron` | Schedule recurring or one-shot tasks via LLM |
 | `email` | Gmail inbox, read, send, search via IMAP/SMTP |
+| `channel_send` | Send messages to any active channel — cross-channel forwarding and notifications |
 | `calendar` | Google Calendar list, create, delete, search events |
 
 Disable any tool:
@@ -433,7 +438,7 @@ MicroPaw > [delegate] "Research quantum computing breakthroughs"
 | `paw export` | Export conversations (JSON/Markdown) |
 | `paw reset` | Delete all config and data |
 
-Terminal commands: `/help`, `/new`, `/tools`, `/usage`, `/clear`, `/config`, `!cmd` (shell escape), `quit`
+Terminal commands: `/help`, `/new` (fresh conversation across all channels), `/tools`, `/usage`, `/clear`, `/config`, `!cmd` (shell escape), `quit`
 
 ---
 
@@ -560,7 +565,7 @@ src/micropaw/          ~8,800 LOC source + ~4,700 LOC tests
    conversation.py      History + session management
  providers/             4 providers + failover (raw httpx, retry)
  channels/              6 channels
- tools/                 16 tools (cron, email, calendar, delegation, etc.)
+ tools/                 17 tools (cron, email, calendar, delegation, etc.)
  memory/                SQLite + vectors + embeddings + RAG chunker
 ```
 
