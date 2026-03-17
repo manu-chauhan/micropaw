@@ -185,8 +185,11 @@ class Scheduler:
                 if not task:
                     continue
                 try:
+                    # Use channel_id="system" to isolate heartbeat tasks in their
+                    # own conversation ("heartbeat:system"), not the shared DM.
+                    # _INTERNAL_PLATFORMS prevents "heartbeat" from registering in channel_send.
                     response = await self._handler(
-                        f"[Heartbeat task] {task}", "heartbeat", "heartbeat", "heartbeat",
+                        f"[Heartbeat task] {task}", "heartbeat", "heartbeat", "system",
                     )
                     await self._deliver_heartbeat(f"[Heartbeat] {response}")
                 except Exception as e:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import socket
 import time
 import webbrowser
@@ -57,7 +58,8 @@ async def api_delete(token: str, url: str) -> int:
 
 
 def api_error(e: httpx.HTTPStatusError, service: str) -> str:
-    return f"Error: {service} API returned {e.response.status_code}: {e.response.text}"
+    """Return sanitized error — don't echo raw response body (may contain OAuth diagnostics)."""
+    return f"Error: {service} API returned HTTP {e.response.status_code}."
 
 
 async def ensure_token(service: str = "Google") -> tuple[str | None, str | None]:
@@ -94,11 +96,12 @@ def _load_tokens() -> dict | None:
 
 def _save_tokens(tokens: dict) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    _TOKEN_FILE.write_text(json.dumps(tokens, indent=2))
+    # Write with restricted permissions from the start (avoid world-readable window)
+    fd = os.open(str(_TOKEN_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        _TOKEN_FILE.chmod(0o600)
-    except OSError:
-        pass
+        os.write(fd, json.dumps(tokens, indent=2).encode())
+    finally:
+        os.close(fd)
 
 
 def _required_scopes() -> str:

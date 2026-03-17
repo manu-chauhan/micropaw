@@ -342,9 +342,10 @@ def display_config(config: Config) -> dict:
     if search_key:
         data["search"]["brave_api_key"] = _redact(search_key)
 
-    # Redact Google client secret
-    google_secret = data.get("google", {}).get("client_secret", "")
-    if google_secret:
-        data["google"]["client_secret"] = _redact(google_secret)
+    # Redact Google credentials
+    google = data.get("google", {})
+    for gkey in ("client_id", "client_secret"):
+        if google.get(gkey):
+            google[gkey] = _redact(google[gkey])
 
     return data

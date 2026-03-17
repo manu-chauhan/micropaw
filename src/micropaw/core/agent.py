@@ -129,6 +129,7 @@ class Agent:
         platform: str,
         recent_memories: list[dict] | None = None,
         relevant_docs: list[dict] | None = None,
+        conversation_summary: str | None = None,
     ) -> str:
         """Build the system prompt from config + tools + memories + RAG context."""
         parts: list[str] = []
@@ -204,6 +205,10 @@ class Agent:
                 content = doc["content"][:500]
                 parts.append(f"- [{source}]: {content}")
 
+        # Compaction summary (context from earlier messages that were pruned)
+        if conversation_summary:
+            parts.append(f"\nPrevious conversation summary: {conversation_summary}")
+
         # Extra instructions
         if self.config.persona.system_prompt_extra:
             parts.append(f"\n{self.config.persona.system_prompt_extra}")
@@ -230,15 +235,12 @@ class Agent:
         # RAG: search ingested documents for relevant chunks
         relevant_docs = await self.store.search_documents(text, limit=5, user_id="_global")
 
-        system_prompt = self._build_system_prompt(platform, recent_memories, relevant_docs)
+        # Include compaction summary in system prompt (avoids double-injection
+        # when compact() also produces a summary on the same turn)
+        saved_summary = await self.store.get_summary(conv_id)
+        system_prompt = self._build_system_prompt(platform, recent_memories, relevant_docs, saved_summary)
 
         messages: list[Message] = [Message(role="system", content=system_prompt)]
-
-        # Inject compaction summary before history (correct chronological order)
-        saved_summary = await self.store.get_summary(conv_id)
-        if saved_summary:
-            messages.append(Message(role="system", content=f"Previous conversation summary: {saved_summary}"))
-
         messages.extend(history)
         messages.append(Message(role="user", content=text))
 
