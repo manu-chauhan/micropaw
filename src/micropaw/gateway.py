@@ -208,8 +208,10 @@ class Gateway:
     def _validate(self, text: str, user_id: str) -> str | None:
         if not self.agent:
             return "Agent not initialized."
-        if not self._rate_limiter.check(user_id):
-            return "You're sending messages too fast. Please wait a moment."
+        # Internal callers (heartbeat, system) bypass rate limiting
+        if user_id not in ("heartbeat", "system"):
+            if not self._rate_limiter.check(user_id):
+                return "You're sending messages too fast. Please wait a moment."
         max_size = self.config.context.max_message_size
         if len(text) > max_size:
             return f"Message too long ({len(text):,} chars). Maximum is {max_size:,} characters."

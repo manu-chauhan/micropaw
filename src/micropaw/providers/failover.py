@@ -47,8 +47,12 @@ class FailoverProvider(AIProvider):
         for i, provider in enumerate(self.providers):
             try:
                 if i == 0:
-                    # Primary: stream directly for best latency
+                    # Primary: buffer chunks so a mid-stream failure doesn't
+                    # leak partial content before the fallback produces a full response
+                    buffered: list[str | AIResponse] = []
                     async for item in provider.chat_stream(messages, tools):
+                        buffered.append(item)
+                    for item in buffered:
                         yield item
                     return
                 else:

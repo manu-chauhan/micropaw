@@ -33,14 +33,15 @@ def chunk_text(
 
         # Try to break at paragraph boundary
         segment = text[start:end]
+        min_break = max_chars // 8  # at least 12.5% of chunk to avoid tiny fragments
         break_pos = segment.rfind("\n\n")
-        if break_pos == -1 or break_pos < max_chars // 4:
+        if break_pos == -1 or break_pos < min_break:
             # Try line boundary
             break_pos = segment.rfind("\n")
-        if break_pos == -1 or break_pos < max_chars // 4:
+        if break_pos == -1 or break_pos < min_break:
             # Try space
             break_pos = segment.rfind(" ")
-        if break_pos == -1 or break_pos < max_chars // 4:
+        if break_pos == -1 or break_pos < min_break:
             # Hard cut
             break_pos = max_chars
 

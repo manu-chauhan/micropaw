@@ -43,7 +43,9 @@ async def retry_on_transient(func, *args, **kwargs):
                 await asyncio.sleep(delay)
             else:
                 raise
-    raise last_exc  # type: ignore[misc]
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("retry_on_transient: all attempts exhausted with no captured exception")
 
 
 @dataclass(slots=True)

@@ -95,6 +95,7 @@ class MemoryStore:
         self.db_path = str(db_path)
         self._db: aiosqlite.Connection | None = None
         self.embedder: EmbeddingProvider = embedding_provider or NullEmbedding()
+        self._compact_locks: dict[str, asyncio.Lock] = {}  # per-conversation compaction locks
         self._has_vec: bool = False
         self._vec_dims: int = 0
 
@@ -321,10 +322,14 @@ class MemoryStore:
     async def compact_messages(self, conversation_id: str, summary: str, keep_recent: int) -> None:
         """Delete old messages, keep the last N, and persist the summary.
 
-        The summary is inserted after the kept messages (highest autoincrement ID).
-        On the next load, get_messages returns: [kept_msgs..., summary].
-        The summary provides context for what was deleted.
+        Uses a per-conversation lock to prevent concurrent compaction from
+        corrupting the message history.
         """
+        lock = self._compact_locks.setdefault(conversation_id, asyncio.Lock())
+        async with lock:
+            await self._compact_messages_inner(conversation_id, summary, keep_recent)
+
+    async def _compact_messages_inner(self, conversation_id: str, summary: str, keep_recent: int) -> None:
         async with self.db.execute(
             "SELECT id FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
             (conversation_id, keep_recent),

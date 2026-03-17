@@ -52,10 +52,10 @@ class HttpRequestTool(Tool):
                     if not location:
                         break
 
-                    # Resolve relative redirects
+                    # Resolve relative redirects (RFC 3986)
                     if not location.startswith(("http://", "https://")):
-                        parsed = urlparse(url)
-                        location = f"{parsed.scheme}://{parsed.netloc}{location}"
+                        from urllib.parse import urljoin
+                        location = urljoin(url, location)
 
                     if error := await validate_url(location):
                         return f"Error: Redirect blocked — {error}"
