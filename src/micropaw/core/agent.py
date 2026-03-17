@@ -68,7 +68,7 @@ class Agent:
         self.last_usage: dict[str, int] = {"input": 0, "output": 0}
         self.session_usage: dict[str, int] = {"input": 0, "output": 0}
         self.message_count: int = 0
-        self._tool_cache: dict[tuple, str] = {}
+        self._tool_cache: dict[tuple, str | ToolResult] = {}
         self._file_cache: dict[str, tuple[float, str]] = {}  # path → (mtime, content)
 
     def _reset_usage(self) -> None:

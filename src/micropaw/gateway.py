@@ -240,8 +240,13 @@ class Gateway:
         logger.debug("[%s] MicroPaw: %s", platform, response[:80])
         return response
 
+    # Internal platforms that should not be registered as real channels
+    _INTERNAL_PLATFORMS = frozenset({"heartbeat", "system"})
+
     def _record_channel_activity(self, platform: str, user_id: str, channel_id: str | None) -> None:
         """Record last-known chat_id per channel so the scheduler and channel_send can route."""
+        if platform in self._INTERNAL_PLATFORMS:
+            return
         effective_chat_id = f"{platform}:{channel_id or user_id}"
         if hasattr(self, "_scheduler"):
             self._scheduler.record_activity(platform, effective_chat_id)

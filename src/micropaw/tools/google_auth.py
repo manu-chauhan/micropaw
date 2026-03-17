@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import socket
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -181,7 +182,12 @@ def _run_auth_server() -> str | None:
         def log_message(self, *args):
             pass
 
-    server = HTTPServer(("localhost", _REDIRECT_PORT), Handler)
+    try:
+        server = HTTPServer(("localhost", _REDIRECT_PORT), Handler)
+        server.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    except OSError as e:
+        logger.error("Cannot start OAuth redirect server on port %d: %s", _REDIRECT_PORT, e)
+        return None
     server.timeout = 120
     server.handle_request()
     server.server_close()

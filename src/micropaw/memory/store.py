@@ -319,12 +319,11 @@ class MemoryStore:
         return messages
 
     async def compact_messages(self, conversation_id: str, summary: str, keep_recent: int) -> None:
-        """Delete old messages after compaction, keeping the last N.
+        """Delete old messages, keep the last N, and persist the summary.
 
-        The in-memory summary is used for the current turn. On subsequent
-        turns, load_history returns only the kept messages (below threshold),
-        so compaction won't re-trigger. This avoids ID-ordering complexities
-        of persisting the summary row.
+        The summary is inserted after the kept messages (highest autoincrement ID).
+        On the next load, get_messages returns: [kept_msgs..., summary].
+        The summary provides context for what was deleted.
         """
         async with self.db.execute(
             "SELECT id FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
@@ -341,6 +340,17 @@ class MemoryStore:
         await self.db.execute(
             "DELETE FROM messages WHERE conversation_id = ? AND id < ?",
             (conversation_id, min_kept),
+        )
+        # Remove any previous summary to avoid accumulation
+        await self.db.execute(
+            "DELETE FROM messages WHERE conversation_id = ? "
+            "AND content LIKE 'Previous conversation summary:%' AND role = 'system'",
+            (conversation_id,),
+        )
+        # Persist the summary (gets highest ID, appears after kept messages in history)
+        await self.db.execute(
+            "INSERT INTO messages (conversation_id, role, content) VALUES (?, 'system', ?)",
+            (conversation_id, f"Previous conversation summary: {summary}"),
         )
         await self.db.commit()
 

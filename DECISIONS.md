@@ -506,3 +506,23 @@
 - "Send this to my Telegram" works naturally via `channel_send` tool.
 - Group chats remain isolated — no context leaks.
 - Zero new dependencies. ~80 LOC new (`channel_send.py`), ~15 LOC changed across 4 files.
+
+### Bug Fixes (Batch 6 — Cross-Channel Audit, 9 rounds, 60 fixes)
+
+**Round 1 (5 fixes):** channel_send rate limiter bypass → per-turn cap; Slack DM detection (`D*` prefix); cron/delegate used `conversation_id` as chat address → `ToolContext.chat_id`; module state cleanup on gateway stop; terminal phantom channel registration.
+
+**Round 2 (5 fixes):** WebChat/WhatsApp `send_message` prefix stripping; Discord DM `fetch_user` fallback; scheduler double-prefixed `channel_id` → pass `None`; `/rejoin` stuck after `/newall`.
+
+**Round 3 (4 fixes):** SubAgent `ToolResult` normalization; `/rejoin` isolation via `_rejoined` set; sessions tool `dm:` filter; SubAgent + DelegateTool tests (7 new).
+
+**Round 4 (6 fixes):** Heartbeat polluting `dm:owner` → dedicated conversation; scheduler fallback with mismatched `chat_id` removed; WebChat bare user ID; Discord `_watch_task` fresh client on crash; SOUL/USER/SKILLS.md mtime-cached reads; sessions `info`/`clear` auth check.
+
+**Round 5 (6 fixes):** Context compaction never persisted → delete old messages + persist summary; Discord/Telegram `send_message` `ValueError` guard; `channel_send` message length cap (4096); sessions `@staticmethod` removed; tool error cache excludes `"Error:"` prefix.
+
+**Round 6 (9 fixes):** Gemini API key moved from URL to `x-goog-api-key` header; shell tool: block `declare`, `/proc/self/environ`, `node -e`, `__import__`; `compact_messages` ID ordering; `validate_url` DNS async via `run_in_executor`; WhatsApp `verify_token` redacted; tool error cache; Google OAuth error log sanitized; `LocalEmbedding._load()` thread-safe.
+
+**Round 7 (8 fixes):** `__version__` 0.1.2→0.2.1; terminal `!cmd` bypassed all shell security → checks `_BLOCKED_RE`; connector Gemini key in header; `setup_wizard` `sys.executable -m pip`; user message content log → DEBUG; WebChat auth token log → DEBUG; `compact_messages` simplified; terminal `proc.kill()` + `proc.wait()`.
+
+**Round 8 (7 fixes):** Terminal `_run_shell` defensive `ProcessLookupError` catch; scheduler heartbeat async file read; shell patterns extended to `less`/`more`/`head`/`tail`; cron `int(job_id)` guard; vision async `read_bytes`; YouTube InnerTube `.json()` guard; files tool 10MB save cap.
+
+**Round 9 (7 fixes):** Google OAuth `OSError` on port conflict → handled with `SO_REUSEADDR`; sessions `dm:` access restricted to current conversation; compaction summary persisted to DB; `_tool_cache` type annotation fixed; email `_b64_decode` proper padding; SubAgent fabricated assistant message removed; heartbeat skipped from channel registry via `_INTERNAL_PLATFORMS`.

@@ -99,6 +99,6 @@ class SessionsTool(Tool):
     async def _is_allowed(self, session_id: str, context: ToolContext) -> bool:
         """Check if the user can access this session."""
         if session_id.startswith("dm:"):
-            return True
+            return session_id == context.conversation_id
         convos = await _store.list_conversations()
         return any(c["id"] == session_id and c["user_id"] == context.user_id for c in convos)

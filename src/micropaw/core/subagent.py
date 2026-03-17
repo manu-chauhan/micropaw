@@ -96,10 +96,9 @@ class SubAgent:
             if response.content and response.content.strip():
                 return response.content.strip()
 
-            # Empty response — nudge the model (use non-empty content for Claude compatibility)
+            # Empty response — nudge via user message only (don't fabricate assistant messages)
             logger.debug("SubAgent empty response on iteration %d, nudging", i)
-            messages.append(Message(role="assistant", content="I need to think about this more."))
-            messages.append(Message(role="user", content="Please provide your response."))
+            messages.append(Message(role="user", content="Please provide your final answer."))
 
         return "Sub-agent reached maximum iterations without a response."
 

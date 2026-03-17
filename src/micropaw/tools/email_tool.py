@@ -32,7 +32,10 @@ def _strip_html(html: str) -> str:
 
 def _b64_decode(data: str) -> str:
     """Decode Gmail's base64url-encoded body data."""
-    return base64.urlsafe_b64decode(data + "==").decode("utf-8", errors="replace")
+    # Pad to multiple of 4 (strip existing padding first to avoid double-pad)
+    padded = data.rstrip("=")
+    padded += "=" * (-len(padded) % 4)
+    return base64.urlsafe_b64decode(padded).decode("utf-8", errors="replace")
 
 
 def _extract_body(payload: dict) -> str:
