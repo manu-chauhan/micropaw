@@ -266,7 +266,7 @@ class WebChatChannel(Channel):
                 if not text or len(text) > MAX_MSG_LENGTH:
                     continue
 
-                asyncio.create_task(self._process_message(conn_id, writer, text))
+                asyncio.create_task(self._safe_process_message(conn_id, writer, text))
 
         except (ConnectionError, asyncio.IncompleteReadError):
             pass
@@ -274,6 +274,12 @@ class WebChatChannel(Channel):
             self._connections.pop(bare_id, None)
             logger.info("WebChat client disconnected: %s", conn_id)
             writer.close()
+
+    async def _safe_process_message(self, conn_id: str, writer: asyncio.StreamWriter, text: str) -> None:
+        try:
+            await self._process_message(conn_id, writer, text)
+        except Exception as e:
+            logger.error("WebChat message processing failed for %s: %s", conn_id, e)
 
     async def _process_message(self, conn_id: str, writer: asyncio.StreamWriter, text: str) -> None:
         async def send_json(data: dict) -> None:

@@ -117,6 +117,6 @@ class SlackChannel(Channel):
 
     async def send_message(self, chat_id: str, text: str) -> None:
         if self._app:
-            channel = chat_id.replace("slack:", "")
+            channel = chat_id.replace("slack:", "", 1)
             for chunk in chunk_text(text, MAX_MSG_LEN):
                 await self._app.client.chat_postMessage(channel=channel, text=chunk)

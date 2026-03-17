@@ -233,6 +233,12 @@ class Agent:
         system_prompt = self._build_system_prompt(platform, recent_memories, relevant_docs)
 
         messages: list[Message] = [Message(role="system", content=system_prompt)]
+
+        # Inject compaction summary before history (correct chronological order)
+        saved_summary = await self.store.get_summary(conv_id)
+        if saved_summary:
+            messages.append(Message(role="system", content=f"Previous conversation summary: {saved_summary}"))
+
         messages.extend(history)
         messages.append(Message(role="user", content=text))
 

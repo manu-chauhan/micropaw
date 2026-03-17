@@ -205,11 +205,11 @@ class Gateway:
                 return ch
         return None
 
-    def _validate(self, text: str, user_id: str) -> str | None:
+    def _validate(self, text: str, user_id: str, platform: str = "") -> str | None:
         if not self.agent:
             return "Agent not initialized."
-        # Internal callers (heartbeat, system) bypass rate limiting
-        if user_id not in ("heartbeat", "system"):
+        # Internal platforms (heartbeat, system) bypass rate limiting
+        if platform not in self._INTERNAL_PLATFORMS:
             if not self._rate_limiter.check(user_id):
                 return "You're sending messages too fast. Please wait a moment."
         max_size = self.config.context.max_message_size
@@ -218,7 +218,7 @@ class Gateway:
         return None
 
     async def _handle_message(self, text: str, user_id: str, platform: str, channel_id: str | None) -> str:
-        err = self._validate(text, user_id)
+        err = self._validate(text, user_id, platform)
         if err:
             return err
         self._record_channel_activity(platform, user_id, channel_id)
@@ -232,7 +232,7 @@ class Gateway:
         self, text: str, user_id: str, platform: str, channel_id: str | None,
         on_chunk=None,
     ) -> str:
-        err = self._validate(text, user_id)
+        err = self._validate(text, user_id, platform)
         if err:
             return err
         self._record_channel_activity(platform, user_id, channel_id)

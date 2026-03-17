@@ -346,18 +346,14 @@ class MemoryStore:
             "DELETE FROM messages WHERE conversation_id = ? AND id < ?",
             (conversation_id, min_kept),
         )
-        # Remove any previous summary to avoid accumulation
-        await self.db.execute(
-            "DELETE FROM messages WHERE conversation_id = ? "
-            "AND content LIKE 'Previous conversation summary:%' AND role = 'system'",
-            (conversation_id,),
-        )
-        # Persist the summary (gets highest ID, appears after kept messages in history)
-        await self.db.execute(
-            "INSERT INTO messages (conversation_id, role, content) VALUES (?, 'system', ?)",
-            (conversation_id, f"Previous conversation summary: {summary}"),
-        )
+        # Store summary in kv_meta (avoids ID ordering issues with messages table).
+        # get_messages_with_summary() injects it before the kept messages.
+        await self._set_meta(f"summary:{conversation_id}", summary)
         await self.db.commit()
+
+    async def get_summary(self, conversation_id: str) -> str | None:
+        """Get the compaction summary for a conversation, if any."""
+        return await self._get_meta(f"summary:{conversation_id}")
 
     # --- Memories ---
 
