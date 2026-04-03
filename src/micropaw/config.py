@@ -298,12 +298,14 @@ def load_config() -> Config:
 
 def save_config(config: Config) -> None:
     """Save config to ~/.micropaw/config.json with restrictive permissions."""
+    import os
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(config.model_dump(), indent=2))
+    # Write with 0o600 from creation — avoid world-readable TOCTOU window
+    fd = os.open(str(CONFIG_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        CONFIG_FILE.chmod(0o600)
-    except OSError:
-        pass
+        os.write(fd, json.dumps(config.model_dump(), indent=2).encode())
+    finally:
+        os.close(fd)
 
 
 def _redact(value: str) -> str:

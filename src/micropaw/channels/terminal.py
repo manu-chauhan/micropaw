@@ -21,8 +21,8 @@ console = Console()
 SLASH_COMMANDS = {
     "/help": "Show available commands",
     "/new": "Fresh conversation (this channel only)",
+    "/new all": "Fresh conversation across all channels",
     "/rejoin": "Return to the shared conversation",
-    "/newall": "Fresh conversation across all channels",
     "/tools": "List available tools and their status",
     "/usage": "Show token usage for this session",
     "/clear": "Clear the screen",
@@ -119,25 +119,26 @@ class TerminalChannel(Channel):
             return True
 
         elif command == "/new":
-            if self._on_new:
-                await self._on_new()
-            console.print("[dim]Started a fresh conversation (terminal only). /rejoin to return to shared.[/dim]\n")
+            if len(parts) > 1 and parts[1] == "all":
+                # /new all — fresh everywhere
+                self._session_id = uuid.uuid4().hex[:8]
+                self._total_usage = {"input": 0, "output": 0}
+                self._last_delta = {"input": 0, "output": 0}
+                self._message_count = 0
+                if self._on_newall:
+                    await self._on_newall()
+                console.print("[dim]Started a fresh conversation across all channels.[/dim]\n")
+            else:
+                # /new — this channel only
+                if self._on_new:
+                    await self._on_new()
+                console.print("[dim]Started a fresh conversation (terminal only). /rejoin to return to shared.[/dim]\n")
             return True
 
         elif command == "/rejoin":
             if self._on_rejoin:
                 await self._on_rejoin()
             console.print("[dim]Rejoined the shared conversation.[/dim]\n")
-            return True
-
-        elif command == "/newall":
-            self._session_id = uuid.uuid4().hex[:8]
-            self._total_usage = {"input": 0, "output": 0}
-            self._last_delta = {"input": 0, "output": 0}
-            self._message_count = 0
-            if self._on_newall:
-                await self._on_newall()
-            console.print("[dim]Started a fresh conversation across all channels.[/dim]\n")
             return True
 
         elif command == "/tools":

@@ -55,6 +55,8 @@ class WhatsAppChannel(Channel):
         await runner.setup()
         self._server = web.TCPSite(runner, self.host, self.port)
         await self._server.start()
+        if not self.app_secret:
+            logger.warning("WhatsApp HMAC verification disabled — set app_secret for production use")
         logger.info("WhatsApp webhook listening on %s:%d", self.host, self.port)
 
     async def _verify(self, request: Any) -> Any:

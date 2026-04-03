@@ -43,10 +43,11 @@ class SessionsTool(Tool):
 
         if action == "list":
             convos = await _store.list_conversations()
-            # Filter to user's conversations + shared DM conversations
+            # Show current DM conversation + user's group chats
             user_convos = [
                 c for c in convos
-                if c["user_id"] == context.user_id or c["id"].startswith("dm:")
+                if c["id"] == context.conversation_id
+                or (not c["id"].startswith("dm:") and c["user_id"] == context.user_id)
             ]
             if not user_convos:
                 return "No sessions found."

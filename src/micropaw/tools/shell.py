@@ -66,7 +66,7 @@ BLOCKED_PATTERNS = [
     r"echo\s+.*\$[A-Z_]", r"printf\s+.*\$[A-Z_]",
     r"\bset\s*$", r"\bset\s*\|",
     r"\bdeclare\b",  # bash built-in dumps all vars
-    r"/proc/self/environ",  # raw environment dump on Linux
+    r"/proc/(\d+|self)/environ",  # raw environment dump on Linux (any PID)
     r"\bnode\s+-e\b",  # Node.js one-liners can access process.env
     r"__import__",  # Python import bypass (e.g. __import__('os').environ)
     r"\$\(", r"`",  # subshell / backtick execution bypass
