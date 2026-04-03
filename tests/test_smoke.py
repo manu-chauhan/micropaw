@@ -144,6 +144,8 @@ class TestToolResultType:
         store.get_recent_memories = AsyncMock(return_value=[])
         store.search_documents = AsyncMock(return_value=[])
         store.ingest_document = AsyncMock(return_value=0)
+        store.get_summary = AsyncMock(return_value=None)
+        store.compact_messages = AsyncMock()
 
         agent = Agent(config, provider, registry, store)
         result = await agent.handle_message("take screenshot", "u1", "terminal")

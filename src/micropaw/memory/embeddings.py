@@ -42,13 +42,17 @@ class OpenAIEmbedding(EmbeddingProvider):
         self._client = httpx.AsyncClient(timeout=30.0)
 
     async def embed(self, text: str) -> list[float]:
-        resp = await self._client.post(
-            "https://api.openai.com/v1/embeddings",
-            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-            json={"input": text, "model": self.model},
-        )
-        resp.raise_for_status()
-        return resp.json()["data"][0]["embedding"]
+        try:
+            resp = await self._client.post(
+                "https://api.openai.com/v1/embeddings",
+                headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                json={"input": text, "model": self.model},
+            )
+            resp.raise_for_status()
+            return resp.json()["data"][0]["embedding"]
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as e:
+            logger.warning("OpenAI embedding failed: %s", e)
+            return []
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -65,12 +69,16 @@ class OllamaEmbedding(EmbeddingProvider):
         self._client = httpx.AsyncClient(timeout=60.0)
 
     async def embed(self, text: str) -> list[float]:
-        resp = await self._client.post(
-            f"{self.host}/api/embed",
-            json={"model": self.model, "input": text},
-        )
-        resp.raise_for_status()
-        return resp.json()["embeddings"][0]
+        try:
+            resp = await self._client.post(
+                f"{self.host}/api/embed",
+                json={"model": self.model, "input": text},
+            )
+            resp.raise_for_status()
+            return resp.json()["embeddings"][0]
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as e:
+            logger.warning("Ollama embedding failed (is Ollama running?): %s", e)
+            return []
 
     async def close(self) -> None:
         await self._client.aclose()
