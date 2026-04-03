@@ -114,7 +114,7 @@ class TerminalChannel(Channel):
             for name, desc in SLASH_COMMANDS.items():
                 table.add_row(name, desc)
             table.add_row("!cmd", "Run a shell command (e.g. !ls -la)")
-            table.add_row("quit", "Exit MicroPaw")
+            table.add_row("quit/exit", "Exit MicroPaw")
             console.print(table)
             return True
 
