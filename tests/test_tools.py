@@ -384,136 +384,7 @@ class TestWebSearch:
         mock_ddg.assert_called_once_with("test", 20)
 
 
-# ---------------------------------------------------------------------------
-# Sub-agent tests
-# ---------------------------------------------------------------------------
-
-class TestSubAgent:
-    @pytest.mark.asyncio
-    async def test_inline_returns_text(self):
-        from micropaw.core.subagent import SubAgent
-        from micropaw.providers.base import AIResponse
-
-        mock_provider = AsyncMock()
-        mock_provider.chat = AsyncMock(return_value=AIResponse(
-            content="The answer is 42.", tool_calls=[], usage={"input": 10, "output": 5},
-        ))
-
-        agent = SubAgent(mock_provider)
-        result = await agent.run("What is the meaning of life?")
-
-        assert result == "The answer is 42."
-        mock_provider.chat.assert_called_once()
-        # No registry → tools=None
-        _, kwargs = mock_provider.chat.call_args
-        assert kwargs.get("tools") is None
-
-    @pytest.mark.asyncio
-    async def test_with_tools_excludes_delegate(self):
-        """Sub-agent with a registry should get all tools except delegate."""
-        from micropaw.core.subagent import SubAgent
-        from micropaw.providers.base import AIResponse
-
-        mock_provider = AsyncMock()
-        mock_provider.chat = AsyncMock(return_value=AIResponse(
-            content="Done.", tool_calls=[], usage={"input": 10, "output": 5},
-        ))
-
-        # Build a registry with a regular tool and a delegate tool
-        from micropaw.tools.delegate import DelegateTool
-        reg = ToolRegistry()
-        reg.register(FakeTool())
-        reg.register(DelegateTool())
-
-        ctx = ToolContext(conversation_id="conv1", user_id="u1", platform="test")
-        agent = SubAgent(mock_provider, registry=reg, tool_context=ctx)
-        result = await agent.run("Use tools")
-
-        assert result == "Done."
-        _, kwargs = mock_provider.chat.call_args
-        tool_defs = kwargs.get("tools")
-        assert tool_defs is not None
-        tool_names = [t.name for t in tool_defs]
-        assert "test_tool" in tool_names
-        assert "delegate" not in tool_names  # excluded!
-
-    @pytest.mark.asyncio
-    async def test_tool_call_executed(self):
-        """Sub-agent should execute tool calls and continue."""
-        from micropaw.core.subagent import SubAgent
-        from micropaw.providers.base import AIResponse, ToolCall
-
-        call_count = 0
-
-        async def mock_chat(messages, tools=None):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return AIResponse(
-                    content="",
-                    tool_calls=[ToolCall(id="tc1", name="test_tool", arguments={"text": "hello"})],
-                    usage={"input": 5, "output": 3},
-                )
-            return AIResponse(content="Got: result: hello", tool_calls=[], usage={"input": 10, "output": 5})
-
-        mock_provider = AsyncMock()
-        mock_provider.chat = AsyncMock(side_effect=mock_chat)
-
-        reg = ToolRegistry()
-        reg.register(FakeTool())
-        ctx = ToolContext(conversation_id="conv1", user_id="u1", platform="test")
-
-        agent = SubAgent(mock_provider, registry=reg, tool_context=ctx)
-        result = await agent.run("Do something with test_tool")
-
-        assert "result: hello" in result
-        assert call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_max_iterations_bail(self):
-        from micropaw.core.subagent import SubAgent
-        from micropaw.providers.base import AIResponse
-
-        mock_provider = AsyncMock()
-        mock_provider.chat = AsyncMock(return_value=AIResponse(
-            content="", tool_calls=[], usage={"input": 5, "output": 0},
-        ))
-
-        agent = SubAgent(mock_provider, max_iterations=3)
-        result = await agent.run("Do something")
-
-        assert "maximum iterations" in result.lower()
-
-    @pytest.mark.asyncio
-    async def test_custom_max_iterations(self):
-        from micropaw.core.subagent import SubAgent
-        from micropaw.providers.base import AIResponse
-
-        mock_provider = AsyncMock()
-        mock_provider.chat = AsyncMock(return_value=AIResponse(
-            content="", tool_calls=[], usage={"input": 5, "output": 0},
-        ))
-
-        agent = SubAgent(mock_provider, max_iterations=2)
-        await agent.run("Do something")
-        # With nudging, each empty response adds 2 messages then retries → 2 calls
-        assert mock_provider.chat.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_provider_error_handled(self):
-        from micropaw.core.subagent import SubAgent
-
-        mock_provider = AsyncMock()
-        mock_provider.chat = AsyncMock(side_effect=RuntimeError("API down"))
-
-        agent = SubAgent(mock_provider)
-        result = await agent.run("Test task")
-
-        assert "error" in result.lower()
-        assert "API down" in result
-
-
-class TestDelegateTool:
+class TestDelegateToolLegacy:
     @pytest.mark.asyncio
     async def test_inline_mode(self):
         from micropaw.providers.base import AIResponse
@@ -1460,7 +1331,6 @@ class TestChannelSendTool:
 
 class TestSubAgent:
     def _make_provider(self, responses):
-        from micropaw.providers.base import AIResponse, ToolCall
         from tests.test_agent import MockProvider
         return MockProvider(responses)
 
@@ -1566,7 +1436,10 @@ class TestDelegateTool:
         dt._max_iterations = 5
 
         tool = DelegateTool()
-        context = ToolContext(conversation_id="dm:owner", user_id="u1", platform="terminal", chat_id="terminal:terminal-user")
+        context = ToolContext(
+            conversation_id="dm:owner", user_id="u1",
+            platform="terminal", chat_id="terminal:terminal-user",
+        )
         result = await tool.execute({"task": "Research X", "mode": "inline"}, context)
         assert "Research complete" in result
 
@@ -1610,6 +1483,9 @@ class TestDelegateTool:
 
         dt._provider = None
         tool = DelegateTool()
-        context = ToolContext(conversation_id="dm:owner", user_id="u1", platform="terminal", chat_id="terminal:terminal-user")
+        context = ToolContext(
+            conversation_id="dm:owner", user_id="u1",
+            platform="terminal", chat_id="terminal:terminal-user",
+        )
         result = await tool.execute({"task": "test"}, context)
         assert "error" in result.lower()
