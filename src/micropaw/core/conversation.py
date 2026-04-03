@@ -17,7 +17,6 @@ class ConversationManager:
         self.store = store
         self._global_override: str | None = None
         self._channel_overrides: dict[str, str] = {}  # platform → conv_id
-        self._rejoined: set[str] = set()  # platforms pinned to base by /rejoin
 
     def get_conversation_id(self, platform: str, user_id: str, channel_id: str | None = None) -> str:
         """Build a conversation ID.
@@ -25,17 +24,19 @@ class ConversationManager:
         DMs (channel_id is None) share a single unified conversation across
         all channels.  Group chats keep platform-specific IDs.
 
-        Priority: group → per-channel override → rejoined pin → global override → default.
+        Priority: group → per-channel override → global override → default.
         """
         if channel_id:
             return f"{platform}:{channel_id}"
         if platform in self._channel_overrides:
             return self._channel_overrides[platform]
-        if platform in self._rejoined:
-            return _DM_CONV_ID
         if self._global_override:
             return self._global_override
         return _DM_CONV_ID
+
+    def current_shared_id(self) -> str:
+        """Return the current shared DM conversation ID."""
+        return self._global_override or _DM_CONV_ID
 
     async def load_history(self, conversation_id: str, platform: str, user_id: str) -> list[Message]:
         await self.store.get_or_create_conversation(conversation_id, platform, user_id)
@@ -47,18 +48,16 @@ class ConversationManager:
     def new_channel_session(self, platform: str, new_id: str) -> None:
         """Branch this channel into a fresh conversation (/new)."""
         self._channel_overrides[platform] = new_id
-        self._rejoined.discard(platform)
 
     def rejoin_channel(self, platform: str) -> None:
-        """Return this channel to the base shared conversation (/rejoin).
+        """Return this channel to the current shared conversation (/rejoin).
 
-        Pins this channel to dm:owner without affecting other channels.
+        Removes per-channel override so the channel falls through to
+        _global_override (if set by /newall) or _DM_CONV_ID (default).
         """
         self._channel_overrides.pop(platform, None)
-        self._rejoined.add(platform)
 
     def new_all_sessions(self, new_id: str) -> None:
         """Start a fresh conversation for all channels (/newall)."""
         self._channel_overrides.clear()
-        self._rejoined.clear()
         self._global_override = new_id

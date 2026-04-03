@@ -88,46 +88,46 @@ class TestConversationManager:
         assert mgr.get_conversation_id("terminal", "terminal-user") == "dm:terminal:local"
         assert mgr.get_conversation_id("telegram", "user123") == "dm:owner:global"
 
-    def test_rejoin_after_newall_returns_to_base(self):
-        """/newall then /rejoin goes back to dm:owner (not stuck on newall ID)."""
+    def test_rejoin_after_newall_stays_on_newall(self):
+        """/newall then /rejoin is a no-op — already on the shared conversation."""
         store = MagicMock()
         mgr = ConversationManager(store)
         mgr.new_all_sessions("dm:owner:newall")
+        mgr.rejoin_channel("terminal")
+        # Both channels on the newall conversation (no divergence)
         assert mgr.get_conversation_id("terminal", "terminal-user") == "dm:owner:newall"
-        mgr.rejoin_channel("terminal")
-        assert mgr.get_conversation_id("terminal", "terminal-user") == _DM_CONV_ID
-
-    def test_rejoin_after_newall_doesnt_affect_other_channels(self):
-        """Terminal /rejoin after /newall only affects terminal, not Telegram."""
-        store = MagicMock()
-        mgr = ConversationManager(store)
-        mgr.new_all_sessions("dm:owner:newall")
-        mgr.rejoin_channel("terminal")
-        # Terminal pinned to base
-        assert mgr.get_conversation_id("terminal", "terminal-user") == _DM_CONV_ID
-        # Telegram still on newall conversation
         assert mgr.get_conversation_id("telegram", "user123") == "dm:owner:newall"
 
     def test_new_then_newall_then_rejoin(self):
-        """/new → /newall → /rejoin returns to base dm:owner."""
+        """/new → /newall → /rejoin returns to newall's shared conversation."""
         store = MagicMock()
         mgr = ConversationManager(store)
         mgr.new_channel_session("terminal", "dm:terminal:branch")
         mgr.new_all_sessions("dm:owner:fresh")
-        # newall clears channel overrides
         assert mgr.get_conversation_id("terminal", "terminal-user") == "dm:owner:fresh"
         mgr.rejoin_channel("terminal")
-        assert mgr.get_conversation_id("terminal", "terminal-user") == _DM_CONV_ID
+        # Still on newall conversation (rejoin undoes /new, not /newall)
+        assert mgr.get_conversation_id("terminal", "terminal-user") == "dm:owner:fresh"
 
-    def test_new_after_rejoin_cancels_pin(self):
-        """/rejoin then /new should branch again (rejoin pin cleared)."""
+    def test_newall_then_new_then_rejoin_reunifies(self):
+        """/newall → /new → /rejoin returns to newall's conversation, not dm:owner."""
         store = MagicMock()
         mgr = ConversationManager(store)
         mgr.new_all_sessions("dm:owner:global")
+        mgr.new_channel_session("terminal", "dm:terminal:branch")
+        assert mgr.get_conversation_id("terminal", "terminal-user") == "dm:terminal:branch"
         mgr.rejoin_channel("terminal")
-        assert mgr.get_conversation_id("terminal", "terminal-user") == _DM_CONV_ID
-        mgr.new_channel_session("terminal", "dm:terminal:branch2")
-        assert mgr.get_conversation_id("terminal", "terminal-user") == "dm:terminal:branch2"
+        # Rejoined the shared newall conversation
+        assert mgr.get_conversation_id("terminal", "terminal-user") == "dm:owner:global"
+        # Telegram is on same conversation — no divergence
+        assert mgr.get_conversation_id("telegram", "user123") == "dm:owner:global"
+
+    def test_current_shared_id(self):
+        store = MagicMock()
+        mgr = ConversationManager(store)
+        assert mgr.current_shared_id() == _DM_CONV_ID
+        mgr.new_all_sessions("dm:owner:fresh")
+        assert mgr.current_shared_id() == "dm:owner:fresh"
 
     @pytest.mark.asyncio
     async def test_load_history(self):
