@@ -6,7 +6,7 @@
 
 #### Your AI. Your model. Your machine.
 
-6 channels. 4 providers. 17 tools. Cross-channel conversations. Shared memory everywhere. ~8,800 lines of Python. Zero SDK dependencies.
+6 channels. 4 providers. 17 tools. Cross-channel conversations. Shared memory everywhere. ~9,200 lines of Python. Zero SDK dependencies.
 
 [![PyPI](https://img.shields.io/pypi/v/micropaw?style=for-the-badge)](https://pypi.org/project/micropaw/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?style=for-the-badge)](https://python.org)
@@ -158,7 +158,7 @@ MicroPaw:                "Revenue grew 23% in Q4, driven by..."
 | | **MicroPaw** | **OpenClaw** | **NanoClaw** | **PicoClaw** | **MimiClaw** |
 |---|---|---|---|---|---|
 | **Language** | Python | TypeScript | TypeScript | Go | C |
-| **Codebase** | ~8,800 LOC | ~430k LOC | ~500 LOC | ~4k LOC | ~15k LOC |
+| **Codebase** | ~9,200 LOC | ~430k LOC | ~500 LOC | ~4k LOC | ~15k LOC |
 | **Channels** | 6 | 15+ | 1 (WhatsApp) | 5 | 3 |
 | **Tools** | 16 (48 actions) | 25 + 53 prompt templates | SDK-dependent | 6 | 6 |
 | **AI SDKs** | None — raw httpx | Internal framework | Anthropic SDK | None — raw HTTP | None — raw HTTP |
@@ -166,9 +166,9 @@ MicroPaw:                "Revenue grew 23% in Q4, driven by..."
 | **Telemetry** | None, ever | Local JSONL (opt-out) | None | None | None |
 | **License** | MIT | MIT | MIT | MIT | MIT |
 
-**MicroPaw sits in the sweet spot** — full-featured like OpenClaw (RAG, 6 channels, 17 tools, scheduling, email, calendar, multi-agent delegation) but lightweight like PicoClaw (~8,800 LOC, zero SDK dependencies). No telemetry, no bloat, no wrappers.
+**MicroPaw sits in the sweet spot** — full-featured like OpenClaw (RAG, 6 channels, 17 tools, scheduling, email, calendar, multi-agent delegation) but lightweight like PicoClaw (~9,200 LOC, zero SDK dependencies). No telemetry, no bloat, no wrappers.
 
-> Started at **4,667 LOC** in the first commit. Grew to **~8,700 source + ~4,300 test LOC** while adding 6 channels, 17 tools, RAG, multi-agent delegation, scheduling, email, calendar — and 393 tests. Every feature earned its lines.
+> Started at **4,667 LOC** in the first commit. Grew to **~9,200 source + ~5,150 test LOC** while adding 6 channels, 17 tools, RAG, multi-agent delegation, scheduling, email, calendar — and 389 tests. Every feature earned its lines.
 
 ---
 
@@ -528,7 +528,7 @@ docker compose --profile full up                     # Everything
 ## Architecture
 
 ```
-src/micropaw/          ~8,800 LOC source + ~4,700 LOC tests
+src/micropaw/          ~9,200 LOC source + ~5,150 LOC tests
  cli.py                 Click CLI (14 commands)
  config.py              Single Pydantic config model
  connector.py           Guided channel setup + live validation
@@ -555,7 +555,7 @@ Full documentation: [GitHub](https://github.com/manu-chauhan/micropaw)
 
 ```bash
 pip install ".[dev]"
-pytest                 # 393 tests
+pytest                 # 389 tests
 ruff check src/
 mypy src/
 ```
