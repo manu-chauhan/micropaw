@@ -5,7 +5,7 @@ from __future__ import annotations
 from rich.console import Console
 from rich.panel import Panel
 
-from micropaw.config import Config, save_config
+from micropaw.config import Config, config_exists, load_config, save_config
 
 console = Console()
 
@@ -24,7 +24,8 @@ def run_setup() -> None:
         border_style="cyan",
     ))
 
-    config = Config()
+    # Load existing config to preserve API keys, channel tokens, etc.
+    config = load_config() if config_exists() else Config()
 
     # Provider selection
     provider = questionary.select(
