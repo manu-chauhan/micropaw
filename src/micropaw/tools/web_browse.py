@@ -37,7 +37,7 @@ async def _get_browser():
         try:
             from playwright.async_api import async_playwright
         except ImportError:
-            raise RuntimeError("Playwright not installed. Install with: pip install micropaw[browser]")
+            raise RuntimeError("Playwright not installed. Install with: pip install 'micropaw\\[browser]'")
         _playwright = await async_playwright().start()
         _browser = await _playwright.chromium.launch(headless=True)
     return _browser

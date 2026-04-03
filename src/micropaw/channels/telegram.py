@@ -29,7 +29,7 @@ class TelegramChannel(Channel):
             from telegram.ext import Application, ContextTypes, filters
             from telegram.ext import MessageHandler as TGMsgHandler
         except ImportError:
-            raise RuntimeError("python-telegram-bot not installed. Install with: pip install micropaw[telegram]")
+            raise RuntimeError("python-telegram-bot not installed. Install with: pip install 'micropaw\\[telegram]'")
 
         self._app = Application.builder().token(self.token).build()
 

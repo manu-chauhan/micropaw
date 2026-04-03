@@ -32,7 +32,7 @@ class SlackChannel(Channel):
             from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
             from slack_bolt.async_app import AsyncApp
         except ImportError:
-            raise RuntimeError("slack-bolt not installed. Install with: pip install micropaw[slack]")
+            raise RuntimeError("slack-bolt not installed. Install with: pip install 'micropaw\\[slack]'")
 
         self._app = AsyncApp(token=self.bot_token, signing_secret=self.signing_secret or "not-used-in-socket-mode")
 

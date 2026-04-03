@@ -259,15 +259,18 @@ def load_config() -> Config:
 
     if CONFIG_FILE.exists():
         # Warn if config is world-readable (contains API keys)
-        try:
-            mode = CONFIG_FILE.stat().st_mode
-            if mode & 0o044:  # group or other readable
-                _logger.warning(
-                    "Config file %s is world-readable (mode %o). Run: chmod 600 %s",
-                    CONFIG_FILE, mode & 0o777, CONFIG_FILE,
-                )
-        except OSError:
-            pass
+        # Skip on Windows/WSL-NTFS where all files show 0o666
+        import platform
+        if platform.system() != "Windows" and not str(CONFIG_FILE).startswith("/mnt/"):
+            try:
+                mode = CONFIG_FILE.stat().st_mode
+                if mode & 0o044:  # group or other readable
+                    _logger.warning(
+                        "Config file %s is world-readable (mode %o). Run: chmod 600 %s",
+                        CONFIG_FILE, mode & 0o777, CONFIG_FILE,
+                    )
+            except OSError:
+                pass
 
         try:
             raw = json.loads(CONFIG_FILE.read_text())

@@ -45,7 +45,7 @@ class WhatsAppChannel(Channel):
         try:
             from aiohttp import web
         except ImportError:
-            raise RuntimeError("aiohttp not installed. Install with: pip install micropaw[whatsapp]")
+            raise RuntimeError("aiohttp not installed. Install with: pip install 'micropaw\\[whatsapp]'")
 
         app = web.Application()
         app.router.add_get("/webhook", self._verify)

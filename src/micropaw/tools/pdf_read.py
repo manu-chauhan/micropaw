@@ -59,7 +59,7 @@ class PdfReadTool(Tool):
         try:
             from pypdf import PdfReader
         except ImportError:
-            return "Error: pypdf not installed. Install with: pip install micropaw[pdf]"
+            return "Error: pypdf not installed. Install with: pip install 'micropaw[pdf]'"
 
         try:
             reader = PdfReader(str(path))

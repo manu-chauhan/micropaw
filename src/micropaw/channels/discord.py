@@ -81,7 +81,7 @@ class DiscordChannel(Channel):
         try:
             import discord  # noqa: F401
         except ImportError:
-            raise RuntimeError("discord.py not installed. Install with: pip install micropaw[discord]")
+            raise RuntimeError("discord.py not installed. Install with: pip install 'micropaw\\[discord]'")
 
         self._client = self._create_client()
 
