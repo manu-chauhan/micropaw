@@ -357,7 +357,9 @@ def export(conversation_id, fmt, output_file):
                 table.add_column("User")
                 table.add_column("Updated")
                 for c in convos:
-                    table.add_row(c["id"][:12] + "…", c["platform"], c["user_id"], c["updated_at"])
+                    cid = c["id"]
+                    display_id = (cid[:12] + "…") if len(cid) > 12 else cid
+                    table.add_row(display_id, c["platform"], c["user_id"], c["updated_at"])
                 console.print(table)
                 console.print("\n[dim]Use --conversation-id to export a specific conversation.[/dim]")
                 return

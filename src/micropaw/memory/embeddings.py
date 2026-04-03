@@ -119,11 +119,11 @@ class LocalEmbedding(EmbeddingProvider):
 
     async def embed(self, text: str) -> list[float]:
         import asyncio
-        model = self._load()
-        # Run in thread pool — model.embed is CPU-bound
+        # Run _load + embed in executor — _load is a no-op after warmup,
+        # but avoids blocking the event loop if warmup was skipped
         loop = asyncio.get_running_loop()
         vec = await loop.run_in_executor(
-            None, lambda: list(model.embed([text]))[0].tolist()
+            None, lambda: list(self._load().embed([text]))[0].tolist()
         )
         return vec
 

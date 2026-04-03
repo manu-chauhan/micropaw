@@ -100,16 +100,18 @@ def run_setup() -> None:
     if location and location.strip():
         config.persona.location = location.strip()
 
-    # Permissions
+    # Permissions (show existing values as defaults)
     allow_shell = questionary.confirm(
-        "Allow shell command execution?", default=False
+        "Allow shell command execution?", default=config.permissions.allow_shell
     ).ask()
-    config.permissions.allow_shell = allow_shell or False
+    if allow_shell is not None:
+        config.permissions.allow_shell = allow_shell
 
     allow_write = questionary.confirm(
-        "Allow file writing?", default=False
+        "Allow file writing?", default=config.permissions.allow_file_write
     ).ask()
-    config.permissions.allow_file_write = allow_write or False
+    if allow_write is not None:
+        config.permissions.allow_file_write = allow_write
 
     # Browser (optional — Playwright for web browsing/screenshots)
     install_browser = questionary.confirm(
