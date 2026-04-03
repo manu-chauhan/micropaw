@@ -283,4 +283,4 @@ def run_setup() -> None:
             if not another:
                 break
 
-    console.print("\n[dim]Run 'micropaw chat' to start chatting![/dim]")
+    console.print("\n[dim]Run 'paw chat' to start chatting, or 'paw start' for all channels![/dim]")
