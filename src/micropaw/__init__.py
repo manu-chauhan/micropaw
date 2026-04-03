@@ -1,3 +1,3 @@
 """MicroPaw — Your AI. Your machine. Your keys."""
 
-__version__ = "0.2.4"
+__version__ = "0.2.5"
