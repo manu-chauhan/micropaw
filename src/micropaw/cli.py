@@ -58,7 +58,7 @@ def _create_provider(config: Config):
     """Create the AI provider with optional failover chain."""
     primary = _create_single_provider(config.provider, config)
     if not primary:
-        console.print(f"[red]Error: No API key for {config.provider}. Run 'micropaw setup'.[/red]")
+        console.print(f"[red]Error: No API key for {config.provider}. Run 'paw setup'.[/red]")
         sys.exit(1)
 
     if config.fallback_providers:
@@ -220,7 +220,7 @@ def start():
     channels = _create_channels(config)
 
     if not channels:
-        console.print("[red]No channels enabled. Run 'micropaw setup' to configure.[/red]")
+        console.print("[red]No channels enabled. Run 'paw setup' to configure.[/red]")
         sys.exit(1)
 
     from micropaw.gateway import Gateway

@@ -430,7 +430,7 @@ class Agent:
 
 
 _HTTP_ERRORS = {
-    401: "Invalid API key. Run 'micropaw setup' to fix it.",
+    401: "Invalid API key. Run 'paw setup' to fix it.",
     403: "Access denied by the AI provider. Check your API key permissions.",
     429: "Rate limited by the AI provider. Wait a moment and try again.",
     500: "The AI provider had an internal error. Try again.",
