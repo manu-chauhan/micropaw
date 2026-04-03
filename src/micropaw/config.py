@@ -237,6 +237,9 @@ def _apply_env_overrides(raw: dict) -> dict:
         value = os.getenv(env_var)
         if value is None:
             continue
+        # OLLAMA_HOST=0.0.0.0[:port] is a bind address, not a connect address
+        if env_var == "OLLAMA_HOST" and value.lstrip("htps:/").startswith("0.0.0.0"):
+            value = value.replace("0.0.0.0", "127.0.0.1")
         d = raw
         for key in path[:-1]:
             d = d.setdefault(key, {})

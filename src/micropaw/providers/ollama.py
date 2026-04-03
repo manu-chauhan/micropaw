@@ -18,15 +18,41 @@ class OllamaProvider(AIProvider):
     name = "ollama"
 
     def __init__(self, host: str = "http://localhost:11434", model: str = "llama3.1", max_tokens: int = 4096) -> None:
-        self.host = host.rstrip("/")
+        host = host.rstrip("/")
+        if not host.startswith(("http://", "https://")):
+            host = f"http://{host}"
+        self.host = host
         self.model = model
         self.max_tokens = max_tokens
         self._client = httpx.AsyncClient(timeout=300.0)  # local models can be slow
+        self._tools_supported = True  # set False if model rejects tools
 
     def _url(self) -> str:
         return f"{self.host}/api/chat"
 
-    def _build_body(self, messages: list[Message], tools: list[ToolDef] | None, stream: bool = False) -> dict:
+    async def check_tool_support(self) -> bool:
+        """Probe whether the model supports tool calling. Call once at startup."""
+        try:
+            dummy_tool = {
+                "type": "function",
+                "function": {"name": "test", "description": "test", "parameters": {"type": "object", "properties": {}}},
+            }
+            resp = await self._client.post(self._url(), json={
+                "model": self.model, "stream": False,
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [dummy_tool], "options": {"num_predict": 1},
+            })
+            if resp.status_code == 400 and "does not support tools" in resp.text:
+                logger.warning("Model %s does not support tools — tool use disabled", self.model)
+                self._tools_supported = False
+                return False
+        except Exception:
+            pass  # network error — assume tools supported, will fail at runtime
+        return True
+
+    def _build_body(self, messages: list[Message], tools: list[ToolDef] | None = None, stream: bool = False) -> dict:
+        if not self._tools_supported:
+            tools = None
         api_messages = []
         for msg in messages:
             if msg.role == "tool":
@@ -74,6 +100,13 @@ class OllamaProvider(AIProvider):
 
     async def _do_chat(self, body: dict) -> dict:
         resp = await self._client.post(self._url(), json=body)
+        if resp.status_code == 400 and "does not support tools" in resp.text:
+            logger.warning("Model %s does not support tools — retrying without", self.model)
+            self._tools_supported = False
+            body.pop("tools", None)
+            resp = await self._client.post(self._url(), json=body)
+        if resp.status_code >= 400:
+            logger.error("Ollama error %d: %s", resp.status_code, resp.text[:500])
         resp.raise_for_status()
         return resp.json()
 
@@ -99,8 +132,13 @@ class OllamaProvider(AIProvider):
         input_tokens = 0
         output_tokens = 0
 
+        logger.debug("Ollama stream request to %s (tools=%s)", self._url(), "tools" in body)
         async with self._client.stream("POST", self._url(), json=body) as resp:
-            resp.raise_for_status()
+            logger.debug("Ollama stream status: %d", resp.status_code)
+            if resp.status_code >= 400:
+                body_text = await resp.aread()
+                logger.error("Ollama stream error %d: %s", resp.status_code, body_text[:500])
+                resp.raise_for_status()
             async for line in resp.aiter_lines():
                 chunk = parse_sse(line, prefix="")
                 if chunk is None:

@@ -50,7 +50,8 @@ class OpenAIEmbedding(EmbeddingProvider):
             )
             resp.raise_for_status()
             return resp.json()["data"][0]["embedding"]
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as e:
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError,
+                httpx.UnsupportedProtocol) as e:
             logger.warning("OpenAI embedding failed: %s", e)
             return []
 
@@ -64,7 +65,10 @@ class OllamaEmbedding(EmbeddingProvider):
     dimensions = 768  # nomic-embed-text default
 
     def __init__(self, host: str = "http://localhost:11434", model: str = "nomic-embed-text") -> None:
-        self.host = host.rstrip("/")
+        host = host.rstrip("/")
+        if not host.startswith(("http://", "https://")):
+            host = f"http://{host}"
+        self.host = host
         self.model = model
         self._client = httpx.AsyncClient(timeout=60.0)
 
@@ -76,7 +80,8 @@ class OllamaEmbedding(EmbeddingProvider):
             )
             resp.raise_for_status()
             return resp.json()["embeddings"][0]
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as e:
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError,
+                httpx.UnsupportedProtocol) as e:
             logger.warning("Ollama embedding failed (is Ollama running?): %s", e)
             return []
 

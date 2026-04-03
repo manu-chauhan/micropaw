@@ -8,6 +8,8 @@ import signal
 import time
 from typing import Any
 
+import httpx
+
 from micropaw.channels.base import Channel
 from micropaw.config import DB_FILE, Config
 from micropaw.core.agent import Agent
@@ -72,6 +74,11 @@ class Gateway:
         # Pre-load embedding model (downloads from HF on first run)
         if hasattr(embedding_provider, "warmup"):
             await embedding_provider.warmup()
+
+        # Verify Ollama model is available and check tool support
+        if self.provider.name == "ollama":
+            await self._check_ollama_model()
+            await self.provider.check_tool_support()
 
         # Init database
         self.store = MemoryStore(str(DB_FILE), embedding_provider=embedding_provider)
@@ -346,16 +353,14 @@ class Gateway:
         # 2. OpenAI — zero extra deps, uses existing key
         openai_key = self.config.provider_config.openai.api_key
         if openai_key:
-            model = cfg.model or "text-embedding-3-small"
-            logger.info("Embeddings: auto-detected OpenAI (%s)", model)
-            return OpenAIEmbedding(openai_key, model)
+            logger.info("Embeddings: auto-detected OpenAI (text-embedding-3-small)")
+            return OpenAIEmbedding(openai_key, "text-embedding-3-small")
 
         # 3. Local fastembed/ONNX — fully offline, no PyTorch
         try:
             import fastembed  # noqa: F401
-            model = cfg.model or _DEFAULT_LOCAL_MODEL
-            logger.info("Embeddings: auto-detected local (%s)", model)
-            return LocalEmbedding(model)
+            logger.info("Embeddings: auto-detected local (%s)", _DEFAULT_LOCAL_MODEL)
+            return LocalEmbedding(_DEFAULT_LOCAL_MODEL)
         except ImportError:
             pass
 
@@ -392,6 +397,23 @@ class Gateway:
             host = self.config.provider_config.ollama.host
             return OllamaEmbedding(host, cfg.model or _DEFAULT_OLLAMA_MODEL)
         return NullEmbedding()
+
+    async def _check_ollama_model(self) -> None:
+        """Warn at startup if the configured Ollama chat model isn't pulled."""
+        host = self.config.provider_config.ollama.host.rstrip("/")
+        model = self.config.provider_config.ollama.model
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                resp = await client.get(f"{host}/api/tags")
+                resp.raise_for_status()
+                models = [m.get("name", "") for m in resp.json().get("models", [])]
+                if not any(m.startswith(model) for m in models):
+                    logger.warning(
+                        "Ollama model '%s' not found. Run: ollama pull %s  "
+                        "(available: %s)", model, model, ", ".join(models) or "none",
+                    )
+        except Exception:
+            logger.warning("Cannot reach Ollama at %s — is it running?", host)
 
     @staticmethod
     async def _cancel_task(task: asyncio.Task | None) -> None:

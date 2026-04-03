@@ -445,9 +445,12 @@ def _classify_error(e: Exception) -> str:
     if isinstance(e, httpx.TimeoutException):
         return "The AI provider timed out. Try again, or switch to a faster model."
     if isinstance(e, httpx.HTTPStatusError):
+        status = e.response.status_code
+        if status == 404 and "localhost:11434" in str(e.request.url):
+            return "Ollama model not found. Run: ollama pull <model-name>"
         return _HTTP_ERRORS.get(
-            e.response.status_code,
-            f"AI provider error (HTTP {e.response.status_code}). Try again or check your config.",
+            status,
+            f"AI provider error (HTTP {status}). Try again or check your config.",
         )
     return "Something went wrong talking to the AI provider. Please try again."
 
