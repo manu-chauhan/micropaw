@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "micropaw"
-version = "0.2.3"
+version = "0.2.4"
 description = "Feature-rich lightweight personal AI assistant — your AI, your machine, your keys"
 readme = "PYPI_README.md"
 license = "MIT"
