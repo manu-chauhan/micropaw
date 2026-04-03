@@ -104,6 +104,11 @@ class LocalEmbedding(EmbeddingProvider):
             self._model = TextEmbedding(model_name=self.model_name)
         return self._model
 
+    async def warmup(self) -> None:
+        """Pre-load the model at startup (download + init) so first message isn't slow."""
+        import asyncio
+        await asyncio.get_running_loop().run_in_executor(None, self._load)
+
     async def embed(self, text: str) -> list[float]:
         import asyncio
         model = self._load()

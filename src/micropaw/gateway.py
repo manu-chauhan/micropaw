@@ -69,6 +69,10 @@ class Gateway:
         # Create embedding provider (auto-detect or explicit)
         embedding_provider = await self._create_embedding_provider()
 
+        # Pre-load embedding model (downloads from HF on first run)
+        if hasattr(embedding_provider, "warmup"):
+            await embedding_provider.warmup()
+
         # Init database
         self.store = MemoryStore(str(DB_FILE), embedding_provider=embedding_provider)
         await self.store.init()
