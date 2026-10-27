@@ -12,6 +12,38 @@ MAX_HISTORY = 40
 _DM_CONV_ID = "dm:owner"
 
 
+def sanitize_history(messages: list[Message]) -> list[Message]:
+    """Drop tool turns the providers would reject.
+
+    A LIMIT window or compaction can cut between an assistant tool call and its
+    results. Claude and OpenAI both 400 on a tool result without its call, or a
+    call without all its results, so keep only complete groups and start on a user turn.
+    """
+    out: list[Message] = []
+    i = 0
+    while i < len(messages):
+        msg = messages[i]
+        if msg.role == "assistant" and msg.tool_calls:
+            j = i + 1
+            while j < len(messages) and messages[j].role == "tool":
+                j += 1
+            wanted = {tc.id for tc in msg.tool_calls}
+            results = [m for m in messages[i + 1:j] if m.tool_call_id in wanted]
+            if {m.tool_call_id for m in results} == wanted:
+                out.append(msg)
+                out.extend(results)
+            elif msg.content:
+                out.append(Message(role="assistant", content=msg.content))
+            i = j
+            continue
+        if msg.role != "tool":
+            out.append(msg)
+        i += 1
+    while out and out[0].role != "user":
+        out.pop(0)
+    return out
+
+
 class ConversationManager:
     def __init__(self, store: MemoryStore) -> None:
         self.store = store
@@ -40,7 +72,7 @@ class ConversationManager:
 
     async def load_history(self, conversation_id: str, platform: str, user_id: str) -> list[Message]:
         await self.store.get_or_create_conversation(conversation_id, platform, user_id)
-        return await self.store.get_messages(conversation_id, MAX_HISTORY)
+        return sanitize_history(await self.store.get_messages(conversation_id, MAX_HISTORY))
 
     async def save_message(self, conversation_id: str, message: Message) -> None:
         await self.store.save_message(conversation_id, message)

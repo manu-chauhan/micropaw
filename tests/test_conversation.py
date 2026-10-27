@@ -244,3 +244,38 @@ class TestContextCompaction:
 
         result, _ = await ctx.compact(messages, _MockSummaryProvider())
         assert len(result) < len(messages)
+
+
+class TestSanitizeHistory:
+    """History windows must never start mid tool-exchange (providers 400 on orphans)."""
+
+    def _tc(self, id_):
+        from micropaw.providers.base import ToolCall
+        return ToolCall(id=id_, name="shell", arguments={})
+
+    def test_drops_leading_orphan_tool_result(self):
+        from micropaw.core.conversation import sanitize_history
+        from micropaw.providers.base import Message
+        msgs = [
+            Message(role="tool", content="out", tool_call_id="a"),
+            Message(role="assistant", content="done"),
+            Message(role="user", content="hi"),
+            Message(role="assistant", content="hello"),
+        ]
+        out = sanitize_history(msgs)
+        assert [m.role for m in out] == ["user", "assistant"]
+
+    def test_keeps_complete_group_drops_incomplete(self):
+        from micropaw.core.conversation import sanitize_history
+        from micropaw.providers.base import Message
+        msgs = [
+            Message(role="user", content="q"),
+            Message(role="assistant", content="", tool_calls=[self._tc("a")]),
+            Message(role="tool", content="r", tool_call_id="a"),
+            Message(role="assistant", content="partial", tool_calls=[self._tc("b"), self._tc("c")]),
+            Message(role="tool", content="r", tool_call_id="b"),
+            Message(role="user", content="next"),
+        ]
+        out = sanitize_history(msgs)
+        assert [m.role for m in out] == ["user", "assistant", "tool", "assistant", "user"]
+        assert out[3].tool_calls == [] and out[3].content == "partial"
