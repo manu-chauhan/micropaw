@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 
 from micropaw.tools.base import Tool, ToolContext
-from micropaw.tools.google_auth import api_delete, api_error, api_get, api_post, authorize, ensure_token
+from micropaw.tools.google_auth import api_delete, api_error, api_get, api_post, authorize, bad_id, ensure_token
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +112,8 @@ async def _delete_event(token: str, args: dict) -> str:
     event_id = args.get("event_id", "")
     if not event_id:
         return "Error: 'delete' requires 'event_id'."
+    if err := bad_id(event_id, "event_id"):
+        return err
     try:
         await api_delete(token, f"{_CAL}/calendars/primary/events/{event_id}")
         return f"Event deleted: {event_id}"

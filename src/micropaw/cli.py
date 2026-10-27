@@ -125,17 +125,11 @@ def _create_channels(config: Config) -> list:
 
     if config.channels.telegram.enabled and config.channels.telegram.token:
         from micropaw.channels.telegram import TelegramChannel
-        channels.append(TelegramChannel(
-            config.channels.telegram.token,
-            config.channels.telegram.allowed_users or None,
-        ))
+        channels.append(TelegramChannel(config.channels.telegram.token))
 
     if config.channels.discord.enabled and config.channels.discord.token:
         from micropaw.channels.discord import DiscordChannel
-        channels.append(DiscordChannel(
-            config.channels.discord.token,
-            config.channels.discord.allowed_users or None,
-        ))
+        channels.append(DiscordChannel(config.channels.discord.token))
 
     if config.channels.slack.enabled and config.channels.slack.bot_token:
         from micropaw.channels.slack import SlackChannel
@@ -420,6 +414,20 @@ def _parse_interval(s: str) -> int:
         raise click.BadParameter(f"Invalid interval: {s}. Use e.g. 6h, 45m, 30s, 1d")
 
 
+@main.command()
+@click.argument("platform", type=click.Choice(["telegram", "discord", "slack", "whatsapp"]))
+@click.argument("user_id")
+@click.option("--remove", is_flag=True, help="Take this ID off the list instead.")
+def allow(platform, user_id, remove):
+    """Let one of your own accounts use the assistant. Everyone else is refused.
+
+    Message the bot once from your account: it replies with your ID.
+    """
+    from micropaw.config import set_allowed_user
+    ids = set_allowed_user(platform, user_id.strip(), remove=remove)
+    console.print(f"[green]{platform} allowed IDs:[/green] {', '.join(ids) or 'none'}")
+
+
 @main.group()
 def cron():
     """Manage scheduled tasks."""
@@ -476,15 +484,39 @@ def list_jobs():
             table.add_column("Description")
             table.add_column("Schedule")
             table.add_column("Next Run")
+            table.add_column("State")
             for j in jobs:
                 kind = "once" if j["one_shot"] else f"every {_fmt(j['interval_seconds'])}"
                 next_dt = datetime.fromtimestamp(j["next_run_at"], tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
-                table.add_row(str(j["id"]), j["description"], kind, next_dt)
+                state = "on" if j["enabled"] else f"paused (paw cron enable {j['id']})"
+                table.add_row(str(j["id"]), j["description"], kind, next_dt, state)
             console.print(table)
         finally:
             await sched.close()
 
     asyncio.run(_list())
+
+
+@cron.command()
+@click.argument("job_id", type=int)
+@click.option("--off", is_flag=True, help="Pause the task instead.")
+def enable(job_id, off):
+    """Turn on a task the assistant scheduled (they start paused)."""
+    async def _enable():
+        from micropaw.scheduler import Scheduler
+        sched = Scheduler(str(DB_FILE), handler=None, bus=None, channels=[])
+        await sched.init()
+        try:
+            job = await sched.set_enabled(job_id, not off)
+            if job:
+                state = "paused" if off else "enabled"
+                console.print(f"[green]Job #{job_id} {state}: \"{job['description']}\"[/green]")
+            else:
+                console.print(f"[red]Job #{job_id} not found.[/red]")
+        finally:
+            await sched.close()
+
+    asyncio.run(_enable())
 
 
 @cron.command()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from micropaw.config import CONFIG_DIR
@@ -20,19 +21,32 @@ BLOCKED_ETC_DIRS = (
 )
 
 SENSITIVE_DIRS = (
-    "/.ssh/", "/.gnupg/", "/.aws/", "/.config/gcloud/",
-    "/.docker/", "/.kube/",
+    "/.ssh/", "/.gnupg/", "/.aws/", "/.azure/", "/.config/gcloud/", "/.config/gh/",
+    "/.docker/", "/.kube/", "/.password-store/", "/.local/share/keyrings/",
 )
 
-SENSITIVE_FILES = (".env", ".netrc", ".pgpass")
+SENSITIVE_FILES = (
+    ".env", ".netrc", ".pgpass", ".git-credentials", ".npmrc", ".pypirc",
+    "id_rsa", "id_ecdsa", "id_ed25519", "id_dsa",
+)
 
-_CONFIG_DIR = str(CONFIG_DIR)
+# Windows and macOS file systems ignore case, so compare lowercased there
+_FOLD_CASE = sys.platform in ("win32", "darwin")
+
+
+def _norm(p: str) -> str:
+    """Forward slashes everywhere, lowercased on case-insensitive systems."""
+    p = p.replace("\\", "/")
+    return p.lower() if _FOLD_CASE else p
+
+
+_CONFIG_DIR = _norm(str(CONFIG_DIR))
 
 
 def validate_file_path(path_str: str) -> str | None:
     """Validate a file path for security. Returns error string if blocked, None if safe."""
     path = Path(path_str).resolve()
-    resolved = str(path)
+    resolved = _norm(str(path))
 
     for prefix in BLOCKED_PREFIXES:
         if resolved.startswith(prefix):
@@ -53,7 +67,7 @@ def validate_file_path(path_str: str) -> str | None:
         if pattern in resolved:
             return f"Access denied — {pattern.strip('/')} contains sensitive data."
 
-    name = path.name
+    name = _norm(path.name)
     for sf in SENSITIVE_FILES:
         if name == sf or name.startswith(sf):
             return f"Access denied — {name} may contain secrets."
@@ -72,22 +86,32 @@ def validate_write_path(path_str: str) -> str | None:
         return base_error
 
     path = Path(path_str).resolve()
-    resolved = str(path)
+    resolved = _norm(str(path))
+    name = _norm(path.name)
 
-    login_files = (
-        ".bashrc", ".bash_profile", ".profile", ".zshrc", ".zprofile",
-        ".bash_login", ".bash_logout",
-    )
-    if path.name in login_files:
+    if name in _LOGIN_FILES:
         return f"Access denied — writing to {path.name} is blocked (login script)."
 
-    if path.name == "authorized_keys":
+    if name == "authorized_keys":
         return "Access denied — writing to authorized_keys is blocked."
 
     if "/cron" in resolved or resolved.startswith("/etc/cron"):
         return "Access denied — writing to cron directories is blocked."
 
-    if "/autostart/" in resolved:
-        return "Access denied — writing to autostart directories is blocked."
+    # Files that run code later: services, startup items, PATH, git hooks, Python startup
+    if name.endswith(".pth") or any(d in resolved for d in _EXEC_DIRS):
+        return f"Access denied — {path.name} would run code automatically later."
 
     return None
+
+
+_LOGIN_FILES = (
+    ".bashrc", ".bash_profile", ".profile", ".zshrc", ".zprofile", ".zshenv", ".zlogin",
+    ".bash_login", ".bash_logout", ".bash_aliases", ".kshrc", ".cshrc", ".tcshrc",
+)
+
+_EXEC_DIRS = (
+    "/autostart/", "/.config/systemd/", "/.config/fish/", "/.local/bin/", "/.git/hooks/",
+    "/site-packages/", "/dist-packages/", "/library/launchagents/", "/library/launchdaemons/",
+    "/start menu/programs/startup/",
+)

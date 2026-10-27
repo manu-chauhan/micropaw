@@ -27,10 +27,14 @@ ALLOWED_SCHEMES = frozenset({"http", "https"})
 
 
 def _is_private_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    """Check if IP is private, including IPv4-mapped IPv6 addresses."""
+    """True for anything that is not a public internet address.
+
+    Uses is_global so shared ranges such as 100.64.0.0/10 (CGNAT, Alibaba Cloud
+    metadata, Tailscale) are blocked along with private, loopback and link-local.
+    """
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
         ip = ip.ipv4_mapped
-    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+    return ip.is_multicast or not ip.is_global
 
 
 async def validate_url(url: str) -> str | None:

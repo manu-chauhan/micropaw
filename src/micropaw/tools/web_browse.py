@@ -71,6 +71,20 @@ async def _get_session(conv_id: str, url: str | None = None) -> Any:
     return page
 
 
+async def _left_public_web(page: Any) -> str | None:
+    """Re-check where the page ended up after redirects, clicks or scripts.
+
+    Only the first URL is checked before loading, so a public page that redirects
+    to 169.254.169.254 or localhost would otherwise hand internal data to the model.
+    """
+    if page.url.split(":", 1)[0] not in ("http", "https", "file"):
+        return None  # about:blank, chrome-error:// and the like
+    if error := await validate_url(page.url):
+        await page.goto("about:blank")
+        return f"Error: page moved to a blocked address ({error})."
+    return None
+
+
 async def close_session(conv_id: str) -> None:
     """Close browser session for a conversation (called at end of agent turn)."""
     if conv_id in _sessions:
@@ -263,6 +277,8 @@ class WebBrowseTool(Tool):
                 logger.warning("YouTube transcript failed for %s: %s", url, e)
 
         page = await _get_session(conv_id, url)
+        if error := await _left_public_web(page):
+            return error
 
         if extract == "title":
             title = await page.title()
@@ -295,6 +311,8 @@ class WebBrowseTool(Tool):
             return f"Error clicking '{selector}': {e}"
 
         await page.wait_for_load_state("domcontentloaded", timeout=10000)
+        if error := await _left_public_web(page):
+            return error
         text = await _extract_text(page)
         return f"Clicked '{selector}'. Page now at {page.url}:\n\n{text}"
 
@@ -327,6 +345,8 @@ class WebBrowseTool(Tool):
         delta = 800 if direction == "down" else -800
         await page.mouse.wheel(0, delta)
         await page.wait_for_timeout(500)  # wait for lazy-loaded content
+        if error := await _left_public_web(page):
+            return error
 
         text = await _extract_text(page)
         return f"Scrolled {direction} on {page.url}:\n\n{text}"
@@ -336,6 +356,8 @@ class WebBrowseTool(Tool):
             return "Error: No page open. Use 'browse' first to load a URL."
 
         _ctx, page = _sessions[conv_id]
+        if error := await _left_public_web(page):
+            return error
         screenshot_bytes = await page.screenshot(type="png", full_page=False)
         title = await page.title()
         media = MediaItem(type="image", data=screenshot_bytes, mime_type="image/png")

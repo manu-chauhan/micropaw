@@ -229,11 +229,13 @@ class Agent:
         # Use "dm" as platform for unified DM conversations to avoid arbitrary first-writer
         store_platform = "dm" if conv_id.startswith("dm:") else platform
         history = await self.conversations.load_history(conv_id, store_platform, user_id)
-        # Memories and RAG are global — shared across all channels
-        recent_memories = await self.store.get_recent_memories(10, user_id="_global")
-
-        # RAG: search ingested documents for relevant chunks
-        relevant_docs = await self.store.search_documents(text, limit=5, user_id="_global")
+        # Memories and documents belong to the owner's DMs. Group chats never see
+        # them, or anything read in private would leak to everyone in the group.
+        recent_memories: list[dict] = []
+        relevant_docs: list[dict] = []
+        if channel_id is None:
+            recent_memories = await self.store.get_recent_memories(10, user_id="_global")
+            relevant_docs = await self.store.search_documents(text, limit=5, user_id="_global")
 
         # Include compaction summary in system prompt (avoids double-injection
         # when compact() also produces a summary on the same turn)

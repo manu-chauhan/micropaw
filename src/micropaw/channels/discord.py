@@ -17,10 +17,9 @@ MAX_MSG_LEN = 2000
 class DiscordChannel(Channel):
     name = "discord"
 
-    def __init__(self, token: str, allowed_users: list[str] | None = None) -> None:
+    def __init__(self, token: str) -> None:
         super().__init__()
         self.token = token
-        self.allowed_users = set(allowed_users) if allowed_users else set()
         self._client: Any = None
         self._task: asyncio.Task | None = None
         self._watcher: asyncio.Task | None = None
@@ -40,10 +39,14 @@ class DiscordChannel(Channel):
                 return
 
             user_id = str(message.author.id)
-            if channel_ref.allowed_users and user_id not in channel_ref.allowed_users:
-                return
-
             is_dm = isinstance(message.channel, discord.DMChannel)
+
+            # Owner-only: strangers get their ID once (in DMs), server members are ignored
+            denied = channel_ref.check_access(user_id)
+            if denied is not None:
+                if denied and is_dm:
+                    await message.channel.send(denied)
+                return
             text = message.content
 
             if not is_dm:

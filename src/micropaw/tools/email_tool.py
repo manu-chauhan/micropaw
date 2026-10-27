@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 
 from micropaw.tools.base import Tool, ToolContext
-from micropaw.tools.google_auth import api_error, api_get, api_post, authorize, ensure_token
+from micropaw.tools.google_auth import api_error, api_get, api_post, authorize, bad_id, ensure_token
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ def _get_header(headers: list[dict], name: str) -> str:
 async def _fetch_headers(token: str, msg_ids: list[str]) -> list[dict]:
     """Batch-fetch message headers (metadata only)."""
     results = []
-    for mid in msg_ids:
+    for mid in (m for m in msg_ids if not bad_id(m, "message_id")):
         try:
             data = await api_get(
                 token, f"{_GMAIL}/users/me/messages/{mid}",
@@ -237,6 +237,8 @@ class EmailTool(Tool):
             mid = args.get("message_id", "")
             if not mid:
                 return "Error: 'read' requires 'message_id' (use inbox first to get IDs)."
+            if err := bad_id(mid, "message_id"):
+                return err
             return await _read(token, mid)
         elif action == "send":
             to, subject, body = args.get("to", ""), args.get("subject", ""), args.get("body", "")

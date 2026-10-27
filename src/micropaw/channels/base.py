@@ -11,6 +11,8 @@ logger = logging.getLogger(__name__)
 
 MessageHandler = Callable[[str, str, str, str | None], Awaitable[str]]
 StreamHandler = Callable[[str, str, str, str | None, Callable[[str], Awaitable[None]] | None], Awaitable[str]]
+# (platform, user_id) -> None if allowed, else the reply for the sender ("" = stay silent)
+AccessCheck = Callable[[str, str], str | None]
 
 
 class Channel(ABC):
@@ -21,12 +23,20 @@ class Channel(ABC):
     def __init__(self) -> None:
         self._handler: MessageHandler | None = None
         self._stream_handler: StreamHandler | None = None
+        self._access: AccessCheck | None = None
 
     def set_handler(self, handler: MessageHandler) -> None:
         self._handler = handler
 
     def set_stream_handler(self, handler: StreamHandler) -> None:
         self._stream_handler = handler
+
+    def set_access(self, check: AccessCheck) -> None:
+        self._access = check
+
+    def check_access(self, user_id: str) -> str | None:
+        """None if this sender may use the assistant, else the reply to send them ("" = silent)."""
+        return self._access(self.name, str(user_id)) if self._access else None
 
     @abstractmethod
     async def start(self) -> None: ...

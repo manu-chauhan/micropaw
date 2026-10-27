@@ -204,15 +204,18 @@ class WebChatChannel(Channel):
             writer.close()
             return
 
-        # Origin check
-        if self.allowed_origins:
-            origin = headers.get("origin", "")
-            if origin not in self.allowed_origins:
-                logger.warning("WebChat rejected origin: %s", origin)
-                writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
-                await writer.drain()
-                writer.close()
-                return
+        # Origin check: same origin as this server unless configured otherwise.
+        # Browsers always send Origin, so another site's page can't drive the socket;
+        # non-browser clients send none and still need the token.
+        origin = headers.get("origin", "")
+        host = headers.get("host", "")
+        allowed = self.allowed_origins or [f"http://{host}", f"https://{host}"]
+        if origin and origin not in allowed:
+            logger.warning("WebChat rejected origin: %s", origin)
+            writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+            await writer.drain()
+            writer.close()
+            return
 
         # Connection limit
         if len(self._connections) >= MAX_CONNECTIONS:

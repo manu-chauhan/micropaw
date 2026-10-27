@@ -17,6 +17,19 @@ console = Console()
 # Validation helpers (also used by `micropaw test`)
 # ---------------------------------------------------------------------------
 
+
+def _ask_owner_ids(platform: str, current: list[str]) -> list[str]:
+    """Ask for the owner's numeric account IDs. Only these accounts get answers."""
+    import questionary
+
+    console.print(
+        f"[dim]Only your own {platform} accounts can use the bot. Enter your numeric {platform} user ID, "
+        f"or leave blank: message the bot once and it replies with your ID, then run "
+        f"'paw allow {platform} <id>'.[/dim]"
+    )
+    raw = questionary.text("Your user ID(s), comma-separated:", default=",".join(current)).ask() or ""
+    return [u.strip() for u in raw.split(",") if u.strip()]
+
 def validate_telegram_token(token: str) -> tuple[bool, str]:
     """Validate Telegram bot token via getMe. Returns (ok, detail)."""
     try:
@@ -207,17 +220,9 @@ def _connect_telegram(config: Config) -> bool:
         if not proceed:
             return False
 
-    # Optional: restrict to specific users
-    restrict = questionary.confirm("Restrict to specific Telegram usernames?", default=False).ask()
-    allowed = []
-    if restrict:
-        users_str = questionary.text("Comma-separated usernames (without @):").ask()
-        if users_str:
-            allowed = [u.strip().lstrip("@") for u in users_str.split(",") if u.strip()]
-
     config.channels.telegram.enabled = True
     config.channels.telegram.token = token
-    config.channels.telegram.allowed_users = allowed
+    config.channels.telegram.allowed_users = _ask_owner_ids("telegram", config.channels.telegram.allowed_users)
     save_config(config)
     console.print("[green]Telegram channel saved and enabled.[/green]")
     return True
@@ -267,16 +272,9 @@ def _connect_discord(config: Config) -> bool:
         if not proceed:
             return False
 
-    restrict = questionary.confirm("Restrict to specific Discord user IDs?", default=False).ask()
-    allowed = []
-    if restrict:
-        users_str = questionary.text("Comma-separated user IDs:").ask()
-        if users_str:
-            allowed = [u.strip() for u in users_str.split(",") if u.strip()]
-
     config.channels.discord.enabled = True
     config.channels.discord.token = token
-    config.channels.discord.allowed_users = allowed
+    config.channels.discord.allowed_users = _ask_owner_ids("discord", config.channels.discord.allowed_users)
     save_config(config)
     console.print("[green]Discord channel saved and enabled.[/green]")
     console.print("[dim]Reminder: Make sure Message Content Intent is enabled in the Developer Portal![/dim]")
@@ -328,6 +326,7 @@ def _connect_slack(config: Config) -> bool:
     config.channels.slack.bot_token = bot_token
     config.channels.slack.app_token = app_token
     config.channels.slack.signing_secret = signing_secret
+    config.channels.slack.allowed_users = _ask_owner_ids("slack", config.channels.slack.allowed_users)
     save_config(config)
     console.print("[green]Slack channel saved and enabled.[/green]")
     return True
@@ -374,14 +373,19 @@ def _connect_whatsapp(config: Config) -> bool:
         verify_token = secrets.token_urlsafe(16)
     verify_token = verify_token.strip()
 
-    app_secret = questionary.password("App Secret (optional, for signature verification):").ask()
-    app_secret = (app_secret or "").strip()
+    app_secret = ""
+    while not app_secret:
+        # Required: without it anyone who reaches the webhook can pose as any sender
+        app_secret = (questionary.password("App Secret (Meta app dashboard > Basic):").ask() or "").strip()
+        if not app_secret and not questionary.confirm("App Secret is required. Try again?", default=True).ask():
+            return False
 
     config.channels.whatsapp.enabled = True
     config.channels.whatsapp.token = token
     config.channels.whatsapp.phone_id = phone_id
     config.channels.whatsapp.verify_token = verify_token
     config.channels.whatsapp.app_secret = app_secret
+    config.channels.whatsapp.allowed_users = _ask_owner_ids("whatsapp", config.channels.whatsapp.allowed_users)
     save_config(config)
 
     console.print("[green]WhatsApp channel saved and enabled.[/green]")

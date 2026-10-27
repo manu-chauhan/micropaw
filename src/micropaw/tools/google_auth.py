@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import socket
 import time
 import webbrowser
@@ -20,6 +21,9 @@ from micropaw.config import CONFIG_DIR
 logger = logging.getLogger(__name__)
 
 _TOKEN_FILE = CONFIG_DIR / "google_tokens.json"
+# Gmail and Calendar IDs are plain tokens. Anything else ("/", "..") could turn
+# the request into a call on a different endpoint, e.g. deleting a whole calendar.
+_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,1024}")
 _REDIRECT_PORT = 8089
 _REDIRECT_URI = f"http://localhost:{_REDIRECT_PORT}"
 _AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -259,3 +263,8 @@ async def authorize() -> str:
             return f"Google authorized successfully ({', '.join(services)}). Tokens saved."
     except Exception as e:
         return f"Error during authorization: {e}"
+
+
+def bad_id(value: str, what: str) -> str | None:
+    """Return an error if value is not a plain Google resource ID."""
+    return None if _ID_RE.fullmatch(value or "") else f"Error: invalid {what}: {value!r}"

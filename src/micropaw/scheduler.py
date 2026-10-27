@@ -95,12 +95,12 @@ class Scheduler:
                     # One-shot jobs are reminders — deliver directly to ALL active channels
                     await self._deliver_all(platform, chat_id, f"Reminder: {description}")
                 else:
-                    # Recurring jobs need agent processing (e.g., "check inbox for new emails")
-                    # Pass None as channel_id so DM jobs use the unified conversation,
-                    # not a double-prefixed orphan like "telegram:telegram:12345".
+                    # Recurring jobs need agent processing (e.g., "check inbox for new emails").
+                    # Each job gets its own conversation: it never sees the owner's DM history,
+                    # so posting its result to a group can't leak private chat.
                     response = await self._handler(
                         f"You have a scheduled task to perform. Do it now and report the result: {description}",
-                        user_id, platform, None,
+                        "cron", "system", f"cron-{job_id}",
                     )
                     await self._deliver(platform, chat_id, f"[Cron #{job_id}] {response}")
             except Exception as e:
@@ -119,6 +119,10 @@ class Scheduler:
         if self._heartbeat_interval > 0 and now - self._last_heartbeat >= self._heartbeat_interval:
             self._last_heartbeat = now
             await self._process_heartbeat()
+
+    async def notify(self, channel: str, chat_id: str, content: str) -> None:
+        """Send a message to the owner from code, not from the model."""
+        await self._deliver(channel, chat_id, content)
 
     async def _deliver(self, channel: str, chat_id: str, content: str) -> None:
         """Deliver to stored channel, fall back to terminal, then first active."""
@@ -203,7 +207,7 @@ class Scheduler:
     async def add_job(
         self, description: str, interval_seconds: int,
         user_id: str = "terminal-user", platform: str = "terminal", chat_id: str = "",
-        one_shot: bool = False,
+        one_shot: bool = False, enabled: bool = True,
     ) -> int:
         now = time.time()
         count = await self._job_count()
@@ -212,9 +216,9 @@ class Scheduler:
 
         cur = await self.db.execute(
             "INSERT INTO cron_jobs (description, interval_seconds, next_run_at, one_shot, "
-            "user_id, platform, chat_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "user_id, platform, chat_id, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (description, interval_seconds, now + interval_seconds, int(one_shot),
-             user_id, platform, chat_id, now),
+             user_id, platform, chat_id, int(enabled), now),
         )
         await self.db.commit()
         return cur.lastrowid  # type: ignore[return-value]
@@ -231,6 +235,14 @@ class Scheduler:
              "created_at": r[6]}
             for r in rows
         ]
+
+    async def set_enabled(self, job_id: int, enabled: bool) -> dict | None:
+        """Turn a job on or off. Returns the job, or None if it doesn't exist."""
+        cur = await self.db.execute("UPDATE cron_jobs SET enabled = ? WHERE id = ?", (int(enabled), job_id))
+        await self.db.commit()
+        if cur.rowcount == 0:
+            return None
+        return next((j for j in await self.list_jobs() if j["id"] == job_id), None)
 
     async def remove_job(self, job_id: int) -> bool:
         cur = await self.db.execute("DELETE FROM cron_jobs WHERE id = ?", (job_id,))

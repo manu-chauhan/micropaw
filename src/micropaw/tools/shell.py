@@ -82,6 +82,14 @@ BLOCKED_PATTERNS = [
 
 _BLOCKED_RE = [re.compile(p, re.IGNORECASE) for p in BLOCKED_PATTERNS]
 
+# Env var names that usually hold credentials; children never see them
+_SECRET_ENV = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH|COOKIE", re.IGNORECASE)
+
+
+def _child_env() -> dict[str, str]:
+    """The current environment minus API keys, tokens and other secrets."""
+    return {k: v for k, v in os.environ.items() if not _SECRET_ENV.search(k)}
+
 
 class ShellTool(Tool):
     name = "shell"
@@ -111,7 +119,7 @@ class ShellTool(Tool):
 
         try:
             proc = await asyncio.create_subprocess_shell(
-                command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=_child_env(),
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=TIMEOUT)
 

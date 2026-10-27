@@ -183,8 +183,10 @@ class TestCronTool:
                 {"action": "add", "description": "water plants", "interval_seconds": 86400},
                 ctx,
             )
-            assert "Scheduled recurring job" in result
-            assert "water plants" in result
+            assert "paused" in result and "/cron enable" in result
+            jobs = await sched.list_jobs()
+            assert jobs[0]["enabled"] is False  # model-made recurring jobs wait for the owner
+            assert (await sched.set_enabled(jobs[0]["id"], True))["enabled"] is True
         finally:
             set_scheduler(None)  # type: ignore[arg-type]
             await sched.close()
@@ -204,7 +206,7 @@ class TestCronTool:
                 {"action": "add", "description": "remind me", "interval_seconds": 7200, "one_shot": True},
                 ctx,
             )
-            assert "one-shot" in result
+            assert "reminder" in result.lower()
         finally:
             set_scheduler(None)  # type: ignore[arg-type]
             await sched.close()
@@ -469,3 +471,28 @@ class TestSchedulerConfig:
         c = Config(scheduler={"heartbeat_interval": 900, "max_jobs": 20})
         assert c.scheduler.heartbeat_interval == 900
         assert c.scheduler.max_jobs == 20
+
+    async def test_recurring_minimum_interval(self, tmp_path):
+        from micropaw.scheduler import Scheduler
+        from micropaw.tools.cron_tool import CronTool, set_scheduler
+
+        sched = Scheduler(str(tmp_path / "test.db"), handler=None, bus=None, channels=[])
+        await sched.init()
+        set_scheduler(sched)
+        try:
+            ctx = ToolContext(conversation_id="conv1", user_id="u1", platform="test")
+            result = await CronTool().execute({"action": "add", "description": "x", "interval_seconds": 60}, ctx)
+            assert result.startswith("Error") and await sched.list_jobs() == []
+        finally:
+            set_scheduler(None)  # type: ignore[arg-type]
+            await sched.close()
+
+    async def test_set_enabled_missing_job(self, tmp_path):
+        from micropaw.scheduler import Scheduler
+
+        sched = Scheduler(str(tmp_path / "test.db"), handler=None, bus=None, channels=[])
+        await sched.init()
+        try:
+            assert await sched.set_enabled(99, True) is None
+        finally:
+            await sched.close()

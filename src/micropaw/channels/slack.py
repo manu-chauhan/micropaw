@@ -48,17 +48,17 @@ class SlackChannel(Channel):
 
             user_id = event.get("user", "unknown")
             slack_channel = event.get("channel", "")
+
+            # Owner-only: strangers get their ID once (in DMs), channel members are ignored
+            denied = self.check_access(user_id)
+            if denied is not None:
+                if denied and slack_channel.startswith("D"):
+                    await say(text=denied)
+                return
             # Slack DMs have channel IDs starting with "D" — treat as DMs (no channel_id)
             # so they share the unified DM conversation with other channels
             conv_channel_id = None if slack_channel.startswith("D") else slack_channel
             thread_ts = event.get("thread_ts") or event.get("ts", "")
-
-            # Get user name
-            try:
-                info = await client.users_info(user=user_id)
-                info["user"]["real_name"] or info["user"]["name"]
-            except Exception as e:
-                logger.debug("Slack user info lookup failed: %s", e)
 
             if self._stream_handler:
                 placeholder = await say(text="...", thread_ts=thread_ts)

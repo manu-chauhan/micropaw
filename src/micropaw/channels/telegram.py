@@ -16,10 +16,9 @@ STREAM_EDIT_INTERVAL = 0.5
 class TelegramChannel(Channel):
     name = "telegram"
 
-    def __init__(self, token: str, allowed_users: list[str] | None = None) -> None:
+    def __init__(self, token: str) -> None:
         super().__init__()
         self.token = token
-        self.allowed_users = set(allowed_users) if allowed_users else set()
         self._app: Any = None
         self._bot_username: str | None = None
 
@@ -41,11 +40,14 @@ class TelegramChannel(Channel):
             user = update.message.from_user
             user_id = str(user.id) if user else "unknown"
 
-            # Allow-list filtering
-            if self.allowed_users and user_id not in self.allowed_users:
-                return
-
             is_group = chat.type in ("group", "supergroup")
+
+            # Owner-only: strangers get their ID once (in DMs), group members are ignored
+            denied = self.check_access(user_id)
+            if denied is not None:
+                if denied and not is_group:
+                    await update.message.reply_text(denied)
+                return
             text = update.message.text
 
             if is_group:

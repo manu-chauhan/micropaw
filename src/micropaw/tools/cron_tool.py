@@ -66,15 +66,27 @@ class CronTool(Tool):
             if not description or interval <= 0:
                 return "Error: 'add' requires 'description' and 'interval_seconds' > 0."
             one_shot = args.get("one_shot", False)
+            if not one_shot and interval < _MIN_RECURRING:
+                return f"Error: recurring jobs must be at least {_fmt_interval(_MIN_RECURRING)} apart."
             try:
+                # One-shot jobs only deliver a reminder. Recurring jobs run with tools, so the
+                # owner must switch them on; otherwise a web page could plant a standing task.
                 job_id = await _scheduler.add_job(
                     description, interval, context.user_id, context.platform,
-                    context.chat_id, one_shot=one_shot,
+                    context.chat_id, one_shot=one_shot, enabled=one_shot,
                 )
             except ValueError as e:
                 return f"Error: {e}"
-            kind = "one-shot" if one_shot else "recurring"
-            return f"Scheduled {kind} job #{job_id}: \"{description}\" (every {_fmt_interval(interval)})"
+            if one_shot:
+                return f"Scheduled reminder #{job_id}: \"{description}\" (in {_fmt_interval(interval)})"
+            await _scheduler.notify(
+                context.platform, context.chat_id,
+                f"New scheduled task #{job_id} is paused until you turn it on:\n"
+                f"\"{description}\" every {_fmt_interval(interval)}\n"
+                f"To turn it on, reply: /cron enable {job_id}",
+            )
+            return (f"Saved recurring job #{job_id} (every {_fmt_interval(interval)}), paused. "
+                    f"The user has been asked to turn it on with /cron enable {job_id}.")
 
         elif action == "list":
             jobs = await _scheduler.list_jobs()
@@ -83,7 +95,8 @@ class CronTool(Tool):
             lines = [f"Scheduled jobs ({len(jobs)}):"]
             for j in jobs:
                 kind = "once" if j["one_shot"] else f"every {_fmt_interval(j['interval_seconds'])}"
-                lines.append(f"  #{j['id']}: \"{j['description']}\" ({kind})")
+                state = "" if j["enabled"] else ", paused"
+                lines.append(f"  #{j['id']}: \"{j['description']}\" ({kind}{state})")
             return "\n".join(lines)
 
         elif action == "remove":
@@ -97,6 +110,9 @@ class CronTool(Tool):
             return f"Job #{job_id} removed." if removed else f"Job #{job_id} not found."
 
         return f"Unknown action: {action}"
+
+
+_MIN_RECURRING = 300  # seconds
 
 
 def _fmt_interval(seconds: int) -> str:

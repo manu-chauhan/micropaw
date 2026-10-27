@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import signal
 import time
 from typing import Any
@@ -11,7 +12,7 @@ from typing import Any
 import httpx
 
 from micropaw.channels.base import Channel
-from micropaw.config import DB_FILE, Config
+from micropaw.config import CONFIG_FILE, DB_FILE, Config, load_config
 from micropaw.core.agent import Agent
 from micropaw.memory.store import MemoryStore
 from micropaw.providers.base import AIProvider
@@ -48,6 +49,66 @@ class _RateLimiter:
         return True
 
 
+class _AccessGuard:
+    """Owner-only access: a sender must be listed in channels.<platform>.allowed_users.
+
+    An empty list means nobody, not everybody. Terminal and web chat prove the owner
+    themselves (local console, auth token); heartbeat and system runs are internal.
+    The lists are re-read when config.json changes, so `paw allow` needs no restart.
+    """
+
+    _SELF_AUTHED = frozenset({"terminal", "webchat", "heartbeat", "system"})
+    _DAY = 86400.0
+    _MAX_REPLIES_PER_DAY = 50  # so strangers can't use the bot to spam
+
+    def __init__(self, config: Config) -> None:
+        self._channels = config.channels
+        self._mtime = self._config_mtime()
+        self._replied: set[tuple[str, str]] = set()
+        self._day_start = time.monotonic()
+
+    @staticmethod
+    def _config_mtime() -> float:
+        try:
+            return CONFIG_FILE.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    def is_allowed(self, platform: str, user_id: str) -> bool:
+        if platform in self._SELF_AUTHED:
+            return True
+        mtime = self._config_mtime()
+        if mtime != self._mtime:
+            self._mtime = mtime
+            self._channels = load_config().channels
+        allowed = getattr(getattr(self._channels, platform, None), "allowed_users", None) or []
+        return str(user_id) in {str(u).strip() for u in allowed}
+
+    def check(self, platform: str, user_id: str) -> str | None:
+        """None if allowed; otherwise a one-a-day reply telling the sender their ID ("" = silent)."""
+        if self.is_allowed(platform, user_id):
+            return None
+        now = time.monotonic()
+        if now - self._day_start >= self._DAY:
+            self._day_start = now
+            self._replied.clear()
+        key = (platform, str(user_id))
+        if key in self._replied or len(self._replied) >= self._MAX_REPLIES_PER_DAY:
+            return ""
+        self._replied.add(key)
+        logger.warning(
+            "Refused %s user %s (not allowed). If this is you, run: paw allow %s %s",
+            platform, user_id, platform, user_id,
+        )
+        return (
+            f"This assistant is private. Your {platform} ID is {user_id}.\n"
+            f"If this is your assistant, run this on its computer: paw allow {platform} {user_id}"
+        )
+
+
+_CRON_CMD = re.compile(r"^/cron\s+(enable|disable)\s+#?(\d+)$", re.IGNORECASE)
+
+
 class Gateway:
     """Starts all channels, initializes the database, and routes messages to the agent."""
 
@@ -65,6 +126,7 @@ class Gateway:
         self.store: MemoryStore | None = None
         self.agent: Agent | None = None
         self._rate_limiter = _RateLimiter(config.rate_limit.messages_per_minute, config.rate_limit.burst_limit)
+        self._access = _AccessGuard(config)
 
     async def start(self) -> None:
         """Initialize everything and start all channels."""
@@ -129,6 +191,7 @@ class Gateway:
         for channel in self.channels:
             channel.set_handler(self._handle_message)
             channel.set_stream_handler(self._handle_message_stream)
+            channel.set_access(self._access.check)
             if channel.name == "terminal":
                 channel._registry = self.registry
                 channel._config = self.config
@@ -219,6 +282,12 @@ class Gateway:
     def _validate(self, text: str, user_id: str, platform: str = "") -> str | None:
         if not self.agent:
             return "Agent not initialized."
+        # Backstop: channels check access before replying, but nothing reaches the agent without it
+        if not self._access.is_allowed(platform, user_id):
+            return self._access.check(platform, user_id) or ""
+        # An empty user turn is rejected by Claude and would break the shared conversation
+        if not text.strip():
+            return "I can only read text messages for now."
         # Internal platforms (heartbeat, system) bypass rate limiting
         if platform not in self._INTERNAL_PLATFORMS:
             if not self._rate_limiter.check(user_id):
@@ -228,10 +297,23 @@ class Gateway:
             return f"Message too long ({len(text):,} chars). Maximum is {max_size:,} characters."
         return None
 
+    async def _owner_command(self, text: str) -> str | None:
+        """Commands the owner types that must not go through the model."""
+        m = _CRON_CMD.match(text.strip())
+        if not m or not hasattr(self, "_scheduler"):
+            return None
+        action, job_id = m.group(1).lower(), int(m.group(2))
+        job = await self._scheduler.set_enabled(job_id, action == "enable")
+        if not job:
+            return f"Cron job #{job_id} not found."
+        return f"Cron job #{job_id} {action}d: \"{job['description']}\""
+
     async def _handle_message(self, text: str, user_id: str, platform: str, channel_id: str | None) -> str:
         err = self._validate(text, user_id, platform)
-        if err:
+        if err is not None:
             return err
+        if (reply := await self._owner_command(text)) is not None:
+            return reply
         self._record_channel_activity(platform, user_id, channel_id)
         logger.debug("[%s] %s: %s", platform, user_id, text[:80])
         response = await self.agent.handle_message(text, user_id, platform, channel_id)
@@ -244,8 +326,10 @@ class Gateway:
         on_chunk=None,
     ) -> str:
         err = self._validate(text, user_id, platform)
-        if err:
+        if err is not None:
             return err
+        if (reply := await self._owner_command(text)) is not None:
+            return reply
         self._record_channel_activity(platform, user_id, channel_id)
         logger.debug("[%s] %s: %s", platform, user_id, text[:80])
         response = await self.agent.handle_message_stream(text, user_id, platform, channel_id, on_chunk=on_chunk)

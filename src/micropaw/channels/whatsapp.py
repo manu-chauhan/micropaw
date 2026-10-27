@@ -42,6 +42,11 @@ class WhatsAppChannel(Channel):
 
     async def start(self) -> None:
         """Start webhook server for WhatsApp."""
+        if not self.app_secret:
+            raise RuntimeError(
+                "WhatsApp needs app_secret (WHATSAPP_APP_SECRET) so webhook signatures can be checked. "
+                "Without it anyone who reaches the port could pose as any sender."
+            )
         try:
             from aiohttp import web
         except ImportError:
@@ -55,8 +60,6 @@ class WhatsAppChannel(Channel):
         await runner.setup()
         self._server = web.TCPSite(runner, self.host, self.port)
         await self._server.start()
-        if not self.app_secret:
-            logger.warning("WhatsApp HMAC verification disabled — set app_secret for production use")
         logger.info("WhatsApp webhook listening on %s:%d", self.host, self.port)
 
     async def _verify(self, request: Any) -> Any:
@@ -77,12 +80,11 @@ class WhatsAppChannel(Channel):
 
         body = await request.read()
 
-        # Verify HMAC signature
-        if self.app_secret:
-            sig = request.headers.get("X-Hub-Signature-256", "")
-            expected = "sha256=" + hmac.new(self.app_secret.encode(), body, hashlib.sha256).hexdigest()
-            if not hmac.compare_digest(sig, expected):
-                return web.Response(status=401)
+        # Verify HMAC signature (always: without it anyone can forge any sender)
+        sig = request.headers.get("X-Hub-Signature-256", "")
+        expected = "sha256=" + hmac.new(self.app_secret.encode(), body, hashlib.sha256).hexdigest()
+        if not self.app_secret or not hmac.compare_digest(sig, expected):
+            return web.Response(status=401)
 
         try:
             data = json.loads(body)
@@ -102,6 +104,12 @@ class WhatsAppChannel(Channel):
                         continue
 
                     sender = message.get("from", "unknown")
+
+                    denied = self.check_access(sender)
+                    if denied is not None:
+                        if denied:
+                            await self._send(sender, denied)
+                        continue
 
                     if self._handler:
                         response = await self._handler(text, sender, "whatsapp", None)

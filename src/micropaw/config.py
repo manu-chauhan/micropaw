@@ -81,6 +81,7 @@ class SlackChannelConfig(BaseModel):
     bot_token: str = ""
     app_token: str = ""
     signing_secret: str = ""
+    allowed_users: list[str] = []
 
 
 class WhatsAppChannelConfig(BaseModel):
@@ -89,6 +90,7 @@ class WhatsAppChannelConfig(BaseModel):
     phone_id: str = ""
     verify_token: str = ""
     app_secret: str = ""
+    allowed_users: list[str] = []
 
 
 class WebChatChannelConfig(BaseModel):
@@ -304,14 +306,37 @@ def load_config() -> Config:
 
 def save_config(config: Config) -> None:
     """Save config to ~/.micropaw/config.json with restrictive permissions."""
-    import os
+    _write_private(config.model_dump())
+
+
+def _write_private(data: dict) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     # Write with 0o600 from creation — avoid world-readable TOCTOU window
     fd = os.open(str(CONFIG_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        os.write(fd, json.dumps(config.model_dump(), indent=2).encode())
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)  # the mode above only applies when the file is new
+        os.write(fd, json.dumps(data, indent=2).encode())
     finally:
         os.close(fd)
+
+
+def set_allowed_user(platform: str, user_id: str, remove: bool = False) -> list[str]:
+    """Add or remove one ID in channels.<platform>.allowed_users and return the new list.
+
+    Edits the JSON on disk directly, so keys that came from environment variables
+    are never copied into the file.
+    """
+    raw: dict = json.loads(CONFIG_FILE.read_text()) if CONFIG_FILE.exists() else {}
+    channel = raw.setdefault("channels", {}).setdefault(platform, {})
+    ids = [str(u) for u in channel.get("allowed_users", [])]
+    if remove:
+        ids = [u for u in ids if u != user_id]
+    elif user_id not in ids:
+        ids.append(user_id)
+    channel["allowed_users"] = ids
+    _write_private(raw)
+    return ids
 
 
 def _redact(value: str) -> str:
