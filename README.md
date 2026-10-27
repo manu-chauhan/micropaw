@@ -135,7 +135,11 @@ MicroPaw:                "Revenue grew 23% in Q4, driven by..."
 
 ### Security
 
-- **Shell hardening** — 40+ blocked patterns: reverse shells, fork bombs, data exfiltration, `rm -rf /`, process substitution. Dangerous command confirmation toggle.
+- **Owner-only by default**: only accounts you list can talk to it. A stranger is told their ID once and refused. Add your own accounts with `paw allow telegram <id>`.
+
+- **No hidden standing tasks**: recurring tasks the assistant schedules start paused until you reply `/cron enable <id>`.
+
+- **Shell hardening**: commands run without your API keys or tokens in their environment, and 40+ patterns (reverse shells, fork bombs, `rm -rf /`) are blocked. The blocklist is a speed bump, not a sandbox, so shell stays off unless you turn it on.
 
 - **SSRF protection** — URL scheme whitelist, private IP range blocking, DNS rebinding detection, cloud metadata service blocking.
 
@@ -435,6 +439,8 @@ MicroPaw > [delegate] "Research quantum computing breakthroughs"
 | `paw cron add "task" --once 2h` | Schedule a one-shot reminder |
 | `paw cron list` | List all scheduled tasks |
 | `paw cron remove <id>` | Remove a scheduled task |
+| `paw cron enable <id>` | Turn on a task the assistant scheduled (`--off` to pause) |
+| `paw allow <channel> <id>` | Let one of your accounts use the assistant (`--remove` to revoke) |
 | `paw export` | Export conversations (JSON/Markdown) |
 | `paw reset` | Delete all config and data |
 

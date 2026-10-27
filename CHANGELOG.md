@@ -4,6 +4,32 @@ All entries in reverse chronological order. LOC = source lines (excluding tests/
 
 ---
 
+### 2026-10-27: v0.2.7 security hotfix
+
+Upgrade note: MicroPaw now answers only accounts you list. After upgrading, message your bot once; it replies with your ID. Then run `paw allow telegram <id>` (or discord, slack, whatsapp). WhatsApp now refuses to start without `app_secret`. Jobs created before this release stay enabled, so check them once with `paw cron list` and remove any you don't recognise.
+
+Security:
+- Owner-only access on Telegram, Discord, Slack and WhatsApp. An empty allowlist now means nobody, not everybody. Strangers are told their ID once a day and refused; group members other than you are ignored. New `paw allow <channel> <id>` edits the list without restarting.
+- Telegram setup asked for usernames while the bot compared numeric IDs, so restricting access locked the owner out. Setup now asks for numeric IDs on every channel.
+- WhatsApp webhook signatures are always checked; `app_secret` is required.
+- Recurring cron jobs created by the assistant start paused. You get a message from MicroPaw itself (not the model) showing the exact task, and turn it on with `/cron enable <id>` or `paw cron enable <id>`. Minimum interval 5 minutes. Each job runs in its own conversation, so its output never carries your DM history into a group.
+- file_read refuses common credential files (~/.git-credentials, ~/.config/gh, .npmrc, .pypirc, SSH private keys). file_write refuses files that run code later (systemd user units, ~/.local/bin, git hooks, .pth files, shell rc files, launch agents, Windows startup). Path checks now work with Windows separators and case-insensitive file systems.
+- URL checks block every non-public address, including 100.64.0.0/10 (CGNAT, Alibaba Cloud metadata, Tailscale). web_browse re-checks the page address after redirects, clicks and scrolls.
+- Gmail and Calendar IDs are validated, so a crafted event ID can no longer turn "delete event" into "delete calendar".
+- Shell commands run without API keys, tokens or secrets in their environment.
+- DM memories and documents are no longer added to group chat prompts.
+- Web chat accepts only its own origin unless allowed_origins is set.
+- config.json is forced to mode 600 on every save, not only when first created.
+
+Fixes:
+- Long tool-heavy chats could fail with HTTP 400 when the history window started on a tool result whose call had been cut off.
+- An empty message (for example an image-only Discord DM) is no longer saved as an empty turn that broke the shared conversation on Claude.
+- 29 tests failed on Python 3.12+ because of `asyncio.get_event_loop()` in one test file.
+
+Tests: 454 passed on Python 3.11, 3.12 and 3.13.
+
+---
+
 ### `e334f7c` 2026-02-19 — feat: interactive web browsing, screenshots, location context
 **Source: ~8,800 LOC | Tests: 393 | Tools: 16 (48 actions)**
 
