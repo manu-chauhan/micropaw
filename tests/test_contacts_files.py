@@ -11,6 +11,8 @@ from micropaw.tools.contacts_tool import set_store as set_contacts_store
 from micropaw.tools.files_tool import _FILES_DIR, FilesTool
 
 _ctx = ToolContext(conversation_id="test", user_id="u1", platform="test")
+# One private loop for these sync-style tests (get_event_loop() errors on 3.12+ with no running loop)
+_LOOP = asyncio.new_event_loop()
 
 
 # ---------------------------------------------------------------------------
@@ -21,12 +23,12 @@ class TestContactsCRUD:
     @pytest.fixture(autouse=True)
     def setup(self, tmp_path):
         self.store = MemoryStore(str(tmp_path / "test.db"))
-        asyncio.get_event_loop().run_until_complete(self.store.init())
+        _LOOP.run_until_complete(self.store.init())
         yield
-        asyncio.get_event_loop().run_until_complete(self.store.close())
+        _LOOP.run_until_complete(self.store.close())
 
     def run(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        return _LOOP.run_until_complete(coro)
 
     def test_add_and_get(self):
         cid = self.run(self.store.add_contact("Alice", email="alice@example.com", company="Acme"))
@@ -87,15 +89,15 @@ class TestContactsTool:
     @pytest.fixture(autouse=True)
     def setup(self, tmp_path):
         self.store = MemoryStore(str(tmp_path / "test.db"))
-        asyncio.get_event_loop().run_until_complete(self.store.init())
+        _LOOP.run_until_complete(self.store.init())
         set_contacts_store(self.store)
         self.tool = ContactsTool()
         yield
         set_contacts_store(None)
-        asyncio.get_event_loop().run_until_complete(self.store.close())
+        _LOOP.run_until_complete(self.store.close())
 
     def run(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        return _LOOP.run_until_complete(coro)
 
     def test_not_initialized(self):
         set_contacts_store(None)
@@ -158,7 +160,7 @@ class TestFilesTool:
         mod._FILES_DIR = self._orig
 
     def run(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        return _LOOP.run_until_complete(coro)
 
     def test_save_and_read(self):
         result = self.run(self.tool.execute({"action": "save", "path": "hello.txt", "content": "world"}, _ctx))
