@@ -328,7 +328,10 @@ class Agent:
                     usage[k] += response.usage.get(k, 0)
 
                 if not response.tool_calls:
-                    reply = response.content or "I'm not sure how to respond to that."
+                    if response.stop_reason == "refusal":
+                        reply = response.content or "The model declined this request."
+                    else:
+                        reply = response.content or "I'm not sure how to respond to that."
                     break
 
                 messages = await self._execute_tools(messages, response, ctx, conv_id, cache)
@@ -355,7 +358,9 @@ class Agent:
         cache: dict[tuple, str | ToolResult],
     ) -> list[Message]:
         """Execute tool calls from a response, append results to messages."""
-        assistant_msg = Message(role="assistant", content=response.content, tool_calls=response.tool_calls)
+        assistant_msg = Message(
+            role="assistant", content=response.content, tool_calls=response.tool_calls, thinking=response.thinking,
+        )
         messages.append(assistant_msg)
         await self.conversations.save_message(conv_id, assistant_msg)
 

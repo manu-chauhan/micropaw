@@ -63,6 +63,10 @@ class Message:
     tool_calls: list[ToolCall] = field(default_factory=list)
     tool_call_id: str | None = None
     media: list[MediaItem] = field(default_factory=list)
+    # Provider reasoning blocks (Claude "thinking") to send back unchanged within the same turn.
+    # Never stored: earlier turns are rebuilt each time, and replaying a block after the
+    # history changed is rejected.
+    thinking: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -85,7 +89,8 @@ class AIResponse:
     content: str
     tool_calls: list[ToolCall]
     usage: dict[str, int]  # {"input": N, "output": N}
-    stop_reason: str = ""  # "end_turn", "tool_use", "max_tokens"
+    stop_reason: str = ""  # "end_turn", "tool_use", "max_tokens", "refusal"
+    thinking: list[dict[str, Any]] = field(default_factory=list)
 
 
 class AIProvider(ABC):

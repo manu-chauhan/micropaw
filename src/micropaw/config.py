@@ -24,9 +24,10 @@ DB_FILE = CONFIG_DIR / "data.db"
 
 class ClaudeConfig(BaseModel):
     api_key: str = ""
-    model: str = "claude-sonnet-4-20250514"
-    max_tokens: int = 4096
+    model: str = "claude-sonnet-5-5"
+    max_tokens: int = 16000  # room for thinking plus the reply
     base_url: str = "https://api.anthropic.com"
+    effort: str = "medium"  # low | medium | high | xhigh | max; "" = model default (older models reject effort)
 
 
 class OpenAIConfig(BaseModel):

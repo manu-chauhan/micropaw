@@ -370,8 +370,33 @@ class TestClaudeMessageBuilding:
             Message(role="user", content="Hi"),
         ]
         body = p._build_body(messages, None)
-        assert body["system"] == "Be helpful"
+        assert body["system"] == [{"type": "text", "text": "Be helpful", "cache_control": {"type": "ephemeral"}}]
+        assert body["cache_control"] == {"type": "ephemeral"}  # newest message cached too
         assert len(body["messages"]) == 1  # system extracted
+
+    def test_thinking_blocks_replayed_first_within_turn(self):
+        from micropaw.providers.claude import ClaudeProvider
+        p = ClaudeProvider(api_key="test-key", effort="medium")
+        block = {"type": "thinking", "thinking": "", "signature": "sig"}
+        messages = [
+            Message(role="user", content="Hi"),
+            Message(role="assistant", content="", tool_calls=[ToolCall(id="t1", name="echo", arguments={})],
+                    thinking=[block]),
+            Message(role="tool", content="ok", tool_call_id="t1"),
+        ]
+        body = p._build_body(messages, None)
+        assert body["messages"][1]["content"][0] == block
+        assert body["output_config"] == {"effort": "medium"}
+
+    def test_parse_keeps_thinking_and_cache_usage(self):
+        from micropaw.providers.claude import ClaudeProvider
+        resp = ClaudeProvider(api_key="k")._parse_response({
+            "content": [{"type": "thinking", "thinking": "", "signature": "s"}, {"type": "text", "text": "hi"}],
+            "usage": {"input_tokens": 10, "cache_read_input_tokens": 90, "output_tokens": 5},
+            "stop_reason": "end_turn",
+        })
+        assert resp.thinking[0]["signature"] == "s" and resp.content == "hi"
+        assert resp.usage == {"input": 100, "output": 5, "cache_read": 90}
 
     def test_tool_call_format(self):
         from micropaw.providers.claude import ClaudeProvider
@@ -464,3 +489,13 @@ class TestRateLimiter:
             rl.check("user1")
         assert rl.check("user1") is False
         assert rl.check("user2") is True  # different user, not limited
+
+
+class TestClaudeEffortFallback:
+    def test_effort_dropped_after_rejection(self):
+        from micropaw.providers.claude import ClaudeProvider
+        p = ClaudeProvider(api_key="k", effort="medium")
+        body = p._build_body([Message(role="user", content="hi")], None)
+        assert p._drop_effort(body, 400, '{"error": "effort is not supported on this model"}')
+        assert p.effort == "" and "output_config" not in body
+        assert not p._drop_effort(body, 400, "effort")  # nothing left to drop

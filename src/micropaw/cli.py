@@ -34,7 +34,7 @@ def _create_single_provider(provider_name: str, config: Config):
         cfg = config.provider_config.claude
         if not cfg.api_key:
             return None
-        return ClaudeProvider(cfg.api_key, cfg.model, cfg.max_tokens, cfg.base_url)
+        return ClaudeProvider(cfg.api_key, cfg.model, cfg.max_tokens, cfg.base_url, effort=cfg.effort)
     elif provider_name == "openai":
         from micropaw.providers.openai import OpenAIProvider
         cfg = config.provider_config.openai

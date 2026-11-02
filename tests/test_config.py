@@ -27,7 +27,7 @@ class TestConfig:
 
     def test_provider_configs_exist(self):
         c = Config()
-        assert c.provider_config.claude.model == "claude-sonnet-4-20250514"
+        assert c.provider_config.claude.model == "claude-sonnet-5-5"  # claude-sonnet-4-20250514 retired 15 Jun 2026
         assert c.provider_config.openai.model == "gpt-4o"
         assert c.provider_config.ollama.host == "http://localhost:11434"
         assert c.provider_config.gemini.model == "gemini-2.5-flash"
