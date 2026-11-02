@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -13,6 +15,28 @@ from micropaw.tools.google_auth import api_delete, api_error, api_get, api_post,
 logger = logging.getLogger(__name__)
 
 _CAL = "https://www.googleapis.com/calendar/v3"
+
+
+def _local_zone_name() -> str | None:
+    """IANA name of the system timezone, if it can be found (TZ env or /etc/localtime link)."""
+    name = os.environ.get("TZ", "").lstrip(":")
+    if not name:
+        try:
+            name = os.path.realpath("/etc/localtime").split("zoneinfo/", 1)[1]
+        except (IndexError, OSError):
+            return None
+    return name if "/" in name or name == "UTC" else None
+
+
+def _local_datetime(value: str) -> dict[str, str]:
+    """Event time in the user's local zone; a naive value is read as local, an explicit offset is kept."""
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        dt = dt.astimezone()  # naive -> system local zone
+    out = {"dateTime": dt.isoformat()}
+    if zone := _local_zone_name():
+        out["timeZone"] = zone
+    return out
 
 
 def _add_date_params(params: dict, args: dict) -> None:
@@ -82,18 +106,28 @@ async def _create_event(token: str, args: dict) -> str:
 
     if args.get("all_day"):
         start_date = args.get("start_date", "")
-        end_date = args.get("end_date", start_date)
         if not start_date:
             return "Error: All-day event requires 'start_date'."
-        body["start"] = {"date": start_date}
-        body["end"] = {"date": end_date}
+        try:
+            # Google's all-day end is exclusive, so a single day ends the next day
+            first = date.fromisoformat(start_date)
+            last = date.fromisoformat(args["end_date"]) if args.get("end_date") else first
+        except ValueError:
+            return "Error: dates must be ISO format, e.g. '2026-02-20'."
+        if last <= first:
+            last = first + timedelta(days=1)
+        body["start"] = {"date": first.isoformat()}
+        body["end"] = {"date": last.isoformat()}
     else:
         start_time = args.get("start_time", "")
         end_time = args.get("end_time", "")
         if not start_time or not end_time:
             return "Error: Timed event requires 'start_time' and 'end_time' in ISO format."
-        body["start"] = {"dateTime": start_time, "timeZone": "UTC"}
-        body["end"] = {"dateTime": end_time, "timeZone": "UTC"}
+        try:
+            body["start"] = _local_datetime(start_time)
+            body["end"] = _local_datetime(end_time)
+        except ValueError:
+            return "Error: Timed event times must be ISO datetimes, e.g. '2026-02-20T10:00:00'."
 
     try:
         data = await api_post(token, f"{_CAL}/calendars/primary/events", body)
