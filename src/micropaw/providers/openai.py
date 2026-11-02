@@ -6,6 +6,7 @@ import base64
 import json
 import logging
 from collections.abc import AsyncGenerator
+from urllib.parse import urlparse
 
 import httpx
 
@@ -30,6 +31,7 @@ class OpenAIProvider(AIProvider):
         self.model = model
         self.max_tokens = max_tokens
         self._api_url = f"{base_url.rstrip('/')}/v1/chat/completions"
+        self._is_openai = urlparse(base_url).hostname == "api.openai.com"
         self._client = httpx.AsyncClient(timeout=120.0)
 
     def _headers(self) -> dict[str, str]:
@@ -40,7 +42,8 @@ class OpenAIProvider(AIProvider):
 
     def _build_body(self, messages: list[Message], tools: list[ToolDef] | None) -> dict:
         api_messages = []
-        for msg in messages:
+        pending: list[dict] = []  # tool-result images; tool messages can't carry them
+        for i, msg in enumerate(messages):
             if msg.role == "system":
                 api_messages.append({"role": "system", "content": msg.content})
             elif msg.role == "assistant" and msg.tool_calls:
@@ -58,6 +61,13 @@ class OpenAIProvider(AIProvider):
                 })
             elif msg.role == "tool":
                 api_messages.append({"role": "tool", "tool_call_id": msg.tool_call_id, "content": msg.content})
+                for media in msg.media:
+                    b64 = base64.b64encode(media.data).decode()
+                    pending.append({"type": "image_url", "image_url": {"url": f"data:{media.mime_type};base64,{b64}"}})
+                if pending and (i + 1 == len(messages) or messages[i + 1].role != "tool"):
+                    pending.append({"type": "text", "text": "Image returned by the tool."})
+                    api_messages.append({"role": "user", "content": pending})
+                    pending = []
             elif msg.role == "user" and msg.media:
                 parts: list[dict] = []
                 for media in msg.media:
@@ -68,7 +78,9 @@ class OpenAIProvider(AIProvider):
             else:
                 api_messages.append({"role": msg.role, "content": msg.content})
 
-        body: dict = {"model": self.model, "messages": api_messages, "max_tokens": self.max_tokens}
+        # Newer OpenAI models reject max_tokens; every other compatible server still wants it.
+        limit_key = "max_completion_tokens" if self._is_openai else "max_tokens"
+        body: dict = {"model": self.model, "messages": api_messages, limit_key: self.max_tokens}
         if tools:
             body["tools"] = [
                 {
