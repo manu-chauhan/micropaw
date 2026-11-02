@@ -204,9 +204,13 @@ class Gateway:
         provider: AIProvider,
         registry: ToolRegistry,
         channels: list[Channel],
+        fast_provider: AIProvider | None = None,
+        vision_provider: AIProvider | None = None,
     ) -> None:
         self.config = config
         self.provider = provider
+        self.fast_provider = fast_provider
+        self.vision_provider = vision_provider
         self.registry = registry
         self.channels = channels
         self.store: MemoryStore | None = None
@@ -244,7 +248,7 @@ class Gateway:
         set_sessions_store(self.store)
 
         from micropaw.tools.vision import set_provider
-        set_provider(self.provider)
+        set_provider(self.vision_provider or self.provider)
 
         from micropaw.tools.web_search import set_search_config
         set_search_config(self.config.search)
@@ -258,7 +262,7 @@ class Gateway:
         self._bus = MessageBus()
         self._bus_task: asyncio.Task | None = None
         set_delegate_deps(
-            self.provider, self._bus,
+            self.fast_provider or self.provider, self._bus,
             registry=self.registry,
             max_iterations=self.config.context.max_subagent_iterations,
         )
@@ -269,6 +273,7 @@ class Gateway:
         # Init agent
         self.agent = Agent(self.config, self.provider, self.registry, self.store)
         self.agent.approver = self._approve
+        self.agent.fast_provider = self.fast_provider
 
         # Wire handler callbacks to all channels
         terminal_coro = None
@@ -644,12 +649,13 @@ class Gateway:
             pass
 
         # Close AI provider HTTP clients
-        try:
-            await asyncio.wait_for(self.provider.close(), timeout=5.0)
-        except TimeoutError:
-            logger.warning("Provider close timed out")
-        except Exception as e:
-            logger.error("Error closing provider: %s", e)
+        for provider in filter(None, (self.provider, self.fast_provider, self.vision_provider)):
+            try:
+                await asyncio.wait_for(provider.close(), timeout=5.0)
+            except TimeoutError:
+                logger.warning("Provider close timed out")
+            except Exception as e:
+                logger.error("Error closing provider: %s", e)
 
         # Close embedding provider HTTP client if applicable
         if self.store and hasattr(self.store.embedder, "close"):

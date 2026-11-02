@@ -73,6 +73,7 @@ class Agent:
         )
         self.max_tool_iterations = config.context.max_tool_iterations
         self.approver: Approver | None = None
+        self.fast_provider: AIProvider | None = None  # summaries; None = main provider
         self.last_usage: dict[str, int] = {"input": 0, "output": 0}
         self.session_usage: dict[str, int] = {"input": 0, "output": 0}
         self.message_count: int = 0
@@ -236,7 +237,7 @@ class Agent:
         system = Message(role="system", content=self._build_system_prompt(platform))
         summary = await self.store.get_summary(conv_id)
         messages, new_summary = await self.context_manager.compact(
-            [system, *history, Message(role="user", content=text)], self.provider,
+            [system, *history, Message(role="user", content=text)], self.fast_provider or self.provider,
         )
         if new_summary:
             await self.store.compact_messages(conv_id, new_summary, KEEP_RECENT)

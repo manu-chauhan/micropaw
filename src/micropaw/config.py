@@ -50,6 +50,31 @@ class GeminiConfig(BaseModel):
     base_url: str = "https://generativelanguage.googleapis.com"
 
 
+# OpenAI-compatible servers usable by name in a model spec ("groq:llama-3.3-70b-versatile").
+# name -> (base URL without /v1, env var holding the key; "" = local, no key needed)
+OPENAI_COMPATIBLE: dict[str, tuple[str, str]] = {
+    "openrouter": ("https://openrouter.ai/api", "OPENROUTER_API_KEY"),
+    "groq": ("https://api.groq.com/openai", "GROQ_API_KEY"),
+    "deepseek": ("https://api.deepseek.com", "DEEPSEEK_API_KEY"),
+    "mistral": ("https://api.mistral.ai", "MISTRAL_API_KEY"),
+    "together": ("https://api.together.xyz", "TOGETHER_API_KEY"),
+    "lmstudio": ("http://localhost:1234", ""),
+    "llamacpp": ("http://localhost:8080", ""),
+    "vllm": ("http://localhost:8000", ""),
+}
+
+
+class ModelsConfig(BaseModel):
+    """Extra models by job, each "provider:model" and local or cloud; empty = use the main model.
+
+    provider is claude, openai, gemini, ollama, or a name from OPENAI_COMPATIBLE.
+    Examples: "ollama:gemma4:e4b", "claude:claude-haiku-5-5", "groq:llama-3.3-70b-versatile".
+    """
+
+    fast: str = ""    # summaries and sub-agents: cheap and quick is fine
+    vision: str = ""  # images, for when the main model can't see
+
+
 class ProviderConfig(BaseModel):
     claude: ClaudeConfig = ClaudeConfig()
     openai: OpenAIConfig = OpenAIConfig()
@@ -194,6 +219,7 @@ class Config(BaseModel):
     context: ContextConfig = ContextConfig()
     scheduler: SchedulerConfig = SchedulerConfig()
     google: GoogleConfig = GoogleConfig()
+    models: ModelsConfig = ModelsConfig()
     fallback_providers: list[str] = []
 
 
@@ -225,6 +251,9 @@ _ENV_OVERRIDES: list[tuple[str, list[str]]] = [
     ("WHATSAPP_VERIFY_TOKEN", ["channels", "whatsapp", "verify_token"]),
     ("WHATSAPP_APP_SECRET", ["channels", "whatsapp", "app_secret"]),
     ("WEBCHAT_AUTH_TOKEN", ["channels", "webchat", "auth_token"]),
+    # Models for specific jobs ("provider:model")
+    ("MICROPAW_FAST_MODEL", ["models", "fast"]),
+    ("MICROPAW_VISION_MODEL", ["models", "vision"]),
     # Location
     ("MICROPAW_LOCATION", ["persona", "location"]),
     # Search

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import sys
 from datetime import UTC
@@ -17,6 +18,7 @@ from micropaw.config import (
     CONFIG_DIR,
     CONFIG_FILE,
     DB_FILE,
+    OPENAI_COMPATIBLE,
     Config,
     config_exists,
     display_config,
@@ -27,31 +29,50 @@ from micropaw.utils.logger import quiet_console, setup_logging
 console = Console()
 
 
-def _create_single_provider(provider_name: str, config: Config):
-    """Create a single AI provider by name."""
+def _create_single_provider(provider_name: str, config: Config, model: str = ""):
+    """Create a single AI provider by name, optionally with a different model."""
     if provider_name == "claude":
         from micropaw.providers.claude import ClaudeProvider
         cfg = config.provider_config.claude
         if not cfg.api_key:
             return None
-        return ClaudeProvider(cfg.api_key, cfg.model, cfg.max_tokens, cfg.base_url, effort=cfg.effort)
+        return ClaudeProvider(cfg.api_key, model or cfg.model, cfg.max_tokens, cfg.base_url, effort=cfg.effort)
     elif provider_name == "openai":
         from micropaw.providers.openai import OpenAIProvider
         cfg = config.provider_config.openai
         if not cfg.api_key:
             return None
-        return OpenAIProvider(cfg.api_key, cfg.model, cfg.max_tokens, cfg.base_url)
+        return OpenAIProvider(cfg.api_key, model or cfg.model, cfg.max_tokens, cfg.base_url)
     elif provider_name == "ollama":
         from micropaw.providers.ollama import OllamaProvider
         cfg = config.provider_config.ollama
-        return OllamaProvider(cfg.host, cfg.model, cfg.max_tokens)
+        return OllamaProvider(cfg.host, model or cfg.model, cfg.max_tokens)
     elif provider_name == "gemini":
         from micropaw.providers.gemini import GeminiProvider
         cfg = config.provider_config.gemini
         if not cfg.api_key:
             return None
-        return GeminiProvider(cfg.api_key, cfg.model, cfg.max_tokens, cfg.base_url)
+        return GeminiProvider(cfg.api_key, model or cfg.model, cfg.max_tokens, cfg.base_url)
+    elif provider_name in OPENAI_COMPATIBLE and model:
+        from micropaw.providers.openai import OpenAIProvider
+        base_url, key_env = OPENAI_COMPATIBLE[provider_name]
+        key = os.environ.get(key_env, "") if key_env else "local"
+        if not key:
+            return None
+        return OpenAIProvider(key, model, config.provider_config.openai.max_tokens, base_url)
     return None
+
+
+def _create_role_provider(spec: str, config: Config):
+    """A model for one job, from "provider:model". None when unset or unusable (the main model is used)."""
+    if not spec:
+        return None
+    name, _, model = spec.partition(":")
+    provider = _create_single_provider(name.strip().lower(), config, model.strip())
+    if provider is None:
+        console.print(f"[yellow]Model '{spec}' isn't usable (unknown provider or missing key); "
+                      "using the main model for that job.[/yellow]")
+    return provider
 
 
 def _create_provider(config: Config):
@@ -195,8 +216,15 @@ def chat():
     channels = _create_channels(config)
 
     from micropaw.gateway import Gateway
-    gw = Gateway(config, provider, registry, channels)
+    gw = Gateway(config, provider, registry, channels, **_role_providers(config))
     asyncio.run(gw.start())
+
+
+def _role_providers(config: Config) -> dict:
+    return {
+        "fast_provider": _create_role_provider(config.models.fast, config),
+        "vision_provider": _create_role_provider(config.models.vision, config),
+    }
 
 
 @main.command()
@@ -218,7 +246,7 @@ def start():
         sys.exit(1)
 
     from micropaw.gateway import Gateway
-    gw = Gateway(config, provider, registry, channels)
+    gw = Gateway(config, provider, registry, channels, **_role_providers(config))
     asyncio.run(gw.start())
 
 
