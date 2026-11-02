@@ -171,6 +171,7 @@ async def _search(token: str, query: str) -> str:
 
 class EmailTool(Tool):
     name = "email"
+    marks = True
     description = (
         "Manage email (Gmail). Actions: 'authorize' (one-time Google sign-in), "
         "'inbox' (list recent messages), 'read' (read a message by ID), "
@@ -220,6 +221,13 @@ class EmailTool(Tool):
         },
         "required": ["action"],
     }
+
+    def needs_approval(self, args: dict[str, Any], context: ToolContext) -> str | None:
+        if args.get("action") != "send":
+            return None
+        body = args.get("body", "")
+        more = f"\n... ({len(body) - 500:,} more characters)" if len(body) > 500 else ""
+        return f"Send an email\nTo: {args.get('to', '')}\nSubject: {args.get('subject', '')}\n\n{body[:500]}{more}"
 
     async def execute(self, args: dict[str, Any], context: ToolContext) -> str:
         action = args["action"]

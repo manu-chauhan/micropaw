@@ -36,6 +36,7 @@ def _human_size(n: int) -> str:
 
 class FilesTool(Tool):
     name = "files"
+    marks = True
     description = (
         "Save, read, list, or delete user files. Files persist across sessions in ~/.micropaw/files/. "
         "Actions: 'save' (write content to a file), 'read' (read a file), "

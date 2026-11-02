@@ -43,6 +43,30 @@ def _norm(p: str) -> str:
 _CONFIG_DIR = _norm(str(CONFIG_DIR))
 
 
+def resolve_path(path_str: str, workspace: str = "") -> Path:
+    """Expand ~ and resolve; relative paths are taken from the workspace when there is one."""
+    path = Path(path_str).expanduser()
+    if workspace and not path.is_absolute():
+        path = Path(workspace) / path
+    return path.resolve()
+
+
+def in_workspace(path: Path, workspace: str) -> bool:
+    return bool(workspace) and path.is_relative_to(Path(workspace).expanduser().resolve())
+
+
+def runs_code_later(path: Path) -> bool:
+    """Files that tools or the owner will execute later (build files, CI, editor tasks)."""
+    norm = _norm(str(path)).lower()
+    return path.name.lower() in _EXEC_NAMES or any(d in norm for d in ("/.github/workflows/", "/.vscode/"))
+
+
+_EXEC_NAMES = (
+    "makefile", "justfile", "package.json", "conftest.py", "setup.py", "noxfile.py", "tox.ini",
+    ".gitlab-ci.yml", "dockerfile", "docker-compose.yml",
+)
+
+
 def validate_file_path(path_str: str) -> str | None:
     """Validate a file path for security. Returns error string if blocked, None if safe."""
     path = Path(path_str).resolve()

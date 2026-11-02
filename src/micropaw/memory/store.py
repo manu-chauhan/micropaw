@@ -106,6 +106,7 @@ class MemoryStore:
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA busy_timeout=5000")
         await self._db.executescript(_SCHEMA)
+        await self._migrate()
         await self._db.commit()
 
         self._has_vec = await self._try_load_vec()
@@ -117,6 +118,24 @@ class MemoryStore:
             "Database initialized at %s (embeddings: %s, sqlite-vec: %s)",
             self.db_path, self.embedder.name, self._has_vec,
         )
+
+    async def _migrate(self) -> None:
+        """Add columns that older databases don't have."""
+        for table in ("conversations", "memories"):
+            async with self.db.execute(f"PRAGMA table_info({table})") as cur:
+                columns = {row[1] for row in await cur.fetchall()}
+            if "marked" not in columns:
+                await self.db.execute(f"ALTER TABLE {table} ADD COLUMN marked INTEGER DEFAULT 0")
+
+    async def is_marked(self, conversation_id: str) -> bool:
+        """True once this conversation has read outside content (web, email, files, commands)."""
+        async with self.db.execute("SELECT marked FROM conversations WHERE id = ?", (conversation_id,)) as cur:
+            row = await cur.fetchone()
+        return bool(row and row[0])
+
+    async def set_marked(self, conversation_id: str) -> None:
+        await self.db.execute("UPDATE conversations SET marked = 1 WHERE id = ?", (conversation_id,))
+        await self.db.commit()
 
     async def _try_load_vec(self) -> bool:
         """Load the sqlite-vec extension. Falls back gracefully if unavailable."""
@@ -357,16 +376,20 @@ class MemoryStore:
 
     # --- Memories ---
 
-    async def save_memory(self, key: str, value: str, tags: list[str] | None = None, user_id: str = "_global") -> None:
+    async def save_memory(
+        self, key: str, value: str, tags: list[str] | None = None, user_id: str = "_global", marked: bool = False,
+    ) -> None:
+        """Save a fact. marked=True when it was written by a conversation that had read outside content."""
         tags_str = ",".join(tags) if tags else ""
         embedding = await self.embedder.embed(f"{key}: {value}")
         embedding_json = serialize_embedding(embedding)
 
         await self.db.execute(
-            "INSERT INTO memories (key, value, tags, embedding, user_id) VALUES (?, ?, ?, ?, ?) "
-            "ON CONFLICT(key, user_id) DO UPDATE SET value = ?, tags = ?, embedding = ?,"
+            "INSERT INTO memories (key, value, tags, embedding, user_id, marked) VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(key, user_id) DO UPDATE SET value = ?, tags = ?, embedding = ?, marked = ?,"
             " updated_at = CURRENT_TIMESTAMP",
-            (key, value, tags_str, embedding_json, user_id, value, tags_str, embedding_json),
+            (key, value, tags_str, embedding_json, user_id, int(marked),
+             value, tags_str, embedding_json, int(marked)),
         )
         await self.db.commit()
 
@@ -420,6 +443,17 @@ class MemoryStore:
             rows = await cursor.fetchall()
         return [{"key": r[0], "value": r[1], "tags": r[2]} for r in rows]
 
+    async def any_marked_memory(self, keys: list[str], user_id: str = "_global") -> bool:
+        """True if any of these memories was saved by a conversation that had read outside content."""
+        if not keys:
+            return False
+        marks = ",".join("?" * len(keys))
+        async with self.db.execute(
+            f"SELECT 1 FROM memories WHERE user_id = ? AND marked = 1 AND key IN ({marks}) LIMIT 1",
+            (user_id, *keys),
+        ) as cursor:
+            return await cursor.fetchone() is not None
+
     async def delete_memory(self, key: str, user_id: str = "_global") -> bool:
         """Delete a memory. Returns True if a row was deleted."""
         cursor = await self.db.execute("DELETE FROM memories WHERE key = ? AND user_id = ?", (key, user_id))
@@ -428,11 +462,11 @@ class MemoryStore:
 
     async def get_recent_memories(self, limit: int = 10, user_id: str = "_global") -> list[dict]:
         async with self.db.execute(
-            "SELECT key, value FROM memories WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?",
+            "SELECT key, value, marked FROM memories WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?",
             (user_id, limit),
         ) as cursor:
             rows = await cursor.fetchall()
-        return [{"key": r[0], "value": r[1]} for r in rows]
+        return [{"key": r[0], "value": r[1], "marked": bool(r[2])} for r in rows]
 
     # --- Document chunks (RAG) ---
 

@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
+import os
 import re
+import secrets
 import signal
 import time
+from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
 
 from micropaw.channels.base import Channel
-from micropaw.config import CONFIG_FILE, DB_FILE, Config, load_config
+from micropaw.config import CONFIG_DIR, CONFIG_FILE, DB_FILE, Config, load_config
 from micropaw.core.agent import Agent
 from micropaw.memory.store import MemoryStore
 from micropaw.providers.base import AIProvider
@@ -106,6 +112,86 @@ class _AccessGuard:
         )
 
 
+class _Approvals:
+    """Asks the owner before side effects and waits for the answer.
+
+    Chat channels get a message with a short ID; the owner replies "yes <id>", "no <id>",
+    or "always <id>" (saves an exact-match rule, never offered once outside content was
+    read). An ask is single-use, bound to the chat it came from, and denied after
+    10 minutes or a restart. The terminal asks inline instead.
+    """
+
+    TIMEOUT = 600.0
+    _REPLY = re.compile(r"^(yes|no|always)\s+([0-9a-f]{4})$", re.IGNORECASE)
+
+    def __init__(self, rules_file: Path) -> None:
+        self._rules_file = rules_file
+        self._pending: dict[str, tuple[str, asyncio.Future[bool], str]] = {}  # id -> (chat, answer, rule)
+        try:
+            self._rules: set[str] = set(json.loads(rules_file.read_text()))
+        except (OSError, ValueError):
+            self._rules = set()
+
+    def _rule(self, tool: str, text: str, marked: bool) -> str:
+        """The exact action as a rule key, or "" when rules don't apply (outside content was read)."""
+        return "" if marked else hashlib.sha256(f"{tool}\n{text}".encode()).hexdigest()
+
+    def _remember(self, rule: str) -> None:
+        self._rules.add(rule)
+        self._rules_file.parent.mkdir(parents=True, exist_ok=True)
+        self._rules_file.write_text(json.dumps(sorted(self._rules)))
+        if hasattr(os, "chmod"):
+            os.chmod(self._rules_file, 0o600)
+
+    async def ask(self, send: Callable[[str], Awaitable[None]], chat: str, tool: str, text: str, marked: bool) -> bool:
+        rule = self._rule(tool, text, marked)
+        if rule in self._rules:
+            return True
+        ask_id = secrets.token_hex(2)
+        while ask_id in self._pending:
+            ask_id = secrets.token_hex(2)
+        answer: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+        self._pending[ask_id] = (chat, answer, rule)
+        always = f", or 'always {ask_id}' to allow this exact action from now on" if rule else ""
+        try:
+            await send(
+                f"Approval needed [{ask_id}]: {tool}\n\n{text}\n\n"
+                f"Reply 'yes {ask_id}' or 'no {ask_id}'{always}. This expires in 10 minutes."
+            )
+            return await asyncio.wait_for(answer, self.TIMEOUT)
+        except TimeoutError:
+            return False
+        finally:
+            self._pending.pop(ask_id, None)
+
+    async def ask_terminal(self, terminal: Any, tool: str, text: str, marked: bool) -> bool:
+        rule = self._rule(tool, text, marked)
+        if rule in self._rules:
+            return True
+        reply = await terminal.ask_owner(f"{tool}\n\n{text}", allow_always=bool(rule))
+        if reply == "always":
+            self._remember(rule)
+        return reply in ("yes", "always")
+
+    def answer(self, chat: str, text: str) -> str | None:
+        """Handle "yes/no/always <id>" from the owner. None if the message isn't an answer."""
+        m = self._REPLY.match(text.strip())
+        if not m:
+            return None
+        word, ask_id = m.group(1).lower(), m.group(2).lower()
+        entry = self._pending.get(ask_id)
+        if not entry or entry[0] != chat:
+            return f"No pending approval {ask_id} in this chat (it may have expired)."
+        _, answer, rule = entry
+        if word == "always":
+            if not rule:
+                return "'always' isn't offered for this one. Reply yes or no."
+            self._remember(rule)
+        if not answer.done():
+            answer.set_result(word != "no")
+        return "Declined." if word == "no" else "Approved."
+
+
 _CRON_CMD = re.compile(r"^/cron\s+(enable|disable)\s+#?(\d+)$", re.IGNORECASE)
 
 
@@ -127,6 +213,7 @@ class Gateway:
         self.agent: Agent | None = None
         self._rate_limiter = _RateLimiter(config.rate_limit.messages_per_minute, config.rate_limit.burst_limit)
         self._access = _AccessGuard(config)
+        self._approvals = _Approvals(CONFIG_DIR / "approved_actions.json")
 
     async def start(self) -> None:
         """Initialize everything and start all channels."""
@@ -181,6 +268,7 @@ class Gateway:
 
         # Init agent
         self.agent = Agent(self.config, self.provider, self.registry, self.store)
+        self.agent.approver = self._approve
 
         # Wire handler callbacks to all channels
         terminal_coro = None
@@ -297,6 +385,21 @@ class Gateway:
             return f"Message too long ({len(text):,} chars). Maximum is {max_size:,} characters."
         return None
 
+    async def _approve(self, platform: str, chat_id: str, tool: str, text: str, marked: bool) -> bool:
+        """Ask the owner on the chat the request came from."""
+        if platform == "terminal":
+            terminal = self._get_terminal_channel()
+            return terminal is not None and await self._approvals.ask_terminal(terminal, tool, text, marked)
+        channel = next((c for c in self.channels if c.name == platform), None)
+        if channel is None:
+            return False
+        return await self._approvals.ask(lambda msg: channel.send_message(chat_id, msg), chat_id, tool, text, marked)
+
+    def _approval_answer(self, text: str, user_id: str, platform: str, channel_id: str | None) -> str | None:
+        if not self._access.is_allowed(platform, user_id):
+            return None
+        return self._approvals.answer(f"{platform}:{channel_id or user_id}", text)
+
     async def _owner_command(self, text: str) -> str | None:
         """Commands the owner types that must not go through the model."""
         m = _CRON_CMD.match(text.strip())
@@ -309,6 +412,8 @@ class Gateway:
         return f"Cron job #{job_id} {action}d: \"{job['description']}\""
 
     async def _handle_message(self, text: str, user_id: str, platform: str, channel_id: str | None) -> str:
+        if (answer := self._approval_answer(text, user_id, platform, channel_id)) is not None:
+            return answer
         err = self._validate(text, user_id, platform)
         if err is not None:
             return err
@@ -325,6 +430,8 @@ class Gateway:
         self, text: str, user_id: str, platform: str, channel_id: str | None,
         on_chunk=None,
     ) -> str:
+        if (answer := self._approval_answer(text, user_id, platform, channel_id)) is not None:
+            return answer
         err = self._validate(text, user_id, platform)
         if err is not None:
             return err

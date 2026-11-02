@@ -32,6 +32,7 @@ def set_provider(provider: AIProvider) -> None:
 
 class VisionTool(Tool):
     name = "vision"
+    marks = True
     description = "Analyze an image file and describe its contents."
     parameters: dict[str, Any] = {
         "type": "object",

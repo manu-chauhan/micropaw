@@ -35,6 +35,7 @@ def _parse_pages(spec: str, total: int) -> list[int]:
 
 class PdfReadTool(Tool):
     name = "pdf_read"
+    marks = True
     description = "Read text content from a PDF file. Supports page ranges."
     parameters: dict[str, Any] = {
         "type": "object",

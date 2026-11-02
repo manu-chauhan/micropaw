@@ -118,8 +118,10 @@ class PermissionsConfig(BaseModel):
     allow_shell: bool = False
     allow_file_write: bool = False
     allow_web_browse: bool = True
+    # Ask before every host shell command (False: only once outside content was read)
     confirm_dangerous: bool = True
     disabled_tools: list[str] = []  # tool names to disable, e.g. ["web_search", "http_request"]
+    workspace: str = "~/micropaw"  # files written here, and shell runs here, without asking
 
 
 class PersonaConfig(BaseModel):

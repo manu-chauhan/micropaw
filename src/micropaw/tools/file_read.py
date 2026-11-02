@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from micropaw.tools.base import Tool, ToolContext
-from micropaw.tools.path_security import validate_file_path
+from micropaw.tools.path_security import resolve_path, validate_file_path
 
 MAX_FILE_SIZE = 1_000_000  # 1MB
 
 
 class FileReadTool(Tool):
     name = "file_read"
+    marks = True
     description = "Read the contents of a file. Returns the text content."
     parameters: dict[str, Any] = {
         "type": "object",
@@ -23,12 +23,11 @@ class FileReadTool(Tool):
     }
 
     async def execute(self, args: dict[str, Any], context: ToolContext) -> str:
-        path_str = args["path"]
+        path = resolve_path(args["path"], context.workspace)
 
-        if error := validate_file_path(path_str):
+        if error := validate_file_path(str(path)):
             return f"Error: {error}"
 
-        path = Path(path_str).resolve()
         if not path.exists():
             return f"Error: File not found: {path}"
         if not path.is_file():

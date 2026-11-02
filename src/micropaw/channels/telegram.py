@@ -30,7 +30,8 @@ class TelegramChannel(Channel):
         except ImportError:
             raise RuntimeError("python-telegram-bot not installed. Install with: pip install 'micropaw\\[telegram]'")
 
-        self._app = Application.builder().token(self.token).build()
+        # Concurrent updates: an approval answer must get through while the turn that asked is waiting
+        self._app = Application.builder().token(self.token).concurrent_updates(True).build()
 
         async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             if not update.message or not update.message.text:

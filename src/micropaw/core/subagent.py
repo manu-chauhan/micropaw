@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 from micropaw.providers.base import AIProvider, Message
-from micropaw.tools.base import Tool, ToolContext, ToolDef, ToolRegistry, ToolResult
+from micropaw.tools.base import Tool, ToolContext, ToolDef, ToolRegistry, ToolResult, run_tool
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,8 @@ class SubAgent:
                     if tool:
                         logger.info("[subagent][%s] %s", tc.name, _short_args(tc.arguments))
                         try:
-                            result = await tool.execute(tc.arguments, self._tool_context)
+                            # Same approval gate and mark as the main agent
+                            result = await run_tool(tool, tc.arguments, self._tool_context)
                         except Exception as e:
                             result = f"Tool error: {e}"
                     else:

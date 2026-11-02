@@ -18,6 +18,7 @@ def set_store(store: MemoryStore) -> None:
 
 class SessionsTool(Tool):
     name = "sessions"
+    marks = True
     description = (
         "Manage conversation sessions. Actions: "
         "'list' (show sessions), 'info' (session details), 'clear' (delete messages)."

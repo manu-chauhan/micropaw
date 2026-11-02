@@ -6,14 +6,16 @@ import asyncio
 import os
 import re
 import signal
+from pathlib import Path
 from typing import Any
 
 from micropaw.tools.base import Tool, ToolContext
 
 TIMEOUT = 30
 MAX_OUTPUT = 10_000
+MAX_COMMAND = 2_000
 
-# Commands that require confirmation when confirm_dangerous is enabled
+# Commands flagged as risky in the approval prompt
 _DANGEROUS_PATTERNS = [
     r"\brm\s+", r"\bmkdir\s+-p\s+/", r"\bchmod\b", r"\bchown\b",
     r"\bkill\b", r"\bpkill\b", r"\bsudo\b",
@@ -93,6 +95,7 @@ def _child_env() -> dict[str, str]:
 
 class ShellTool(Tool):
     name = "shell"
+    marks = True
     description = "Execute a shell command and return its output (stdout + stderr)."
     parameters: dict[str, Any] = {
         "type": "object",
@@ -102,24 +105,35 @@ class ShellTool(Tool):
         "required": ["command"],
     }
 
+    def needs_approval(self, args: dict[str, Any], context: ToolContext) -> str | None:
+        """Every host command asks (confirm_dangerous=False: only after outside content was read)."""
+        command = args.get("command", "")
+        if not context.allow_shell or len(command) > MAX_COMMAND or any(p.search(command) for p in _BLOCKED_RE):
+            return None  # execute() refuses these anyway
+        if not context.confirm_dangerous and not context.marked:
+            return None
+        risky = any(p.search(command) for p in _DANGEROUS_RE)
+        warning = "Careful: this can delete or change things.\n" if risky else ""
+        return f"{warning}Run on this computer (in {context.workspace or 'the current folder'}):\n{command}"
+
     async def execute(self, args: dict[str, Any], context: ToolContext) -> str:
         if not context.allow_shell:
             return "Error: Shell execution is not enabled. Ask the user to enable it in settings."
 
         command = args["command"]
+        # Too long to show the owner in full in an approval, so never run it
+        if len(command) > MAX_COMMAND:
+            return f"Error: Command too long ({len(command):,} chars, max {MAX_COMMAND:,})."
         if any(pat.search(command) for pat in _BLOCKED_RE):
             return "Error: This command has been blocked for safety reasons."
 
-        if context.confirm_dangerous and any(pat.search(command) for pat in _DANGEROUS_RE):
-            return (
-                f"Warning: This command may be dangerous: `{command}`\n"
-                "The user has confirm_dangerous enabled in their config. "
-                "Please describe what this command does and ask the user for explicit permission before running it."
-            )
-
+        cwd = None
+        if context.workspace:
+            cwd = Path(context.workspace).expanduser()
+            cwd.mkdir(parents=True, exist_ok=True)
         try:
             proc = await asyncio.create_subprocess_shell(
-                command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=_child_env(),
+                command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=_child_env(), cwd=cwd,
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=TIMEOUT)
 

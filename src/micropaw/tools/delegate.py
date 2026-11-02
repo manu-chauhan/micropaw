@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 from typing import Any
 
@@ -53,10 +54,6 @@ class DelegateTool(Tool):
                 "enum": ["inline", "background"],
                 "default": "inline",
             },
-            "system_prompt": {
-                "type": "string",
-                "description": "Optional custom system prompt for the sub-agent.",
-            },
         },
         "required": ["task"],
     }
@@ -67,25 +64,20 @@ class DelegateTool(Tool):
 
         task = args["task"]
         mode = args.get("mode", "inline")
-        system_prompt = args.get("system_prompt")
-
-        agent = SubAgent(
-            _provider,
-            system_prompt=system_prompt,
-            registry=_registry,
-            tool_context=context,
-            max_iterations=_max_iterations,
-        )
 
         if mode == "background":
             if _bus is None:
                 return "Error: Background mode requires message bus (not available)."
+            # Runs after this turn ends: nobody is there to approve, and it gets its own
+            # browser session so the main turn closing its page doesn't break it.
+            bg_context = dataclasses.replace(context, approve=None, conversation_id=f"{context.conversation_id}:bg")
+            agent = SubAgent(_provider, registry=_registry, tool_context=bg_context, max_iterations=_max_iterations)
             asyncio.create_task(_run_background(agent, task, context.platform, context.chat_id))
             return f"Task delegated in background: {task[:80]}"
 
-        # Inline: block until done
-        result = await agent.run(task)
-        return result
+        # Inline: block until done. Shares the turn's context, so approvals and the mark carry over.
+        agent = SubAgent(_provider, registry=_registry, tool_context=context, max_iterations=_max_iterations)
+        return await agent.run(task)
 
 
 async def _run_background(agent: SubAgent, task: str, channel: str, chat_id: str) -> None:

@@ -193,6 +193,7 @@ async def fetch_youtube_transcript(video_id: str) -> str:
 
 class WebBrowseTool(Tool):
     name = "web_browse"
+    marks = True
     description = (
         "Browse URLs, interact with pages, and take screenshots. "
         "Actions: 'browse' (load URL and extract content), 'click' (click an element), "

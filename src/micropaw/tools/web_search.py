@@ -185,6 +185,7 @@ async def _search_duckduckgo(query: str, max_results: int) -> str:
 
 class WebSearchTool(Tool):
     name = "web_search"
+    marks = True
     description = "Search the web and return results with titles, URLs, and snippets."
     parameters: dict[str, Any] = {
         "type": "object",

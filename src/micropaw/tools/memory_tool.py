@@ -60,7 +60,7 @@ class MemoryTool(Tool):
             if not key or not value:
                 return "Error: 'save' requires both 'key' and 'value'."
             tags = args.get("tags")
-            await _store.save_memory(key, value, tags=tags, user_id=user_id)
+            await _store.save_memory(key, value, tags=tags, user_id=user_id, marked=context.marked)
             return f"Memory saved: {key}"
 
         elif action == "search":
@@ -70,6 +70,8 @@ class MemoryTool(Tool):
             results = await _store.search_memories(query, limit=10, user_id=user_id)
             if not results:
                 return f"No memories found for: {query}"
+            if await _store.any_marked_memory([r["key"] for r in results], user_id=user_id):
+                context.marked = True
             lines = [f"Found {len(results)} memories:"]
             for r in results:
                 tags = f" [tags: {r['tags']}]" if r.get("tags") else ""
@@ -80,6 +82,8 @@ class MemoryTool(Tool):
             memories = await _store.get_all_memories(user_id=user_id)
             if not memories:
                 return "No memories stored yet."
+            if await _store.any_marked_memory([m["key"] for m in memories], user_id=user_id):
+                context.marked = True
             lines = [f"All memories ({len(memories)}):"]
             for m in memories:
                 tags = f" [tags: {m['tags']}]" if m.get("tags") else ""

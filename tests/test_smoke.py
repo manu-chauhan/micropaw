@@ -45,6 +45,8 @@ class TestLocationContext:
         store.save_message = AsyncMock()
         store.get_recent_memories = AsyncMock(return_value=[])
         store.search_documents = AsyncMock(return_value=[])
+        store.is_marked = AsyncMock(return_value=False)
+        store.set_marked = AsyncMock()
 
         agent = Agent(config, provider, registry, store)
         return agent
@@ -143,6 +145,8 @@ class TestToolResultType:
         store.save_message = AsyncMock()
         store.get_recent_memories = AsyncMock(return_value=[])
         store.search_documents = AsyncMock(return_value=[])
+        store.is_marked = AsyncMock(return_value=False)
+        store.set_marked = AsyncMock()
         store.ingest_document = AsyncMock(return_value=0)
         store.get_summary = AsyncMock(return_value=None)
         store.compact_messages = AsyncMock()

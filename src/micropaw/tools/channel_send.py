@@ -71,6 +71,11 @@ class ChannelSendTool(Tool):
         "required": ["channel", "message"],
     }
 
+    def needs_approval(self, args: dict[str, Any], context: ToolContext) -> str | None:
+        message = args.get("message", "")
+        more = f"\n... ({len(message) - 500:,} more characters)" if len(message) > 500 else ""
+        return f"Send to your {args.get('channel', '')} chat:\n{message[:500]}{more}"
+
     async def execute(self, args: dict[str, Any], context: ToolContext) -> str:
         global _send_count
 

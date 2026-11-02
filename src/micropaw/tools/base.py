@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -27,6 +28,13 @@ class ToolContext:
     allow_file_write: bool = False
     allow_web_browse: bool = True
     confirm_dangerous: bool = True
+    workspace: str = ""  # folder where writes need no approval; relative paths resolve here
+    # True once the conversation has read outside content (web, email, files, shell output).
+    # Shared with sub-agents, so a page read by a helper still counts.
+    marked: bool = False
+    # Asks the owner on the chat this request came from. None = nobody to ask (cron, heartbeat,
+    # background tasks), so anything that needs approval is refused there.
+    approve: Callable[[str, str], Awaitable[bool]] | None = None
 
 
 class Tool(ABC):
@@ -35,6 +43,15 @@ class Tool(ABC):
     name: str
     description: str
     parameters: dict[str, Any]
+    # Output comes from outside (web, email, files, commands) and may carry instructions
+    marks = False
+
+    def needs_approval(self, args: dict[str, Any], context: ToolContext) -> str | None:
+        """What to show the owner if this call needs a yes first, else None.
+
+        Built by code from the real arguments, never from the model's own words.
+        """
+        return None
 
     @abstractmethod
     async def execute(self, args: dict[str, Any], context: ToolContext) -> str:
@@ -70,3 +87,18 @@ class ToolRegistry:
     @property
     def names(self) -> list[str]:
         return list(self._tools.keys())
+
+
+async def run_tool(tool: Tool, args: dict[str, Any], context: ToolContext) -> str | ToolResult:
+    """Run one tool call with the approval gate. Every caller (agent, sub-agents) goes through here."""
+    if ask := tool.needs_approval(args, context):
+        if context.approve is None:
+            return f"Not done: {tool.name} needs the owner's approval and there is nobody to ask here."
+        if not await context.approve(tool.name, ask):
+            return f"Not done: the owner declined this {tool.name} call."
+    try:
+        result = await tool.execute(args, context)
+    finally:
+        if tool.marks:
+            context.marked = True
+    return result

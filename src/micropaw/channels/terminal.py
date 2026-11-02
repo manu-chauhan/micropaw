@@ -11,6 +11,7 @@ from typing import Any
 
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -240,6 +241,18 @@ class TerminalChannel(Channel):
 
     async def send_message(self, chat_id: str, text: str) -> None:
         self._print_response(text)
+
+    async def ask_owner(self, text: str, allow_always: bool) -> str:
+        """Ask on the console before a side effect. Returns "yes", "no" or "always"."""
+        console.print(Panel(escape(text), title="Approval needed", border_style="yellow"))
+        choices = "y = yes, n = no" + (", a = always" if allow_always else "")
+        try:
+            reply = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: console.input(f"[yellow]{choices} >[/yellow] "),
+            )
+        except (EOFError, KeyboardInterrupt):
+            return "no"
+        return {"y": "yes", "a": "always" if allow_always else "no"}.get(reply.strip().lower()[:1], "no")
 
     async def _run_shell(self, cmd: str) -> None:
         """Run a shell command and print output. Timeout after 30s."""

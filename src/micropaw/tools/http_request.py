@@ -16,6 +16,7 @@ MAX_REDIRECTS = 5
 
 class HttpRequestTool(Tool):
     name = "http_request"
+    marks = True
     description = "Make an HTTP request (GET, POST, PUT, DELETE) and return the response."
     parameters: dict[str, Any] = {
         "type": "object",
@@ -31,6 +32,16 @@ class HttpRequestTool(Tool):
         },
         "required": ["url"],
     }
+
+    def needs_approval(self, args: dict[str, Any], context: ToolContext) -> str | None:
+        """Anything but a plain GET changes something; after outside content, even a GET can carry data out."""
+        method = args.get("method", "GET").upper()
+        if method == "GET" and not context.marked:
+            return None
+        body = str(args.get("body") or "")
+        headers = ", ".join((args.get("headers") or {}).keys())
+        return (f"{method} {args.get('url', '')}" + (f"\nHeaders: {headers}" if headers else "")
+                + (f"\nBody: {body[:300]}" if body else ""))
 
     async def execute(self, args: dict[str, Any], context: ToolContext) -> str:
         url = args["url"]

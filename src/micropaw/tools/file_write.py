@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from micropaw.tools.base import Tool, ToolContext
-from micropaw.tools.path_security import validate_write_path
+from micropaw.tools.path_security import in_workspace, resolve_path, runs_code_later, validate_write_path
 
 MAX_CONTENT_SIZE = 10_000_000  # 10MB
 
@@ -23,20 +22,27 @@ class FileWriteTool(Tool):
         "required": ["path", "content"],
     }
 
+    def needs_approval(self, args: dict[str, Any], context: ToolContext) -> str | None:
+        if not context.allow_file_write:
+            return None  # execute() refuses anyway
+        path = resolve_path(args.get("path", ""), context.workspace)
+        if in_workspace(path, context.workspace) and not runs_code_later(path):
+            return None
+        return f"Write {len(args.get('content', '')):,} characters to:\n{path}"
+
     async def execute(self, args: dict[str, Any], context: ToolContext) -> str:
         if not context.allow_file_write:
             return "Error: File writing is not enabled. Ask the user to enable it in settings."
 
-        path_str = args["path"]
         content = args["content"]
+        path = resolve_path(args["path"], context.workspace)
 
-        if error := validate_write_path(path_str):
+        if error := validate_write_path(str(path)):
             return f"Error: {error}"
 
         if len(content) > MAX_CONTENT_SIZE:
             return f"Error: Content too large ({len(content):,} chars, max {MAX_CONTENT_SIZE:,})"
 
-        path = Path(path_str).resolve()
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
