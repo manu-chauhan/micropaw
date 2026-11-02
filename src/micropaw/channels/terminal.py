@@ -28,6 +28,9 @@ SLASH_COMMANDS = {
     "/usage": "Show token usage for this session",
     "/clear": "Clear the screen",
     "/config": "Show current config summary",
+    "/memory": "Show what MicroPaw remembers",
+    "/forget <key>": "Delete one remembered fact",
+    "/cron enable <id>": "Turn on a scheduled task the assistant created",
 }
 
 

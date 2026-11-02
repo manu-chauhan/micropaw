@@ -213,3 +213,34 @@ class TestStoredMark:
         await delegate.DelegateTool().execute({"task": "t", "mode": "background"}, ctx)
         await asyncio.sleep(0)
         assert seen["ctx"].approve is None and seen["ctx"].conversation_id.endswith(":bg")
+
+
+class TestOwnerCommandsAndAudit:
+    @pytest.mark.asyncio
+    async def test_memory_and_forget_handled_by_code(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        from micropaw.config import Config
+        from micropaw.gateway import Gateway
+        store = MemoryStore(str(tmp_path / "t.db"))
+        await store.init()
+        try:
+            await store.save_memory("color", "blue")
+            await store.save_memory("tip", "from a page", marked=True)
+            gw = Gateway(Config(), MagicMock(), MagicMock(), [])
+            gw.store = store
+            listing = await gw._owner_command("/memory")
+            assert "color: blue" in listing and "tip: from a page (saved after reading outside content)" in listing
+            assert await gw._owner_command("/forget color") == "Forgot: color"
+            assert "color" not in await gw._owner_command("/memory")
+        finally:
+            await store.close()
+
+    @pytest.mark.asyncio
+    async def test_every_call_and_decision_is_audited(self):
+        from micropaw.utils.audit import tail
+        await run_tool(_SideEffect(), {"x": "y" * 1000}, _ctx(approve=AsyncMock(return_value=False)))
+        await run_tool(_Reader(), {}, _ctx())
+        last_two = tail(2)
+        assert [e["outcome"] for e in last_two] == ["declined", "ok"]
+        assert last_two[0]["approval"] == "do the thing" and len(last_two[0]["args"]["x"]) < 400

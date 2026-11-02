@@ -437,11 +437,11 @@ class MemoryStore:
 
     async def get_all_memories(self, user_id: str = "_global") -> list[dict]:
         async with self.db.execute(
-            "SELECT key, value, tags FROM memories WHERE user_id = ? ORDER BY updated_at DESC LIMIT 100",
+            "SELECT key, value, tags, marked FROM memories WHERE user_id = ? ORDER BY updated_at DESC LIMIT 100",
             (user_id,),
         ) as cursor:
             rows = await cursor.fetchall()
-        return [{"key": r[0], "value": r[1], "tags": r[2]} for r in rows]
+        return [{"key": r[0], "value": r[1], "tags": r[2], "marked": bool(r[3])} for r in rows]
 
     async def any_marked_memory(self, keys: list[str], user_id: str = "_global") -> bool:
         """True if any of these memories was saved by a conversation that had read outside content."""

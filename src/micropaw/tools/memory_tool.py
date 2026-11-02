@@ -82,7 +82,7 @@ class MemoryTool(Tool):
             memories = await _store.get_all_memories(user_id=user_id)
             if not memories:
                 return "No memories stored yet."
-            if await _store.any_marked_memory([m["key"] for m in memories], user_id=user_id):
+            if any(m.get("marked") for m in memories):
                 context.marked = True
             lines = [f"All memories ({len(memories)}):"]
             for m in memories:

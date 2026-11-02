@@ -193,6 +193,7 @@ class _Approvals:
 
 
 _CRON_CMD = re.compile(r"^/cron\s+(enable|disable)\s+#?(\d+)$", re.IGNORECASE)
+_FORGET_CMD = re.compile(r"^/forget\s+(.+)$", re.IGNORECASE)
 
 
 class Gateway:
@@ -407,7 +408,18 @@ class Gateway:
 
     async def _owner_command(self, text: str) -> str | None:
         """Commands the owner types that must not go through the model."""
-        m = _CRON_CMD.match(text.strip())
+        text = text.strip()
+        if text.lower() == "/memory" and self.store:
+            memories = await self.store.get_all_memories()
+            if not memories:
+                return "Nothing remembered yet."
+            lines = [f"- {m['key']}: {m['value']}" + (" (saved after reading outside content)" if m["marked"] else "")
+                     for m in memories]
+            return "What I remember (remove one with /forget <key>):\n" + "\n".join(lines)
+        if (m := _FORGET_CMD.match(text)) and self.store:
+            key = m.group(1).strip()
+            return f"Forgot: {key}" if await self.store.delete_memory(key) else f"Nothing saved as: {key}"
+        m = _CRON_CMD.match(text)
         if not m or not hasattr(self, "_scheduler"):
             return None
         action, job_id = m.group(1).lower(), int(m.group(2))

@@ -456,6 +456,24 @@ def allow(platform, user_id, remove):
     console.print(f"[green]{platform} allowed IDs:[/green] {', '.join(ids) or 'none'}")
 
 
+@main.command(name="log")
+@click.option("-n", "count", default=30, help="How many recent entries to show.")
+def show_log(count):
+    """Show recent tool calls and approvals (the audit log)."""
+    from micropaw.utils.audit import AUDIT_FILE, tail
+    entries = tail(count)
+    if not entries:
+        console.print(f"[dim]No entries yet in {AUDIT_FILE}.[/dim]")
+        return
+    table = Table(title="Recent tool calls")
+    for col in ("Time", "Tool", "Outcome", "Details"):
+        table.add_column(col)
+    for e in entries:
+        details = e.get("approval") or ", ".join(f"{k}={v}" for k, v in e.get("args", {}).items())
+        table.add_row(e["ts"][5:16].replace("T", " "), e["tool"], e["outcome"], details[:120])
+    console.print(table)
+
+
 @main.group()
 def cron():
     """Manage scheduled tasks."""

@@ -91,14 +91,23 @@ class ToolRegistry:
 
 async def run_tool(tool: Tool, args: dict[str, Any], context: ToolContext) -> str | ToolResult:
     """Run one tool call with the approval gate. Every caller (agent, sub-agents) goes through here."""
-    if ask := tool.needs_approval(args, context):
+    from micropaw.utils.audit import record
+
+    ask = tool.needs_approval(args, context) or ""
+    if ask:
         if context.approve is None:
+            record(tool.name, args, "refused", context.conversation_id, ask)
             return f"Not done: {tool.name} needs the owner's approval and there is nobody to ask here."
         if not await context.approve(tool.name, ask):
+            record(tool.name, args, "declined", context.conversation_id, ask)
             return f"Not done: the owner declined this {tool.name} call."
+    outcome = "error"
     try:
         result = await tool.execute(args, context)
+        text = result.text if isinstance(result, ToolResult) else result
+        outcome = "error" if text.startswith(("Error", "Tool error")) else "ok"
+        return result
     finally:
         if tool.marks:
             context.marked = True
-    return result
+        record(tool.name, args, outcome, context.conversation_id, ask)
