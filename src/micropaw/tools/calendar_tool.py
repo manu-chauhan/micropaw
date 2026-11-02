@@ -174,6 +174,7 @@ async def _search_events(token: str, args: dict) -> str:
 
 class CalendarTool(Tool):
     name = "calendar"
+    marks = True  # event titles and descriptions come from other people
     description = (
         "Manage Google Calendar. Actions: 'authorize' (one-time Google sign-in), "
         "'list' (events by date range), 'create' (new event), "
@@ -226,6 +227,15 @@ class CalendarTool(Tool):
         },
         "required": ["action"],
     }
+
+    def needs_approval(self, args: dict[str, Any], context: ToolContext) -> str | None:
+        action = args.get("action")
+        if action == "delete":
+            return f"Delete calendar event {args.get('event_id', '')}"
+        if action == "create":
+            when = args.get("start_time") or args.get("start_date", "")
+            return f"Create calendar event: {args.get('title', '')}\nWhen: {when}"
+        return None
 
     async def execute(self, args: dict[str, Any], context: ToolContext) -> str:
         action = args["action"]

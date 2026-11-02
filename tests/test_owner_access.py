@@ -168,3 +168,39 @@ class TestWhatsAppSecretRequired:
         from micropaw.channels.whatsapp import WhatsAppChannel
         with pytest.raises(RuntimeError, match="app_secret"):
             await WhatsAppChannel(token="t", phone_id="p").start()
+
+
+class TestHttpRequestPinning:
+    @pytest.mark.asyncio
+    async def test_connection_to_private_address_refused_even_if_check_passed(self, monkeypatch):
+        """Simulates DNS rebinding: the name check passes, but the socket lands on 127.0.0.1."""
+        import http.server
+        import threading
+
+        import micropaw.tools.http_request as http_mod
+
+        class Secret(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"INTERNAL SECRET")
+
+            def log_message(self, *a):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Secret)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        for var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+            monkeypatch.delenv(var, raising=False)
+
+        async def passes(url):
+            return None
+
+        monkeypatch.setattr(http_mod, "validate_url", passes)
+        try:
+            from micropaw.tools.base import ToolContext
+            ctx = ToolContext(conversation_id="c", user_id="u", platform="terminal")
+            result = await http_mod.HttpRequestTool().execute({"url": f"http://127.0.0.1:{server.server_port}/"}, ctx)
+            assert "private address" in result and "INTERNAL SECRET" not in result
+        finally:
+            server.shutdown()

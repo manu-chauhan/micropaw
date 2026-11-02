@@ -574,7 +574,7 @@ class Gateway:
             except ImportError:
                 logger.warning(
                     "Embeddings: local selected but fastembed not installed; "
-                    "falling back to disabled. Install with: pip install fastembed"
+                    "falling back to disabled. Install with: pip install 'micropaw[embeddings]'"
                 )
                 return NullEmbedding()
             return LocalEmbedding(cfg.model or _DEFAULT_LOCAL_MODEL)

@@ -176,7 +176,7 @@ def run_setup() -> None:
                     config.embedding.model = "nomic-ai/nomic-embed-text-v1.5"
                     if not _has_fe:
                         console.print("[yellow]Warning: fastembed not installed. "
-                                      "Install with: pip install fastembed[/yellow]")
+                                      "Install with: pip install 'micropaw\\[embeddings]'[/yellow]")
                         console.print("[dim]Vector search will be disabled until installed.[/dim]")
                 elif emb_choice == "openai":
                     config.embedding.model = "text-embedding-3-small"

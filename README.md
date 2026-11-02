@@ -539,7 +539,7 @@ pip install "micropaw[slack]"         # Slack (Socket Mode)
 pip install "micropaw[whatsapp]"      # WhatsApp (aiohttp webhook)
 pip install "micropaw[browser]"       # Playwright browser automation
 pip install "micropaw[pdf]"           # PDF reading
-pip install "micropaw[embeddings]"    # Local fastembed/ONNX (included in core deps)
+pip install "micropaw[embeddings]"    # Offline embeddings without Ollama (fastembed/ONNX, ~175 MB)
 pip install "micropaw[all]"           # Everything
 ```
 
