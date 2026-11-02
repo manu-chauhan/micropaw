@@ -53,19 +53,29 @@ class OllamaProvider(AIProvider):
     def _build_body(self, messages: list[Message], tools: list[ToolDef] | None = None, stream: bool = False) -> dict:
         if not self._tools_supported:
             tools = None
-        api_messages = []
-        for msg in messages:
+        api_messages: list[dict] = []
+        tool_names = {tc.id: tc.name for m in messages for tc in m.tool_calls}
+        pending: list[str] = []  # images returned by tools, sent as a user message after the results
+        for i, msg in enumerate(messages):
+            images = [base64.b64encode(m.data).decode() for m in msg.media if m.type == "image"]
             if msg.role == "tool":
-                api_messages.append({"role": "tool", "content": msg.content})
-            elif msg.media:
-                # Ollama supports images via base64 in the "images" field
-                images = [base64.b64encode(m.data).decode() for m in msg.media if m.type == "image"]
-                entry: dict = {"role": msg.role, "content": msg.content}
-                if images:
-                    entry["images"] = images
+                entry: dict = {"role": "tool", "content": msg.content}
+                if msg.tool_call_id in tool_names:
+                    entry["tool_name"] = tool_names[msg.tool_call_id]
                 api_messages.append(entry)
-            else:
-                api_messages.append({"role": msg.role, "content": msg.content})
+                pending += images
+                if pending and (i + 1 == len(messages) or messages[i + 1].role != "tool"):
+                    api_messages.append({"role": "user", "content": "Image returned by the tool.", "images": pending})
+                    pending = []
+                continue
+            entry = {"role": msg.role, "content": msg.content}
+            if msg.role == "assistant" and msg.tool_calls:
+                entry["tool_calls"] = [
+                    {"function": {"name": tc.name, "arguments": tc.arguments}} for tc in msg.tool_calls
+                ]
+            if images:
+                entry["images"] = images
+            api_messages.append(entry)
 
         body: dict = {
             "model": self.model,
