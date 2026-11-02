@@ -4,6 +4,37 @@ All entries in reverse chronological order. LOC = source lines (excluding tests/
 
 ---
 
+### 2026-11-01: v0.3.0 approvals, any-model roles, MCP, photos and voice
+
+Upgrade note: actions that change things now ask you first (reply `yes <id>`). Shell runs and relative file writes land in `~/micropaw`. fastembed is no longer installed by default: Ollama or OpenAI embeddings work as before, or `pip install "micropaw[embeddings]"` for offline ONNX embeddings.
+
+Security:
+- Approvals before side effects: host shell commands, email send, channel_send, calendar create and delete, HTTP other than a plain GET, and file writes outside the workspace or to build and CI files. Asks are single-use, tied to their chat and expire after 10 minutes. `always <id>` saves an exact-match rule. Cron, heartbeat and background sub-agents have nobody to ask, so these are refused there. This replaces `confirm_dangerous`, whose warning could never be satisfied.
+- Outside-content mark: reading web pages, email, calendar, files, PDFs, images, command output or MCP results marks the conversation (stored; `/new` clears it). While marked, saved rules don't apply and any HTTP request asks. Memories saved while marked carry the mark.
+- http_request checks the address it actually connected to (DNS rebinding), caps responses at 5 MB, never forwards headers to another site and won't re-send a POST across sites.
+- Audit log of every tool call and approval in `~/.micropaw/audit.jsonl`; `paw log` shows it.
+- delegate no longer takes a model-written system prompt; background sub-agents get their own browser session.
+
+Features:
+- Per-job models, local or cloud: `models.fast` (summaries, sub-agents) and `models.vision` (photos), as `provider:model`. Presets for lmstudio, llamacpp, vllm, openrouter, groq, deepseek, mistral, together.
+- MCP client for stdio servers (REA, GhidraMCP, blender-mcp, Godot and others). Servers never see MicroPaw's keys; calls ask unless allowed.
+- Telegram photos, voice notes and audio. Voice is transcribed by any OpenAI-style endpoint (`voice.stt`), including a local Whisper server. Photos go to the main model or are described by the vision model.
+- `/memory` and `/forget <key>`.
+- Claude: default model `claude-sonnet-5-5` (`claude-sonnet-4-20250514` was retired on 15 Jun 2026), prompt caching, thinking blocks sent back within a turn, effort setting.
+
+Fixes:
+- Ollama now sends assistant tool calls back, so local models stop repeating tool calls. Gemini: user images, parallel tool results in one turn, system prompts joined, thought signatures kept. OpenAI: `max_completion_tokens` for api.openai.com; images from tools reach OpenAI, Gemini and Ollama.
+- Calendar: all-day events end the next day; timed events use your local timezone.
+- WhatsApp: webhook answered at once and messages de-duplicated, so retries don't run twice.
+- Heartbeat and CLI-created jobs reach you on a headless `paw start`.
+- Telegram commands (`/memory`, `/cron enable`) were filtered out before reaching MicroPaw.
+- The system prompt is stable and no longer lists tools twice; date and time are given every turn.
+- Core install 24 MB, down from 198 MB.
+
+Tests: 519 passed.
+
+---
+
 ### 2026-10-27: v0.2.7 security hotfix
 
 Upgrade note: MicroPaw now answers only accounts you list. After upgrading, message your bot once; it replies with your ID. Then run `paw allow telegram <id>` (or discord, slack, whatsapp). WhatsApp now refuses to start without `app_secret`. Jobs created before this release stay enabled, so check them once with `paw cron list` and remove any you don't recognise.

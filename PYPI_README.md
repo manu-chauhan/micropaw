@@ -131,6 +131,12 @@ MicroPaw:                "Revenue grew 23% in Q4, driven by..."
 
 - **Owner-only by default**: only accounts you list can talk to it. A stranger is told their ID once and refused. Add your own accounts with `paw allow telegram <id>`.
 
+- **Asks before it acts**: shell commands, sending email or messages, calendar changes, HTTP calls that change something, and writes outside your workspace (`~/micropaw`) wait for your yes. On Telegram, Discord, Slack and WhatsApp you reply `yes <id>`; the terminal asks inline. `always <id>` remembers that exact action.
+
+- **Knows when it has read something risky**: once a conversation has read a web page, an email, a file, command output or an MCP tool result, saved "always" rules stop applying and every outgoing action asks again, so a page can't quietly make it send your data somewhere. Only `/new` clears this.
+
+- **Audit log**: every tool call and every approval goes to `~/.micropaw/audit.jsonl`. See it with `paw log`.
+
 - **No hidden standing tasks**: recurring tasks the assistant schedules start paused until you reply `/cron enable <id>`.
 
 - **Shell hardening**: commands run without your API keys or tokens in their environment, and 40+ patterns (reverse shells, fork bombs, `rm -rf /`) are blocked. The blocklist is a speed bump, not a sandbox, so shell stays off unless you turn it on.
@@ -284,11 +290,53 @@ Disable any tool:
 | Provider | Type | Streaming | Tools | Vision |
 |----------|------|-----------|-------|--------|
 | **Claude** | Cloud | Yes | Yes | Yes |
-| **GPT-4o** | Cloud | Yes | Yes | Yes |
+| **OpenAI** (and any OpenAI-compatible server) | Cloud or local | Yes | Yes | Yes |
 | **Gemini** | Cloud | Yes | Yes | Yes |
 | **Ollama** | Local | Yes | Yes | Yes |
 
 Override models: `CLAUDE_MODEL`, `OPENAI_MODEL`, `GEMINI_MODEL`, `OLLAMA_MODEL`
+
+---
+
+## Any Model, Local or Cloud
+
+Every feature works with a fully local setup, a cloud model, or a mix you choose.
+
+| Job | Setting | Local example | Cloud example |
+|-----|---------|---------------|---------------|
+| Chat and tools | `provider` | `ollama` | `claude` (default model `claude-sonnet-5-5`) |
+| Summaries, sub-agents | `models.fast` | `ollama:qwen3.6` | `claude:claude-haiku-5-5` |
+| Photos | `models.vision` | `ollama:gemma4:e4b` | `openai:<model>` |
+| Voice notes | `voice.stt` | `local:<model>` (a whisper.cpp or faster-whisper server at `voice.stt_url`) | `groq:whisper-large-v3-turbo` |
+| Search memory | `embedding` | Ollama `nomic-embed-text` | OpenAI embeddings |
+
+Model settings are `provider:model`. Besides `claude`, `openai`, `gemini` and `ollama`, these names work without extra setup: `lmstudio`, `llamacpp`, `vllm` (local, no key) and `openrouter`, `groq`, `deepseek`, `mistral`, `together` (key from `<NAME>_API_KEY`). A text-only local model can still use photos: set `models.vision` and the vision model describes them first.
+
+```json
+{
+  "provider": "ollama",
+  "models": { "fast": "ollama:qwen3.6", "vision": "ollama:gemma4:e4b" },
+  "voice": { "stt": "local:whisper-small", "stt_url": "http://localhost:8000" }
+}
+```
+
+---
+
+## MCP Servers
+
+Add any [Model Context Protocol](https://modelcontextprotocol.io) server that runs over stdio, and its tools become MicroPaw tools. This is how you plug in reverse-engineering tools (REA, GhidraMCP, jadx), game engines (Godot, Unity) or Blender without MicroPaw carrying that code.
+
+```json
+{
+  "mcp_servers": {
+    "blender": { "command": "uvx", "args": ["blender-mcp"], "allow": ["get_scene_info"] }
+  }
+}
+```
+
+- Each server gets your environment minus API keys, tokens and secrets, plus only the `env` you list.
+- Every call asks you first, except tool names in `allow`, and even those ask once the conversation has read outside content.
+- Pin versions in `args` (for example `package@1.2.3`) and install servers only from their official repos.
 
 ---
 
@@ -394,12 +442,12 @@ MicroPaw > [delegate] "Research quantum computing breakthroughs"
 - **Sub-agent isolation** — inherits tools but `delegate` always excluded (no recursive spawning)
 - **Shell blocking** — 40+ patterns block reverse shells, `rm -rf /`, env leaks, eval/exec
 - **Path security** — blocks `/proc`, `/sys`, `.ssh/`, `.env`, symlinks, path traversal
-- **SSRF protection** — blocks localhost, private IPs, metadata endpoints, DNS rebinding
+- **SSRF protection**: blocks every non-public address (including 100.64.0.0/10), checks the address actually connected to, so DNS rebinding fails, and re-checks the browser after redirects
 - **Auth** — timing-safe `secrets.compare_digest()` for all token comparisons
 - **WebSocket limits** — 1MB max frame, 50 max headers, outbound truncation
 - **Rate limiting** — per-user sliding window + burst detection
 - **Config protection** — 0600 permissions, world-readable warning on load
-- **Cross-origin safety** — strips Authorization headers on host change
+- **Cross-origin safety**: a redirect to another site never gets your headers, and a POST is never re-sent to another site
 - **No telemetry** — nothing phones home, ever
 
 ---
@@ -420,12 +468,13 @@ MicroPaw > [delegate] "Research quantum computing breakthroughs"
 | `paw cron add "task" --once 2h` | Schedule a one-shot reminder |
 | `paw cron list` | List all scheduled tasks |
 | `paw cron remove <id>` | Remove a scheduled task |
+| `paw log` | Recent tool calls and approvals (audit log) |
 | `paw cron enable <id>` | Turn on a task the assistant scheduled (`--off` to pause) |
 | `paw allow <channel> <id>` | Let one of your accounts use the assistant (`--remove` to revoke) |
 | `paw export` | Export conversations (JSON/Markdown) |
 | `paw reset` | Delete all config and data |
 
-Terminal commands: `/help`, `/new` (fresh conversation, this channel), `/rejoin` (back to shared), `/new all` (fresh everywhere), `/tools`, `/usage`, `/clear`, `/config`, `!cmd` (shell escape), `quit`
+Terminal commands: `/help`, `/new` (fresh conversation, this channel), `/rejoin` (back to shared), `/new all` (fresh everywhere), `/tools`, `/usage`, `/clear`, `/config`, `/memory` (what it remembers), `/forget <key>`, `/cron enable <id>`, `!cmd` (shell escape), `quit`
 
 ---
 
