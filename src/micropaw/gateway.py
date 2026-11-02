@@ -275,6 +275,7 @@ class Gateway:
         self.agent = Agent(self.config, self.provider, self.registry, self.store)
         self.agent.approver = self._approve
         self.agent.fast_provider = self.fast_provider
+        self.agent.vision_provider = self.vision_provider
 
         # Wire handler callbacks to all channels
         terminal_coro = None
@@ -373,15 +374,15 @@ class Gateway:
                 return ch
         return None
 
-    def _validate(self, text: str, user_id: str, platform: str = "") -> str | None:
+    def _validate(self, text: str, user_id: str, platform: str = "", has_media: bool = False) -> str | None:
         if not self.agent:
             return "Agent not initialized."
         # Backstop: channels check access before replying, but nothing reaches the agent without it
         if not self._access.is_allowed(platform, user_id):
             return self._access.check(platform, user_id) or ""
         # An empty user turn is rejected by Claude and would break the shared conversation
-        if not text.strip():
-            return "I can only read text messages for now."
+        if not text.strip() and not has_media:
+            return "I can only read text, photos and voice notes."
         # Internal platforms (heartbeat, system) bypass rate limiting
         if platform not in self._INTERNAL_PLATFORMS:
             if not self._rate_limiter.check(user_id):
@@ -428,17 +429,19 @@ class Gateway:
             return f"Cron job #{job_id} not found."
         return f"Cron job #{job_id} {action}d: \"{job['description']}\""
 
-    async def _handle_message(self, text: str, user_id: str, platform: str, channel_id: str | None) -> str:
+    async def _handle_message(
+        self, text: str, user_id: str, platform: str, channel_id: str | None, media: list | None = None,
+    ) -> str:
         if (answer := self._approval_answer(text, user_id, platform, channel_id)) is not None:
             return answer
-        err = self._validate(text, user_id, platform)
+        err = self._validate(text, user_id, platform, bool(media))
         if err is not None:
             return err
         if (reply := await self._owner_command(text)) is not None:
             return reply
         self._record_channel_activity(platform, user_id, channel_id)
         logger.debug("[%s] %s: %s", platform, user_id, text[:80])
-        response = await self.agent.handle_message(text, user_id, platform, channel_id)
+        response = await self.agent.handle_message(text, user_id, platform, channel_id, media=media)
         self._track_usage()
         logger.debug("[%s] MicroPaw: %s", platform, response[:80])
         return response
@@ -446,17 +449,20 @@ class Gateway:
     async def _handle_message_stream(
         self, text: str, user_id: str, platform: str, channel_id: str | None,
         on_chunk=None,
+        media: list | None = None,
     ) -> str:
         if (answer := self._approval_answer(text, user_id, platform, channel_id)) is not None:
             return answer
-        err = self._validate(text, user_id, platform)
+        err = self._validate(text, user_id, platform, bool(media))
         if err is not None:
             return err
         if (reply := await self._owner_command(text)) is not None:
             return reply
         self._record_channel_activity(platform, user_id, channel_id)
         logger.debug("[%s] %s: %s", platform, user_id, text[:80])
-        response = await self.agent.handle_message_stream(text, user_id, platform, channel_id, on_chunk=on_chunk)
+        response = await self.agent.handle_message_stream(
+            text, user_id, platform, channel_id, on_chunk=on_chunk, media=media,
+        )
         self._track_usage()
         logger.debug("[%s] MicroPaw: %s", platform, response[:80])
         return response

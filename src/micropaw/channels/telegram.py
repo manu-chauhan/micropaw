@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from micropaw.channels.base import Channel, chunk_text, stream_response
+from micropaw.providers.base import MediaItem
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,8 @@ class TelegramChannel(Channel):
         self._app = Application.builder().token(self.token).concurrent_updates(True).build()
 
         async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-            if not update.message or not update.message.text:
+            msg = update.message
+            if not msg or not (msg.text or msg.caption or msg.photo or msg.voice or msg.audio):
                 return
 
             chat = update.message.chat
@@ -49,7 +51,7 @@ class TelegramChannel(Channel):
                 if denied and not is_group:
                     await update.message.reply_text(denied)
                 return
-            text = update.message.text
+            text = msg.text or msg.caption or ""
 
             if is_group:
                 bot_un = self._bot_username
@@ -62,6 +64,7 @@ class TelegramChannel(Channel):
                     text = text.replace(f"@{bot_un}", "").strip()
 
             channel_id = str(chat.id) if is_group else None
+            media = await _download_media(msg)
 
             async def send_typing() -> None:
                 await context.bot.send_chat_action(chat_id=chat.id, action="typing")
@@ -78,19 +81,20 @@ class TelegramChannel(Channel):
                         chat_id=chat.id, message_id=placeholder.message_id, text=t,
                     ),
                     send_fn=lambda t: context.bot.send_message(chat_id=chat.id, text=t),
-                    max_msg_len=MAX_MSG_LEN, edit_interval=STREAM_EDIT_INTERVAL,
+                    max_msg_len=MAX_MSG_LEN, edit_interval=STREAM_EDIT_INTERVAL, media=media,
                 )
 
             elif self._handler:
                 await send_typing()
-                response = await self._handler(text, user_id, "telegram", channel_id)
+                response = await self._handler(text, user_id, "telegram", channel_id, media=media)
                 for chunk in chunk_text(response, MAX_MSG_LEN):
                     await context.bot.send_message(
                         chat_id=chat.id, text=chunk,
                         reply_to_message_id=update.message.message_id if is_group else None,
                     )
 
-        self._app.add_handler(TGMsgHandler(filters.TEXT & ~filters.COMMAND, on_message))
+        # Commands too: /memory, /forget and /cron enable are handled by MicroPaw itself
+        self._app.add_handler(TGMsgHandler(filters.TEXT | filters.PHOTO | filters.VOICE | filters.AUDIO, on_message))
 
         logger.info("Telegram channel starting...")
         await self._app.initialize()
@@ -120,3 +124,17 @@ class TelegramChannel(Channel):
                 return
             for chunk in chunk_text(text, MAX_MSG_LEN):
                 await self._app.bot.send_message(chat_id=tid, text=chunk)
+
+
+async def _download_media(msg: Any) -> list[MediaItem]:
+    """The largest version of a photo, and voice notes or audio files (Telegram caps bot downloads at 20 MB)."""
+    items: list[MediaItem] = []
+    if msg.photo:
+        file = await msg.photo[-1].get_file()
+        items.append(MediaItem(type="image", data=bytes(await file.download_as_bytearray()), mime_type="image/jpeg"))
+    clip = msg.voice or msg.audio
+    if clip:
+        file = await clip.get_file()
+        data = bytes(await file.download_as_bytearray())
+        items.append(MediaItem(type="audio", data=data, mime_type=clip.mime_type or "audio/ogg"))
+    return items

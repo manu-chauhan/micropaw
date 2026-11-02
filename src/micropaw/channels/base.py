@@ -9,8 +9,9 @@ from collections.abc import Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 
-MessageHandler = Callable[[str, str, str, str | None], Awaitable[str]]
-StreamHandler = Callable[[str, str, str, str | None, Callable[[str], Awaitable[None]] | None], Awaitable[str]]
+# (text, user_id, platform, channel_id, ...) -> reply. Both also take media=[MediaItem] (photos, voice).
+MessageHandler = Callable[..., Awaitable[str]]
+StreamHandler = Callable[..., Awaitable[str]]
 # (platform, user_id) -> None if allowed, else the reply for the sender ("" = stay silent)
 AccessCheck = Callable[[str, str], str | None]
 
@@ -61,6 +62,7 @@ async def stream_response(
     send_fn: Callable[[str], Awaitable[None]],
     max_msg_len: int,
     edit_interval: float,
+    media: list | None = None,
 ) -> None:
     """Handle streaming: accumulate chunks with throttled edits, then finalize."""
     accumulated = ""
@@ -77,7 +79,7 @@ async def stream_response(
             except Exception as e:
                 logger.debug("%s stream edit failed: %s", platform, e)
 
-    response = await handler(text, user_id, platform, channel_id, on_chunk)
+    response = await handler(text, user_id, platform, channel_id, on_chunk, media=media)
 
     for i, part in enumerate(chunk_text(response, max_msg_len)):
         try:

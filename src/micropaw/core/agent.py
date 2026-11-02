@@ -15,7 +15,7 @@ from micropaw.config import Config
 from micropaw.core.context import KEEP_RECENT, ContextManager
 from micropaw.core.conversation import ConversationManager
 from micropaw.memory.store import MemoryStore
-from micropaw.providers.base import AIProvider, AIResponse, Message
+from micropaw.providers.base import AIProvider, AIResponse, MediaItem, Message
 from micropaw.tools.base import ToolContext, ToolRegistry, ToolResult, run_tool
 
 logger = logging.getLogger(__name__)
@@ -74,6 +74,7 @@ class Agent:
         self.max_tool_iterations = config.context.max_tool_iterations
         self.approver: Approver | None = None
         self.fast_provider: AIProvider | None = None  # summaries; None = main provider
+        self.vision_provider: AIProvider | None = None  # describes photos when set
         self.last_usage: dict[str, int] = {"input": 0, "output": 0}
         self.session_usage: dict[str, int] = {"input": 0, "output": 0}
         self.message_count: int = 0
@@ -216,6 +217,7 @@ class Agent:
         platform: str,
         channel_id: str | None = None,
         send_typing: Callable[[], Awaitable[None]] | None = None,
+        images: list[MediaItem] | None = None,
     ) -> tuple[str, list[Message], bool]:
         """Load history and context. Returns (conv_id, messages, conversation already marked)."""
         await _safe_typing(send_typing)
@@ -244,7 +246,7 @@ class Agent:
             summary = new_summary
         turns = [m for m in messages if m.role != "system"]
         context = self._context_block(memories, docs, summary)
-        turns[-1] = Message(role="user", content=f"{context}\n\n{text}")
+        turns[-1] = Message(role="user", content=f"{context}\n\n{text}", media=images or [])
 
         await self.conversations.save_message(conv_id, Message(role="user", content=text))
         return conv_id, [system, *turns], marked
@@ -264,9 +266,10 @@ class Agent:
         platform: str,
         channel_id: str | None = None,
         send_typing: Callable[[], Awaitable[None]] | None = None,
+        media: list[MediaItem] | None = None,
     ) -> str:
         """Process a message and return the response text (non-streaming)."""
-        return await self._run(text, user_id, platform, channel_id, send_typing, None)
+        return await self._run(text, user_id, platform, channel_id, send_typing, None, media)
 
     async def handle_message_stream(
         self,
@@ -276,9 +279,33 @@ class Agent:
         channel_id: str | None = None,
         send_typing: Callable[[], Awaitable[None]] | None = None,
         on_chunk: Callable[[str], Awaitable[None]] | None = None,
+        media: list[MediaItem] | None = None,
     ) -> str:
         """Process a message with streaming. Streams text via on_chunk callback."""
-        return await self._run(text, user_id, platform, channel_id, send_typing, on_chunk or _no_chunk)
+        return await self._run(text, user_id, platform, channel_id, send_typing, on_chunk or _no_chunk, media)
+
+    async def _read_media(self, text: str, media: list[MediaItem]) -> tuple[str, list[MediaItem]]:
+        """Voice notes become text. Photos go to the model as images, or are described first by
+        the vision model when one is set (so a text-only local model can still use them)."""
+        from micropaw.utils.voice import transcribe
+
+        images = [m for m in media if m.type == "image"]
+        for clip in (m for m in media if m.type == "audio"):
+            heard = await transcribe(clip.data, clip.mime_type, self.config)
+            if heard:
+                text = f"{text}\n(voice note) {heard}".strip()
+        if images and self.vision_provider:
+            try:
+                seen = await self.vision_provider.chat([Message(
+                    role="user", media=images,
+                    content="Describe these images in detail, including any text in them, for an assistant "
+                            "that cannot see them.",
+                )])
+                text = f"{text}\n(photo, described by the vision model) {seen.content}".strip()
+                images = []
+            except Exception as e:
+                logger.warning("Vision model failed, sending the photo to the main model: %s", e)
+        return text, images
 
     async def _call(
         self, messages: list[Message], tool_defs: list, on_chunk: Callable[[str], Awaitable[None]] | None,
@@ -301,15 +328,23 @@ class Agent:
         channel_id: str | None,
         send_typing: Callable[[], Awaitable[None]] | None,
         on_chunk: Callable[[str], Awaitable[None]] | None,
+        media: list[MediaItem] | None = None,
     ) -> str:
         """One user turn. All per-turn state lives here, so chats running at once don't mix."""
+        images: list[MediaItem] = []
+        if media:
+            text, images = await self._read_media(text, media)
+            if not text and not images:
+                return ("I got a voice note but can't transcribe it: speech-to-text isn't set up. "
+                        "Set voice.stt in the config, for example 'local:whisper' with a local Whisper server.")
+            text = text or "(sent a photo)"
         from micropaw.tools.channel_send import reset_send_count
         reset_send_count()
         self.message_count += 1
         usage = {"input": 0, "output": 0}
         cache: dict[tuple, str | ToolResult] = {}
 
-        conv_id, messages, was_marked = await self._prepare(text, user_id, platform, channel_id, send_typing)
+        conv_id, messages, was_marked = await self._prepare(text, user_id, platform, channel_id, send_typing, images)
         tool_defs = self.registry.to_tool_defs()
         ctx = self._build_tool_context(conv_id, user_id, platform, channel_id)
         ctx.marked = was_marked

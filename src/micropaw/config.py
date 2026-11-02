@@ -181,6 +181,18 @@ class SearchConfig(BaseModel):
     searxng_url: str = ""  # self-hosted SearXNG URL, e.g. "http://localhost:8888"
 
 
+class VoiceConfig(BaseModel):
+    """Speech-to-text for voice notes, via any OpenAI-style /v1/audio/transcriptions endpoint.
+
+    stt is "openai:<model>", a hosted preset ("groq:whisper-large-v3-turbo"), or "local:<model>"
+    for a server on your machine at stt_url (e.g. a whisper.cpp or faster-whisper server).
+    Empty = voice notes are not transcribed.
+    """
+
+    stt: str = ""
+    stt_url: str = "http://localhost:8000"
+
+
 class SchedulerConfig(BaseModel):
     heartbeat_interval: int = 1800  # seconds (30 minutes)
     max_jobs: int = 50
@@ -220,6 +232,7 @@ class Config(BaseModel):
     scheduler: SchedulerConfig = SchedulerConfig()
     google: GoogleConfig = GoogleConfig()
     models: ModelsConfig = ModelsConfig()
+    voice: VoiceConfig = VoiceConfig()
     fallback_providers: list[str] = []
 
 
