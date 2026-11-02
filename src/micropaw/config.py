@@ -75,6 +75,17 @@ class ModelsConfig(BaseModel):
     vision: str = ""  # images, for when the main model can't see
 
 
+class MCPServerConfig(BaseModel):
+    """An MCP server MicroPaw starts as a child process. Pin versions in args (pkg@1.2.3)."""
+
+    command: str              # e.g. "npx", "uvx", "python"
+    args: list[str] = []
+    env: dict[str, str] = {}  # only these are added; MicroPaw's own keys are never passed on
+    allow: list[str] = []     # tool names that run without asking (until outside content is read)
+    timeout: float = 300.0    # seconds per call; decompiling can be slow
+    enabled: bool = True
+
+
 class ProviderConfig(BaseModel):
     claude: ClaudeConfig = ClaudeConfig()
     openai: OpenAIConfig = OpenAIConfig()
@@ -233,6 +244,7 @@ class Config(BaseModel):
     google: GoogleConfig = GoogleConfig()
     models: ModelsConfig = ModelsConfig()
     voice: VoiceConfig = VoiceConfig()
+    mcp_servers: dict[str, MCPServerConfig] = {}
     fallback_providers: list[str] = []
 
 

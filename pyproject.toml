@@ -82,6 +82,7 @@ select = ["E", "F", "I", "N", "W", "UP"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/micropaw/channels/webchat.py" = ["E501"]  # embedded minified HTML/CSS/JS
+"tests/test_mcp.py" = ["E501"]  # embedded fake MCP server script
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

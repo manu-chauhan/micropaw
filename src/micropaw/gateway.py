@@ -271,6 +271,14 @@ class Gateway:
         from micropaw.tools.channel_send import set_channel_send_deps
         set_channel_send_deps(self._bus)
 
+        # MCP servers add their tools before the agent sees the registry
+        from micropaw.mcp import start_servers
+        self._mcp_servers, mcp_tools = await start_servers(self.config.mcp_servers)
+        disabled = set(self.config.permissions.disabled_tools)
+        for tool in mcp_tools:
+            if tool.name not in disabled:
+                self.registry.register(tool)
+
         # Init agent
         self.agent = Agent(self.config, self.provider, self.registry, self.store)
         self.agent.approver = self._approve
@@ -648,6 +656,9 @@ class Gateway:
         if hasattr(self, "_bus"):
             self._bus.close()
         await self._cancel_task(getattr(self, "_bus_task", None))
+
+        for server in getattr(self, "_mcp_servers", []):
+            await server.close()
 
         from micropaw.tools.channel_send import cleanup as cleanup_channel_send
         cleanup_channel_send()
