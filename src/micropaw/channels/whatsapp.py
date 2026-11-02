@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
 import logging
 import secrets
+from collections import OrderedDict
 from typing import Any
 
 import httpx
@@ -17,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 MAX_MSG_LEN = 4000
 API_VERSION = "v21.0"
+SEEN_IDS = 1000  # message ids remembered for de-duplication
 
 
 class WhatsAppChannel(Channel):
@@ -39,6 +42,8 @@ class WhatsAppChannel(Channel):
         self.host = host
         self.port = port
         self._server: Any = None
+        self._seen: OrderedDict[str, None] = OrderedDict()
+        self._tasks: set[asyncio.Task] = set()
 
     async def start(self) -> None:
         """Start webhook server for WhatsApp."""
@@ -91,7 +96,8 @@ class WhatsAppChannel(Channel):
         except json.JSONDecodeError:
             return web.Response(status=400)
 
-        # Extract messages
+        # Meta retries webhooks that are not answered quickly, so ack now and work in the background
+        batch: list[tuple[str, str]] = []
         for entry in data.get("entry", []):
             for change in entry.get("changes", []):
                 value = change.get("value", {})
@@ -100,23 +106,41 @@ class WhatsAppChannel(Channel):
                         continue
 
                     text = message.get("text", {}).get("body", "").strip()
-                    if not text:
+                    if not text or self._is_duplicate(message.get("id")):
                         continue
 
-                    sender = message.get("from", "unknown")
+                    batch.append((text, message.get("from", "unknown")))
 
-                    denied = self.check_access(sender)
-                    if denied is not None:
-                        if denied:
-                            await self._send(sender, denied)
-                        continue
-
-                    if self._handler:
-                        response = await self._handler(text, sender, "whatsapp", None)
-                        for chunk in chunk_text(response, MAX_MSG_LEN):
-                            await self._send(sender, chunk)
+        if batch and self._handler:
+            task = asyncio.create_task(self._process(batch))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
 
         return web.Response(text="OK")
+
+    def _is_duplicate(self, msg_id: str | None) -> bool:
+        if not msg_id:
+            return False
+        if msg_id in self._seen:
+            return True
+        self._seen[msg_id] = None
+        if len(self._seen) > SEEN_IDS:
+            self._seen.popitem(last=False)
+        return False
+
+    async def _process(self, batch: list[tuple[str, str]]) -> None:
+        for text, sender in batch:
+            denied = self.check_access(sender)
+            if denied is not None:
+                if denied:
+                    await self._send(sender, denied)
+                continue
+            try:
+                response = await self._handler(text, sender, "whatsapp", None)
+                for chunk in chunk_text(response, MAX_MSG_LEN):
+                    await self._send(sender, chunk)
+            except Exception:
+                logger.exception("WhatsApp message handling failed")
 
     async def _send(self, to: str, text: str) -> None:
         """Send a message via WhatsApp Cloud API."""
