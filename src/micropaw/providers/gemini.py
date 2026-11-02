@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 import uuid
 from collections.abc import AsyncGenerator
@@ -39,8 +40,8 @@ class GeminiProvider(AIProvider):
         return f"{self._api_base}/{self.model}:{action}"
 
     def _build_body(self, messages: list[Message], tools: list[ToolDef] | None) -> dict:
-        system_text = None
-        contents = []
+        system_parts: list[str] = []
+        contents: list[dict] = []
 
         # Build mapping from tool_call_id -> function name for tool responses
         tool_id_to_name: dict[str, str] = {}
@@ -49,32 +50,50 @@ class GeminiProvider(AIProvider):
                 for tc in msg.tool_calls:
                     tool_id_to_name[tc.id] = tc.name
 
+        def inline(media) -> dict:
+            return {"inline_data": {"mime_type": media.mime_type, "data": base64.b64encode(media.data).decode()}}
+
+        responses: list[dict] = []  # parallel function responses, flushed as ONE user turn
+        images: list[dict] = []  # tool-result images, placed after the responses in that turn
+
+        def flush() -> None:
+            nonlocal responses, images
+            if responses:
+                contents.append({"role": "user", "parts": responses + images})
+            responses, images = [], []
+
         for msg in messages:
+            if msg.role != "tool":
+                flush()
             if msg.role == "system":
-                system_text = msg.content
+                system_parts.append(msg.content)
             elif msg.role == "user":
-                contents.append({"role": "user", "parts": [{"text": msg.content}]})
+                parts: list[dict] = [inline(m) for m in msg.media if m.type == "image"]
+                parts.append({"text": msg.content})
+                contents.append({"role": "user", "parts": parts})
             elif msg.role == "assistant":
-                parts: list[dict] = []
+                parts = []
                 if msg.content:
                     parts.append({"text": msg.content})
                 for tc in msg.tool_calls:
-                    parts.append({"functionCall": {"name": tc.name, "args": tc.arguments}})
+                    part: dict = {"functionCall": {"name": tc.name, "args": tc.arguments}}
+                    if tc.thought_signature:
+                        part["thoughtSignature"] = tc.thought_signature
+                    parts.append(part)
                 if parts:
                     contents.append({"role": "model", "parts": parts})
             elif msg.role == "tool":
                 func_name = tool_id_to_name.get(msg.tool_call_id or "", msg.tool_call_id or "unknown")
-                contents.append({
-                    "role": "user",
-                    "parts": [{"functionResponse": {"name": func_name, "response": {"result": msg.content}}}],
-                })
+                responses.append({"functionResponse": {"name": func_name, "response": {"result": msg.content}}})
+                images += [inline(m) for m in msg.media if m.type == "image"]
+        flush()
 
         body: dict = {
             "contents": contents,
             "generationConfig": {"maxOutputTokens": self.max_tokens},
         }
-        if system_text:
-            body["systemInstruction"] = {"parts": [{"text": system_text}]}
+        if system_parts:
+            body["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_parts)}]}
         if tools:
             func_decls = []
             for t in tools:
@@ -97,6 +116,7 @@ class GeminiProvider(AIProvider):
                         id=f"gemini_{uuid.uuid4().hex[:12]}",
                         name=fc.get("name", ""),
                         arguments=fc.get("args", {}),
+                        thought_signature=part.get("thoughtSignature"),
                     ))
         return content, tool_calls
 

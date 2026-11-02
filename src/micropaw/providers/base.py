@@ -77,6 +77,7 @@ class ToolCall:
     id: str
     name: str
     arguments: dict[str, Any]
+    thought_signature: str | None = None  # Gemini: echoed back unchanged on the next request
 
 
 @dataclass(slots=True)
