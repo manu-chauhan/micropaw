@@ -43,11 +43,13 @@ class Scheduler:
         self._db: aiosqlite.Connection | None = None
         self._last_heartbeat: float = 0.0
         self._last_chat_ids: dict[str, str] = {}  # channel_name → last-known chat_id
+        self._last_channel: str = ""  # channel the owner used most recently
 
     def record_activity(self, channel: str, chat_id: str) -> None:
         """Record the last-known chat_id for a channel (called by Gateway on every message)."""
         if chat_id:
             self._last_chat_ids[channel] = chat_id
+            self._last_channel = channel
 
     async def init(self) -> None:
         from pathlib import Path
@@ -125,7 +127,7 @@ class Scheduler:
         await self._deliver(channel, chat_id, content)
 
     async def _deliver(self, channel: str, chat_id: str, content: str) -> None:
-        """Deliver to stored channel, fall back to terminal, then first active."""
+        """Deliver to stored channel, fall back to terminal, then the owner's last-used chat."""
         if not self._bus or self._bus.closed:
             logger.warning("Bus closed, cannot deliver cron result")
             return
@@ -141,8 +143,14 @@ class Scheduler:
             await self._bus.publish_outbound(OutboundMessage("terminal", "", content))
             return
 
+        # Headless (no terminal): use the chat the owner last used on any active channel
+        for name in (self._last_channel, *self._last_chat_ids):
+            if name in active_names and self._last_chat_ids.get(name):
+                await self._bus.publish_outbound(OutboundMessage(name, self._last_chat_ids[name], content))
+                return
+
         # No compatible channel available — log and drop
-        logger.warning("No compatible channel for delivery (origin=%s)", channel)
+        logger.warning("No compatible channel for delivery (origin=%s): %s", channel, content[:200])
 
     async def _deliver_all(self, origin_channel: str, origin_chat_id: str, content: str) -> None:
         """Deliver to ALL active channels — for reminders and urgent notifications."""
