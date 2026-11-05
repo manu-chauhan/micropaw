@@ -16,7 +16,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
 
-from micropaw.config import CONFIG_DIR
+from micropaw.config import CONFIG_DIR, private_dir
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,7 @@ def _load_tokens() -> dict | None:
 
 
 def _save_tokens(tokens: dict) -> None:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    private_dir(CONFIG_DIR)
     # Write with restricted permissions from the start (avoid world-readable window)
     fd = os.open(str(_TOKEN_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o600)
     try:

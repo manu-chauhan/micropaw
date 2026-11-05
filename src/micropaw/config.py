@@ -483,9 +483,22 @@ def save_config(config: Config) -> None:
     _write_private(config.model_dump())
 
 
+def private_dir(path: Path) -> None:
+    """Create a folder; on POSIX every folder from it up to ~/.micropaw is made owner-only (0700)."""
+    path.mkdir(parents=True, exist_ok=True)
+    if os.name != "nt":
+        for d in (path, *path.parents):
+            if d != CONFIG_DIR and CONFIG_DIR not in d.parents:
+                break
+            try:
+                d.chmod(0o700)
+            except OSError:
+                break
+
+
 def _write_bytes(path: Path, data: bytes) -> None:
     """Write 0600 from creation (no world-readable window) through a temp file, then replace."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    private_dir(path.parent)
     tmp = path.with_name(f"{path.name}.tmp")
     fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o600)
     try:

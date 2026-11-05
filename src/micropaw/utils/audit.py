@@ -8,7 +8,7 @@ import os
 import time
 from typing import Any
 
-from micropaw.config import CONFIG_DIR
+from micropaw.config import CONFIG_DIR, private_dir
 from micropaw.utils.redact import redact, redact_obj
 
 AUDIT_FILE = CONFIG_DIR / "audit.jsonl"
@@ -42,7 +42,7 @@ def record(
         preview = redact(result)
         entry["result"] = preview[:_MAX_RESULT] + ("..." if len(preview) > _MAX_RESULT else "")
     try:
-        AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        private_dir(AUDIT_FILE.parent)
         fd = os.open(str(AUDIT_FILE), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         with os.fdopen(fd, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, default=str) + "\n")

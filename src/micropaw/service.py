@@ -275,7 +275,7 @@ def install(argv: list[str] | None = None) -> list[str]:
                 "Put API keys in ~/.micropaw/.env or config.json. 'paw service stop' stops it."]
     if sys.platform == "darwin":
         log = config.CONFIG_DIR / "logs" / "service.log"
-        log.parent.mkdir(parents=True, exist_ok=True)
+        config.private_dir(log.parent)
         _write_private(plist_path(), launchd_plist(argv, str(log), path_env))
         _run(["launchctl", "bootout", f"{_uid_domain()}/{LABEL}"])  # fails when not loaded; fine
         _check(["launchctl", "bootstrap", _uid_domain(), str(plist_path())])
