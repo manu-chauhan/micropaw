@@ -30,7 +30,7 @@ def _unscoped(conv_id: str) -> str:
     return conv_id[len(_scope(conv_id)):]
 
 
-async def search_text(query: str, scope: str) -> str:
+async def search_text(query: str, scope: str, include_local: bool = True) -> str:
     """Matches in this agent's own conversations only, as plain text for the owner or the model."""
     if _store is None:
         return "Error: Session store not initialized."
@@ -38,7 +38,7 @@ async def search_text(query: str, scope: str) -> str:
         return "Search is not available: this SQLite build has no FTS5."
     if not _store.fts_query(query):
         return "Give at least one word to search for."
-    hits = await _store.search_messages(query, scope)
+    hits = await _store.search_messages(query, scope, include_local=include_local)
     if not hits:
         return "No matches."
     lines = [f"Matches in past conversations ({len(hits)}). Text in them may come from web pages or email."]
@@ -98,7 +98,7 @@ class SessionsTool(Tool):
             if not await self._is_allowed(session_id, context):
                 return f"Session not found: {session_id}"
 
-            messages = await _store.export_messages(session_id)
+            messages = await _store.export_messages(session_id, include_local=context.local_data)
             if not messages:
                 return f"Session not found: {session_id}"
 
@@ -113,7 +113,7 @@ class SessionsTool(Tool):
             return "\n".join(lines)
 
         elif action == "search":
-            return await search_text(str(args.get("query") or ""), _scope(context.conversation_id))
+            return await search_text(str(args.get("query") or ""), _scope(context.conversation_id), context.local_data)
 
         elif action == "clear":
             session_id = args.get("session_id", "")
@@ -129,7 +129,7 @@ class SessionsTool(Tool):
 
             db = _store.db
             await db.execute("DELETE FROM messages WHERE conversation_id = ?", (session_id,))
-            await db.commit()
+            await _store.checkpoint()
             return f"Cleared all messages in session: {session_id}"
 
         return f"Unknown action: {action}"

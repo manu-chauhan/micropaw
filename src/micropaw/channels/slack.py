@@ -12,6 +12,9 @@ from micropaw.channels.media import Attachment, fetch_media
 
 logger = logging.getLogger(__name__)
 
+# Slack's servers fetch every link in a message to build a preview, so a URL in a reply would reach them
+_NO_UNFURL = {"unfurl_links": False, "unfurl_media": False}
+
 MAX_MSG_LEN = 4000
 STREAM_EDIT_INTERVAL = 1.0
 
@@ -59,7 +62,7 @@ class SlackChannel(Channel):
             denied = self.check_access(user_id)
             if denied is not None:
                 if denied and slack_channel.startswith("D"):
-                    await say(text=denied)
+                    await say(text=denied, **_NO_UNFURL)
                 return
             # Slack DMs have channel IDs starting with "D" — treat as DMs (no channel_id)
             # so they share the unified DM conversation with other channels
@@ -68,20 +71,20 @@ class SlackChannel(Channel):
             media = await self._read_files(event, user_id, say, thread_ts)
 
             if self._stream_handler:
-                placeholder = await say(text="...", thread_ts=thread_ts)
+                placeholder = await say(text="...", thread_ts=thread_ts, **_NO_UNFURL)
                 await stream_response(
                     self._stream_handler, text, user_id, "slack", conv_channel_id,
                     edit_fn=lambda t: client.chat_update(
-                        channel=slack_channel, ts=placeholder["ts"], text=t,
+                        channel=slack_channel, ts=placeholder["ts"], text=t, **_NO_UNFURL,
                     ),
-                    send_fn=lambda t: say(text=t, thread_ts=thread_ts),
+                    send_fn=lambda t: say(text=t, thread_ts=thread_ts, **_NO_UNFURL),
                     max_msg_len=MAX_MSG_LEN, edit_interval=STREAM_EDIT_INTERVAL, media=media,
                 )
 
             elif self._handler:
                 response = await self._handler(text, user_id, "slack", conv_channel_id, media=media)
                 for chunk in chunk_text(response, MAX_MSG_LEN):
-                    await say(text=chunk, thread_ts=thread_ts)
+                    await say(text=chunk, thread_ts=thread_ts, **_NO_UNFURL)
 
         self._app.action(re.compile(r"^ap:[0-9a-f]{4}:(yes|no|always)$"))(self._on_press)
 
@@ -109,7 +112,7 @@ class SlackChannel(Channel):
         elif (note := settled_note(reply)) is not None:
             text = f"{body['message']['text']}\n\n{note}"
             ts = body["message"]["ts"]
-            await client.chat_update(channel=slack_channel, ts=ts, text=text, blocks=[_section(text)])
+            await client.chat_update(channel=slack_channel, ts=ts, text=text, blocks=[_section(text)], **_NO_UNFURL)
         else:
             await client.chat_postEphemeral(channel=slack_channel, user=user_id, text=reply)
 
@@ -123,7 +126,7 @@ class SlackChannel(Channel):
             return []
         media, notes = await fetch_media(files, token=self.bot_token, token_host="slack.com")
         for note in notes:
-            await say(text=note, thread_ts=thread_ts)
+            await say(text=note, thread_ts=thread_ts, **_NO_UNFURL)
         return media
 
     async def _watch_task(self) -> None:
@@ -158,7 +161,7 @@ class SlackChannel(Channel):
         if self._app:
             channel = chat_id.replace("slack:", "", 1)
             for chunk in chunk_text(text, MAX_MSG_LEN):
-                await self._app.client.chat_postMessage(channel=channel, text=chunk)
+                await self._app.client.chat_postMessage(channel=channel, text=chunk, **_NO_UNFURL)
 
     async def send_approval(self, chat_id: str, text: str, ask_id: str, allow_always: bool) -> None:
         if not self._app:
@@ -166,13 +169,13 @@ class SlackChannel(Channel):
         channel = chat_id.replace("slack:", "", 1)
         *head, last = chunk_text(text, 2900 - 80)  # a section holds 3000 chars; room for the decision line
         for chunk in head:
-            await self._app.client.chat_postMessage(channel=channel, text=chunk)
+            await self._app.client.chat_postMessage(channel=channel, text=chunk, **_NO_UNFURL)
         buttons = [
             {"type": "button", "text": {"type": "plain_text", "text": label}, "action_id": data,
              **({"style": "primary"} if label == "Yes" else {"style": "danger"} if label == "No" else {})}
             for label, data in approval_buttons(ask_id, allow_always)
         ]
         await self._app.client.chat_postMessage(
-            channel=channel, text=last,
+            channel=channel, text=last, **_NO_UNFURL,
             blocks=[_section(last), {"type": "actions", "block_id": f"ap:{ask_id}", "elements": buttons}],
         )

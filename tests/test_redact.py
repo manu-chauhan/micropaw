@@ -134,22 +134,16 @@ def test_run_tool_redacts_text_and_tool_result():
     assert res.text == "got [redacted:k]"
 
 
-def test_audit_redacts_args_approval_and_result_before_cutting():
+def test_audit_redacts_args_and_approval_before_cutting():
     r.set_known_secrets({"k": SECRET})
     # the secret straddles the 300 char cut
     arg = "x" * (audit._MAX_VALUE - 5) + SECRET
-    audit.record("shell", {"command": arg, "nested": [SECRET]}, "ok", "c", approval=f"run {SECRET}",
-                 result=f"out {SECRET}")
+    audit.record("shell", {"command": arg, "nested": [SECRET]}, "ok", "c", approval=f"run {SECRET}")
     line = json.loads(audit.AUDIT_FILE.read_text().splitlines()[-1])
     blob = json.dumps(line)
     assert SECRET not in blob and SECRET[:6] not in blob
     assert line["approval"] == "run [redacted:k]"
-    assert line["result"] == "out [redacted:k]"
-
-
-def test_audit_result_preview_is_short():
-    audit.record("shell", {}, "ok", "c", result="y" * 1000)
-    assert len(audit.tail(1)[0]["result"]) <= audit._MAX_RESULT + 3
+    assert "result" not in line  # what a tool read or printed is never written to the audit log
 
 
 def test_log_filter_redacts_message_and_traceback():

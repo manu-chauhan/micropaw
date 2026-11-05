@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from micropaw.tools.base import Tool, ToolContext
@@ -36,6 +37,6 @@ class FileReadTool(Tool):
             return f"Error: File too large ({path.stat().st_size:,} bytes, max {MAX_FILE_SIZE:,})"
 
         try:
-            return path.read_text(encoding="utf-8", errors="replace")
+            return await asyncio.to_thread(path.read_text, encoding="utf-8", errors="replace")
         except Exception as e:
             return f"Error reading file: {e}"

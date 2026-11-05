@@ -1,4 +1,4 @@
-"""Rich-based structured logging for MicroPaw."""
+"""Logging for MicroPaw: Rich output on a terminal, plain lines in a service, a rotating private file always."""
 
 from __future__ import annotations
 
@@ -8,13 +8,11 @@ import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from rich.console import Console
-from rich.logging import RichHandler
-
 from micropaw.config import private_dir
 from micropaw.utils.redact import redact
 
 _configured = False
+_log_content = False  # message text, search queries and file paths stay out of every log unless the owner allows it
 
 _LOG_DIR = Path(os.environ.get("MICROPAW_HOME") or Path.home() / ".micropaw") / "logs"
 # One file per kind of process: on Windows a service and a chat can't share a rotating file
@@ -34,6 +32,25 @@ class _PrivateFileHandler(RotatingFileHandler):
         return os.fdopen(fd, self.mode, encoding=self.encoding, errors=self.errors)
 
 
+def short_hash(text: str) -> str:
+    """8 hex characters that tell two ids apart in a log without saying what they are."""
+    import hashlib
+    return hashlib.sha256(text.encode()).hexdigest()[:8]
+
+
+def allow_content(on: bool) -> None:
+    """storage.log_content: let records marked content=True reach the logs (never the default)."""
+    global _log_content
+    _log_content = on
+
+
+class ContentFilter(logging.Filter):
+    """Drops records that carry what people wrote or looked up (logger.debug(..., extra={"content": True}))."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return _log_content or not getattr(record, "content", False)
+
+
 class RedactFilter(logging.Filter):
     """Removes known secrets from every record (message and traceback) before a handler sees it."""
 
@@ -51,25 +68,36 @@ class RedactFilter(logging.Filter):
         return True
 
 
+def _console_handler() -> logging.Handler:
+    """Rich on a terminal (imported only here: the daemon never loads it), plain lines everywhere else."""
+    if sys.stderr.isatty():
+        from rich.console import Console
+        from rich.logging import RichHandler
+        handler: logging.Handler = RichHandler(
+            console=Console(stderr=True), show_time=True, show_path=False,
+            markup=False,  # "[web_search]" in a message is text, not markup
+            rich_tracebacks=True, tracebacks_show_locals=False,
+        )
+    else:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    handler.name = "micropaw-console"
+    return handler
+
+
+def _in_docker() -> bool:
+    return bool(os.environ.get("MICROPAW_IN_DOCKER")) or Path("/.dockerenv").exists()
+
+
 def setup_logging(level: str = "INFO") -> None:
-    """Configure logging with Rich output + file logging. Call once at startup."""
+    """Configure logging: a console handler plus the file log. Call once at startup."""
     global _configured
     if _configured:
         return
     _configured = True
 
     log_level = getattr(logging, level.upper(), logging.INFO)
-
-    console = Console(stderr=True)
-    handler = RichHandler(
-        console=console,
-        show_time=True,
-        show_path=False,
-        markup=True,
-        rich_tracebacks=True,
-        tracebacks_show_locals=False,
-    )
-
+    handler = _console_handler()
     handlers: list[logging.Handler] = [handler]
 
     # File logging: always enabled (users need it for debugging)
@@ -88,9 +116,13 @@ def setup_logging(level: str = "INFO") -> None:
     ))
     file_handler.setLevel(log_level)
     handlers.append(file_handler)
+    if not sys.stderr.isatty() and not _in_docker():
+        # Under systemd stderr goes to the journal (on a Pi, the same SD card): one copy of each line is enough
+        handler.setLevel(logging.WARNING)
 
     for h in handlers:
         h.addFilter(RedactFilter())
+        h.addFilter(ContentFilter())
 
     logging.basicConfig(
         level=log_level,
@@ -98,8 +130,8 @@ def setup_logging(level: str = "INFO") -> None:
         handlers=handlers,
     )
 
-    # Quiet noisy libraries
-    for name in ("httpx", "httpcore", "asyncio", "hpack"):
+    # Quiet noisy libraries. aiosqlite logs every statement with its parameters at DEBUG: the message text.
+    for name in ("httpx", "httpcore", "asyncio", "hpack", "aiosqlite"):
         logging.getLogger(name).setLevel(logging.WARNING)
 
 
@@ -109,6 +141,6 @@ def quiet_console() -> None:
     INFO and DEBUG still go to the log file at ~/.micropaw/logs/.
     """
     for handler in logging.root.handlers:
-        if isinstance(handler, RichHandler):
+        if handler.name == "micropaw-console":  # not isinstance(StreamHandler): the file handler is one too
             handler.setLevel(logging.WARNING)
             break

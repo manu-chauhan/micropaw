@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,32 @@ from micropaw.tools.base import Tool, ToolContext
 from micropaw.tools.path_security import validate_file_path
 
 MAX_OUTPUT = 50_000
+
+
+def _extract(reader_class: Any, path: Path, pages_spec: str) -> str:
+    reader = reader_class(str(path))
+    total = len(reader.pages)
+
+    if pages_spec:
+        page_indices = _parse_pages(pages_spec, total)
+        if not page_indices:
+            return f"Error: No valid pages in range '{pages_spec}'. PDF has {total} page(s)."
+    else:
+        page_indices = list(range(total))
+
+    parts = [f"PDF: {path.name} ({total} pages)"]
+    output_len = 0
+
+    for idx in page_indices:
+        text = reader.pages[idx].extract_text() or "(no text)"
+        header = f"\n--- Page {idx + 1} ---\n"
+        if output_len + len(header) + len(text) > MAX_OUTPUT:
+            parts.append(f"\n... (truncated at page {idx + 1})")
+            break
+        parts.append(header + text)
+        output_len += len(header) + len(text)
+
+    return "\n".join(parts)
 
 
 def _parse_pages(spec: str, total: int) -> list[int]:
@@ -63,29 +90,7 @@ class PdfReadTool(Tool):
             return "Error: pypdf not installed. Install with: pip install 'micropaw[pdf]'"
 
         try:
-            reader = PdfReader(str(path))
-            total = len(reader.pages)
-
-            if pages_spec:
-                page_indices = _parse_pages(pages_spec, total)
-                if not page_indices:
-                    return f"Error: No valid pages in range '{pages_spec}'. PDF has {total} page(s)."
-            else:
-                page_indices = list(range(total))
-
-            parts = [f"PDF: {path.name} ({total} pages)"]
-            output_len = 0
-
-            for idx in page_indices:
-                text = reader.pages[idx].extract_text() or "(no text)"
-                header = f"\n--- Page {idx + 1} ---\n"
-                if output_len + len(header) + len(text) > MAX_OUTPUT:
-                    parts.append(f"\n... (truncated at page {idx + 1})")
-                    break
-                parts.append(header + text)
-                output_len += len(header) + len(text)
-
-            return "\n".join(parts)
-
+            # Parsing a big PDF takes seconds on a small board: off the event loop, so chats keep answering
+            return await asyncio.to_thread(_extract, PdfReader, path, pages_spec)
         except Exception as e:
             return f"Error reading PDF: {e}"

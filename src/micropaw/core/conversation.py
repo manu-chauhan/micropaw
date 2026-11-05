@@ -71,9 +71,12 @@ class ConversationManager:
         """Return the current shared DM conversation ID."""
         return self.prefix + (self._global_override or _DM_CONV_ID)
 
-    async def load_history(self, conversation_id: str, platform: str, user_id: str) -> list[Message]:
+    async def load_history(
+        self, conversation_id: str, platform: str, user_id: str, include_local: bool = True,
+    ) -> list[Message]:
         await self.store.get_or_create_conversation(conversation_id, platform, user_id)
-        return sanitize_history(await self.store.get_messages(conversation_id, MAX_HISTORY))
+        extra = {} if include_local else {"include_local": False}
+        return sanitize_history(await self.store.get_messages(conversation_id, MAX_HISTORY, **extra))
 
     async def save_message(self, conversation_id: str, message: Message) -> None:
         await self.store.save_message(conversation_id, message)

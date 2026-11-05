@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
+import time
 from pathlib import Path
 
 import aiosqlite
@@ -93,13 +95,26 @@ CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts(name COLLATE NOCASE);
 """
 
 
+def _local_now() -> int:
+    """1 when data written now is made in local or airgapped mode: a cloud model must never be sent it later."""
+    from micropaw import privacy
+    return int(privacy.local_only())
+
+
 class MemoryStore:
-    def __init__(self, db_path: str | Path, embedding_provider: EmbeddingProvider | None = None) -> None:
+    def __init__(
+        self, db_path: str | Path, embedding_provider: EmbeddingProvider | None = None,
+        *, secure_delete: bool = True, max_chunks: int = 0,
+    ) -> None:
         self.db_path = str(db_path)
+        self.secure_delete = secure_delete  # deleted rows are overwritten with zeros, not left in free pages
+        self.max_chunks = max_chunks  # most document chunks kept per user, oldest go first; 0 = no limit
         self._db: aiosqlite.Connection | None = None
         self.embedder: EmbeddingProvider = embedding_provider or NullEmbedding()
         self._compact_locks: dict[str, asyncio.Lock] = {}  # per-conversation compaction locks
         self._ingest_lock = asyncio.Lock()
+        self._embed_slot = asyncio.Semaphore(1)  # one ingest embeds at a time, so it never competes with a chat model
+        self._tasks: set[asyncio.Task] = set()  # background work; asyncio keeps only weak references
         self._has_vec: bool = False
         self._vec_dims: int = 0
         self.has_fts: bool = False
@@ -112,15 +127,21 @@ class MemoryStore:
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA synchronous=NORMAL")  # safe with WAL; one fsync less per commit
         await self._db.execute("PRAGMA busy_timeout=5000")
+        await self._db.execute(f"PRAGMA secure_delete={'ON' if self.secure_delete else 'OFF'}")
         await self._db.executescript(_SCHEMA)
         await self._migrate()
         await self._db.commit()
         await self._ensure_fts()
 
-        self._has_vec = await self._try_load_vec()
+        # No embeddings, no vector index: skip loading the extension (also keeps boards with no wheel quiet)
+        self._has_vec = self.embedder.dimensions > 0 and await self._try_load_vec()
 
-        if self._has_vec and self.embedder.dimensions > 0:
+        if self._has_vec:
             await self._ensure_vec_table()
+
+        model = getattr(self.embedder, "model_name", None) if self.embedder.name == "local" else None
+        if model and await self._get_meta("embedding_model") != f"local:{model}":
+            await self._set_meta("embedding_model", f"local:{model}")  # a restart keeps the model the vectors use
 
         logger.info(
             "Database initialized at %s (embeddings: %s, sqlite-vec: %s)",
@@ -129,11 +150,13 @@ class MemoryStore:
 
     async def _migrate(self) -> None:
         """Add columns that older databases don't have."""
-        for table in ("conversations", "memories"):
+        for table, new in (("conversations", ("marked",)), ("memories", ("marked", "local_only")),
+                           ("messages", ("local_only",)), ("document_chunks", ("local_only",))):
             async with self.db.execute(f"PRAGMA table_info({table})") as cur:
                 columns = {row[1] for row in await cur.fetchall()}
-            if "marked" not in columns:
-                await self.db.execute(f"ALTER TABLE {table} ADD COLUMN marked INTEGER DEFAULT 0")
+            for column in new:
+                if column not in columns:
+                    await self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column} INTEGER DEFAULT 0")
 
     async def _ensure_fts(self) -> None:
         """Full-text index over what people and the assistant said (not tool output), kept in step by triggers.
@@ -152,6 +175,11 @@ class MemoryStore:
                     f"CREATE TRIGGER IF NOT EXISTS messages_fts_{name} AFTER {event} ON messages "
                     f"WHEN {row}.role IN ('user', 'assistant') AND {row}.content != '' BEGIN {body}; END"
                 )
+            try:  # FTS5 keeps the words of deleted rows in its index until a merge, unless told to wipe them
+                await self.db.execute("INSERT INTO messages_fts(messages_fts, rank) VALUES('secure-delete', ?)",
+                                      (int(self.secure_delete),))
+            except Exception as e:  # SQLite older than 3.42: retention and forget merge the index instead
+                logger.debug("FTS5 secure-delete is not available: %s", e)
             if is_new:
                 async with self.db.execute("SELECT COALESCE(MAX(id), 0) FROM messages") as cur:
                     top = (await cur.fetchone())[0]
@@ -162,7 +190,7 @@ class MemoryStore:
             logger.warning("Message search is off: %s", e)
             return
         self.has_fts = True
-        self._fts_task = asyncio.create_task(self._backfill_fts())
+        self._fts_task = self.spawn(self._backfill_fts())
 
     async def _backfill_fts(self, batch: int = 2000) -> None:
         try:
@@ -186,7 +214,9 @@ class MemoryStore:
         clean = ("".join(c for c in w if c.isprintable())[:64] for w in text.split())
         return " ".join('"' + w.replace('"', '""') + '"' for w in [w for w in clean if re.search(r"\w", w)][:12])
 
-    async def search_messages(self, text: str, scope: str = "", limit: int = 10) -> list[dict]:
+    async def search_messages(
+        self, text: str, scope: str = "", limit: int = 10, include_local: bool = True,
+    ) -> list[dict]:
         """Best matches first. `scope` is an agent prefix ("agent:coder:"); "" means the shared history only,
         so one agent never reads another's conversations."""
         query = self.fts_query(text)
@@ -194,6 +224,8 @@ class MemoryStore:
             return []
         where = "substr(m.conversation_id, 1, ?) = ?" if scope else "substr(m.conversation_id, 1, 6) != ?"
         args = (query, len(scope), scope) if scope else (query, "agent:")
+        if not include_local:
+            where += " AND m.local_only = 0"
         async with self.db.execute(
             "SELECT m.conversation_id, m.role, m.created_at, snippet(messages_fts, 0, '[', ']', '...', 16) "
             "FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid "
@@ -236,6 +268,13 @@ class MemoryStore:
             logger.warning("Failed to load sqlite-vec: %s", e)
             return False
 
+    async def _try_load_vec_table(self) -> bool:
+        """True when the database has a vector table and the extension to reach it loaded."""
+        async with self.db.execute("SELECT 1 FROM sqlite_master WHERE name = 'vec_chunks'") as cur:
+            if await cur.fetchone() is None:
+                return False
+        return await self._try_load_vec()
+
     async def _get_meta(self, key: str) -> str | None:
         async with self.db.execute("SELECT value FROM kv_meta WHERE key = ?", (key,)) as cur:
             row = await cur.fetchone()
@@ -273,14 +312,21 @@ class MemoryStore:
         await self.db.execute(
             f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0("
             f"chunk_id INTEGER PRIMARY KEY, "
-            f"embedding float[{dims}] distance_metric=cosine"
+            f"embedding float[{dims}] distance_metric=cosine, chunk_size=64"  # small tables stay small
             f")"
         )
         await self._set_meta("vec_dims", str(dims))
         await self.db.commit()
         self._vec_dims = dims
 
-        asyncio.create_task(self._sync_vec_index())
+        self.spawn(self._sync_vec_index())
+
+    def spawn(self, coro) -> asyncio.Task:
+        """Run background work with a reference kept, and cancel it in close()."""
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return task
 
     async def _sync_vec_index(self) -> None:
         """Populate vec_chunks from existing document_chunks (background)."""
@@ -369,11 +415,11 @@ class MemoryStore:
             for r in rows
         ]
 
-    async def export_messages(self, conversation_id: str) -> list[dict]:
+    async def export_messages(self, conversation_id: str, include_local: bool = True) -> list[dict]:
         """Export all messages for a conversation as plain dicts."""
         async with self.db.execute(
             "SELECT role, content, tool_calls, tool_call_id, created_at "
-            "FROM messages WHERE conversation_id = ? ORDER BY id ASC",
+            f"FROM messages WHERE conversation_id = ?{'' if include_local else ' AND local_only = 0'} ORDER BY id ASC",
             (conversation_id,),
         ) as cursor:
             rows = await cursor.fetchall()
@@ -385,12 +431,12 @@ class MemoryStore:
     # --- Messages ---
 
     @staticmethod
-    def _message_row(conversation_id: str, message: Message) -> tuple:
+    def _message_row(conversation_id: str, message: Message, local: int = 0) -> tuple:
         tool_calls_json = (
             json.dumps([{"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in message.tool_calls])
             if message.tool_calls else None
         )
-        return (conversation_id, message.role, message.content, tool_calls_json, message.tool_call_id)
+        return (conversation_id, message.role, message.content, tool_calls_json, message.tool_call_id, local)
 
     async def save_message(self, conversation_id: str, message: Message) -> None:
         await self.save_messages(conversation_id, [message])
@@ -400,19 +446,23 @@ class MemoryStore:
         if not messages:
             await self.db.commit()  # still ends the turn's open transaction
             return
+        local = _local_now()
         await self.db.executemany(
-            "INSERT INTO messages (conversation_id, role, content, tool_calls, tool_call_id) VALUES (?, ?, ?, ?, ?)",
-            [self._message_row(conversation_id, m) for m in messages],
+            "INSERT INTO messages (conversation_id, role, content, tool_calls, tool_call_id, local_only) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [self._message_row(conversation_id, m, local) for m in messages],
         )
         await self.db.execute(
             "UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (conversation_id,),
         )
         await self.db.commit()
 
-    async def get_messages(self, conversation_id: str, limit: int = 50) -> list[Message]:
+    async def get_messages(self, conversation_id: str, limit: int = 50, include_local: bool = True) -> list[Message]:
+        """Newest `limit` messages, oldest first. include_local=False leaves out what was said in local or
+        airgapped mode, for a model that is not on this side."""
         async with self.db.execute(
             "SELECT role, content, tool_calls, tool_call_id FROM messages "
-            "WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
+            f"WHERE conversation_id = ?{'' if include_local else ' AND local_only = 0'} ORDER BY id DESC LIMIT ?",
             (conversation_id, limit),
         ) as cursor:
             rows = await cursor.fetchall()
@@ -429,10 +479,12 @@ class MemoryStore:
             messages.append(Message(role=role, content=content, tool_calls=tool_calls, tool_call_id=tool_call_id))
         return messages
 
-    async def keep_boundary(self, conversation_id: str, keep_recent: int) -> int | None:
-        """Id of the oldest of the last `keep_recent` messages (compaction deletes everything before it)."""
+    async def keep_boundary(self, conversation_id: str, keep_recent: int, include_local: bool = True) -> int | None:
+        """Id of the oldest of the last `keep_recent` messages (compaction deletes everything before it).
+        include_local=False counts only what a model that is not local was shown."""
         async with self.db.execute(
-            "SELECT MIN(id) FROM (SELECT id FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?)",
+            "SELECT MIN(id) FROM (SELECT id FROM messages WHERE conversation_id = ?"
+            f"{'' if include_local else ' AND local_only = 0'} ORDER BY id DESC LIMIT ?)",
             (conversation_id, keep_recent),
         ) as cursor:
             row = await cursor.fetchone()
@@ -440,9 +492,12 @@ class MemoryStore:
 
     async def compact_messages(
         self, conversation_id: str, summary: str, keep_recent: int, marked: bool = False,
-        before_id: int | None = None,
+        before_id: int | None = None, include_local: bool = True,
     ) -> None:
         """Delete old messages, keep the last N, and persist the summary.
+
+        include_local=False is a summary made by a model that is not local: it never saw local or airgapped
+        talk, so only the other messages go, and it is kept apart from a summary of local talk.
 
         `before_id` (from keep_boundary, taken before the summary was written) limits the delete to what
         the summary covers, so messages saved meanwhile survive. `marked` keeps the mark on the summary.
@@ -450,30 +505,109 @@ class MemoryStore:
         """
         lock = self._compact_locks.setdefault(conversation_id, asyncio.Lock())
         async with lock:
-            await self._compact_messages_inner(conversation_id, summary, keep_recent, marked, before_id)
+            await self._compact_messages_inner(conversation_id, summary, keep_recent, marked, before_id, include_local)
 
     async def _compact_messages_inner(
         self, conversation_id: str, summary: str, keep_recent: int, marked: bool, before_id: int | None,
+        include_local: bool = True,
     ) -> None:
         if before_id is None:
-            before_id = await self.keep_boundary(conversation_id, keep_recent)
+            before_id = await self.keep_boundary(conversation_id, keep_recent, include_local)
         if before_id is None:
             return
+        local_summary = False
+        if include_local:
+            async with self.db.execute(
+                "SELECT 1 FROM messages WHERE conversation_id = ? AND id < ? AND local_only = 1 LIMIT 1",
+                (conversation_id, before_id),
+            ) as cursor:
+                local_summary = _local_now() == 1 or await cursor.fetchone() is not None
 
-        # Delete all messages older than the kept ones
+        # Delete the messages older than the kept ones (a summary made without the local ones leaves them)
         await self.db.execute(
-            "DELETE FROM messages WHERE conversation_id = ? AND id < ?",
+            "DELETE FROM messages WHERE conversation_id = ? AND id < ?"
+            f"{'' if include_local else ' AND local_only = 0'}",
             (conversation_id, before_id),
         )
         # Store summary in kv_meta (avoids ID ordering issues with messages table).
         # get_messages_with_summary() injects it before the kept messages.
         if marked:
             await self._set_meta(f"summary_marked:{conversation_id}", "1")
-        await self._set_meta(f"summary:{conversation_id}", summary)
+        if local_summary:
+            await self._set_meta(f"summary_local:{conversation_id}", "1")  # sticky: it holds what the old one held
+        key = f"summary:{conversation_id}"
+        if not include_local and await self._get_meta(f"summary_local:{conversation_id}") is not None:
+            key = f"summary_cloud:{conversation_id}"  # the summary of local talk stays as it is
+        elif include_local:  # this one was made from the other, so it holds it
+            await self.db.execute("DELETE FROM kv_meta WHERE key = ?", (f"summary_cloud:{conversation_id}",))
+        await self._set_meta(key, summary)
         await self.db.commit()
 
-    async def get_summary(self, conversation_id: str) -> str | None:
-        """Get the compaction summary for a conversation, if any."""
+    async def checkpoint(self) -> None:
+        """Fold the write-ahead log into the database and empty it, so deleted text is not left in -wal."""
+        await self.db.commit()
+        try:
+            await self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except aiosqlite.Error as e:  # a background task is reading on this connection: the next one will do it
+            logger.debug("Checkpoint skipped: %s", e)
+
+    async def compact_storage(self) -> None:
+        """After a big delete: empty the log, and give the space back when over a tenth of the file is free
+        (VACUUM rewrites the whole file, which costs a Pi a few seconds per 100 MB)."""
+        await self.checkpoint()
+        async with self.db.execute("PRAGMA freelist_count") as cur:
+            free = (await cur.fetchone())[0]
+        async with self.db.execute("PRAGMA page_count") as cur:
+            pages = (await cur.fetchone())[0]
+        if pages and free / pages > 0.10:
+            try:
+                await self.db.execute("VACUUM")
+            except aiosqlite.Error as e:  # another task has a transaction open: the next sweep will do it
+                logger.debug("VACUUM skipped: %s", e)
+
+    async def purge_older_than(self, days: int) -> dict[str, int]:
+        """Delete messages, summaries, document chunks and email records older than `days`.
+        Memories and contacts stay: only the owner removes those (/forget)."""
+        age = f"-{days} days"
+        counts: dict[str, int] = {}
+        cur = await self.db.execute("DELETE FROM messages WHERE created_at < datetime('now', ?)", (age,))
+        counts["messages"] = cur.rowcount  # the full-text index follows through its trigger
+        # A summary is as old as its conversation's last message
+        cur = await self.db.execute(
+            "DELETE FROM kv_meta WHERE key LIKE 'summary%:%' AND substr(key, instr(key, ':') + 1) IN "
+            "(SELECT id FROM conversations WHERE updated_at < datetime('now', ?))", (age,))
+        counts["summaries"] = cur.rowcount
+        async with self.db.execute(
+            "SELECT COUNT(*) FROM document_chunks WHERE created_at < datetime('now', ?)", (age,),
+        ) as cur2:
+            counts["chunks"] = (await cur2.fetchone())[0]
+        await self._delete_chunks("created_at < datetime('now', ?)", (age,))
+        cutoff = time.time() - days * 86400
+        for table in ("email_seen", "email_runs"):
+            try:
+                cur = await self.db.execute(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))
+                counts[table] = cur.rowcount
+            except aiosqlite.Error:
+                pass  # the scheduler has not made its tables yet
+        await self.db.commit()
+        if self.has_fts:
+            try:
+                # merge the index, so old words do not stay in blocks of their own
+                await self.db.execute("INSERT INTO messages_fts(messages_fts) VALUES('optimize')")
+                await self.db.commit()
+            except aiosqlite.Error as e:
+                logger.debug("Search index merge skipped: %s", e)
+        await self.compact_storage()
+        return counts
+
+    async def get_summary(self, conversation_id: str, include_local: bool = True) -> str | None:
+        """Get the compaction summary for a conversation, if any. A summary that holds local or airgapped
+        talk is withheld when include_local is False (a summary made since by a non-local model is not)."""
+        cloud = await self._get_meta(f"summary_cloud:{conversation_id}")
+        if await self._get_meta(f"summary_local:{conversation_id}") is not None:
+            if not include_local:
+                return cloud
+            return "\n\n".join(t for t in (await self._get_meta(f"summary:{conversation_id}"), cloud) if t) or None
         return await self._get_meta(f"summary:{conversation_id}")
 
     # --- Memories ---
@@ -486,60 +620,56 @@ class MemoryStore:
         embedding = await self.embedder.embed(f"{key}: {value}")
         embedding_json = serialize_embedding(embedding)
 
+        local = _local_now()
         await self.db.execute(
-            "INSERT INTO memories (key, value, tags, embedding, user_id, marked) VALUES (?, ?, ?, ?, ?, ?) "
+            "INSERT INTO memories (key, value, tags, embedding, user_id, marked, local_only) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(key, user_id) DO UPDATE SET value = ?, tags = ?, embedding = ?, marked = ?,"
-            " updated_at = CURRENT_TIMESTAMP",
-            (key, value, tags_str, embedding_json, user_id, int(marked),
-             value, tags_str, embedding_json, int(marked)),
+            " local_only = ?, updated_at = CURRENT_TIMESTAMP",
+            (key, value, tags_str, embedding_json, user_id, int(marked), local,
+             value, tags_str, embedding_json, int(marked), local),
         )
         await self.db.commit()
 
-    async def search_memories(self, query: str, limit: int = 20, user_id: str = "_global") -> list[dict]:
+    async def search_memories(
+        self, query: str, limit: int = 20, user_id: str = "_global", include_local: bool = True,
+    ) -> list[dict]:
         """Hybrid search: text LIKE + vector similarity. No artificial caps."""
         q = f"%{query.lower()}%"
+        only = "" if include_local else " AND local_only = 0"
         async with self.db.execute(
-            "SELECT key, value, tags, embedding FROM memories "
-            "WHERE user_id = ? AND (LOWER(key) LIKE ? OR LOWER(value) LIKE ? OR LOWER(tags) LIKE ?) "
+            "SELECT key, value, tags FROM memories "
+            f"WHERE user_id = ?{only} AND (LOWER(key) LIKE ? OR LOWER(value) LIKE ? OR LOWER(tags) LIKE ?) "
             "ORDER BY updated_at DESC LIMIT 100",
             (user_id, q, q, q),
         ) as cursor:
             text_rows = await cursor.fetchall()
 
-        text_results = [{"key": r[0], "value": r[1], "tags": r[2], "embedding": r[3]} for r in text_rows]
+        text_results = [{"key": r[0], "value": r[1], "tags": r[2]} for r in text_rows]
 
         if self.embedder.name != "none":
             query_embedding = await self.embedder.embed(query)
             if query_embedding:
-                # Scan all memories for this user — no row cap
+                # Scan all memories for this user, but rank off the event loop: parsing and scoring thousands
+                # of vectors in Python takes seconds on a small board
                 async with self.db.execute(
-                    "SELECT key, value, tags, embedding FROM memories "
-                    "WHERE user_id = ? AND embedding IS NOT NULL",
+                    f"SELECT key, value, tags, embedding FROM memories WHERE user_id = ?{only} "
+                    "AND embedding IS NOT NULL",
                     (user_id,),
                 ) as cursor:
                     candidates = await cursor.fetchall()
-
-                scored: list[tuple[float, dict]] = []
-                seen_keys: set[str] = set()
-                for key, value, tags, emb_json in candidates:
-                    emb = deserialize_embedding(emb_json)
-                    if emb:
-                        score = cosine_similarity(query_embedding, emb)
-                        scored.append((score, {"key": key, "value": value, "tags": tags}))
-                        seen_keys.add(key)
-
-                scored.sort(key=lambda x: x[0], reverse=True)
-                results = [item for _, item in scored[:limit]]
+                results, seen_keys = await asyncio.to_thread(_rank_memories, query_embedding, candidates, limit)
                 for tr in text_results:
                     if tr["key"] not in seen_keys and len(results) < limit:
-                        results.append({"key": tr["key"], "value": tr["value"], "tags": tr["tags"]})
+                        results.append(tr)
                 return results[:limit]
 
-        return [{"key": r["key"], "value": r["value"], "tags": r["tags"]} for r in text_results[:limit]]
+        return text_results[:limit]
 
-    async def get_all_memories(self, user_id: str = "_global") -> list[dict]:
+    async def get_all_memories(self, user_id: str = "_global", include_local: bool = True) -> list[dict]:
         async with self.db.execute(
-            "SELECT key, value, tags, marked FROM memories WHERE user_id = ? ORDER BY updated_at DESC LIMIT 100",
+            "SELECT key, value, tags, marked FROM memories "
+            f"WHERE user_id = ?{'' if include_local else ' AND local_only = 0'} ORDER BY updated_at DESC LIMIT 100",
             (user_id,),
         ) as cursor:
             rows = await cursor.fetchall()
@@ -560,11 +690,16 @@ class MemoryStore:
         """Delete a memory. Returns True if a row was deleted."""
         cursor = await self.db.execute("DELETE FROM memories WHERE key = ? AND user_id = ?", (key, user_id))
         await self.db.commit()
+        if cursor.rowcount > 0:
+            await self.checkpoint()  # the old text must not stay behind in -wal
         return cursor.rowcount > 0
 
-    async def get_recent_memories(self, limit: int = 10, user_id: str = "_global") -> list[dict]:
+    async def get_recent_memories(
+        self, limit: int = 10, user_id: str = "_global", include_local: bool = True,
+    ) -> list[dict]:
         async with self.db.execute(
-            "SELECT key, value, marked FROM memories WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?",
+            "SELECT key, value, marked FROM memories "
+            f"WHERE user_id = ?{'' if include_local else ' AND local_only = 0'} ORDER BY updated_at DESC LIMIT ?",
             (user_id, limit),
         ) as cursor:
             rows = await cursor.fetchall()
@@ -572,46 +707,34 @@ class MemoryStore:
 
     # --- Document chunks (RAG) ---
 
-    async def ingest_document(self, source: str, content: str, user_id: str = "_global") -> int:
+    async def ingest_document(
+        self, source: str, content: str, user_id: str = "_global", max_chunks: int = 0,
+    ) -> int:
         """Chunk, embed, and store a document. Dual-writes to vec_chunks when available.
 
-        Re-ingesting the same source replaces all previous chunks.
+        Re-ingesting the same source replaces all previous chunks. max_chunks > 0 keeps only the first
+        that many chunks of this document. With self.max_chunks set, the oldest chunks of the user go first.
         """
         chunks = chunk_text(content)
+        if max_chunks > 0:
+            chunks = chunks[:max_chunks]
         if not chunks:
             return 0
 
-        # Embed everything first (one network call per chunk), so the write below is short and never half-done
-        blobs = [serialize_embedding_blob(await self.embedder.embed(text)) for text in chunks]
+        # Embed everything first (one network call per chunk), so the write below is short and never half-done.
+        # One ingest at a time: two big documents must not both load the embedding model next to the chat model.
+        async with self._embed_slot:
+            blobs = [serialize_embedding_blob(await self.embedder.embed(text)) for text in chunks]
 
+        local = _local_now()
         async with self._ingest_lock:  # two ingests of one source must not interleave
             try:
-                # Cascade delete: remove from vec index first, then main table
-                if self._has_vec:
-                    async with self.db.execute(
-                        "SELECT id FROM document_chunks WHERE source = ? AND user_id = ?",
-                        (source, user_id),
-                    ) as cursor:
-                        old_ids = [r[0] for r in await cursor.fetchall()]
-                    if old_ids:
-                        placeholders = ",".join("?" * len(old_ids))
-                        try:
-                            await self.db.execute(
-                                f"DELETE FROM vec_chunks WHERE chunk_id IN ({placeholders})", old_ids
-                            )
-                        except Exception:
-                            pass
-
-                await self.db.execute(
-                    "DELETE FROM document_chunks WHERE source = ? AND user_id = ?",
-                    (source, user_id),
-                )
-
+                await self._delete_chunks("source = ? AND user_id = ?", (source, user_id))
                 for i, (text, blob) in enumerate(zip(chunks, blobs)):
                     cursor = await self.db.execute(
-                        "INSERT INTO document_chunks (source, chunk_index, content, embedding, user_id) "
-                        "VALUES (?, ?, ?, ?, ?)",
-                        (source, i, text, blob, user_id),
+                        "INSERT INTO document_chunks (source, chunk_index, content, embedding, user_id, local_only) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (source, i, text, blob, user_id, local),
                     )
                     chunk_id = cursor.lastrowid
 
@@ -625,81 +748,111 @@ class MemoryStore:
                         except Exception as e:
                             logger.debug("vec insert for chunk %d: %s", chunk_id, e)
 
+                if self.max_chunks > 0:
+                    await self._delete_chunks(
+                        "id IN (SELECT id FROM document_chunks WHERE user_id = ? ORDER BY created_at ASC, id ASC "
+                        "LIMIT max(0, (SELECT COUNT(*) FROM document_chunks WHERE user_id = ?) - ?))",
+                        (user_id, user_id, self.max_chunks),
+                    )
                 await self.db.commit()
             except Exception:
                 await self.db.rollback()
                 raise
-        logger.info("RAG: ingested %d chunks from %s", len(chunks), source)
+        logger.info("RAG: ingested %d chunks from %s", len(chunks), hashlib.sha256(source.encode()).hexdigest()[:8])
         return len(chunks)
 
-    async def search_documents(self, query: str, limit: int = 5, user_id: str = "_global") -> list[dict]:
-        """Search document chunks: sqlite-vec ANN → brute-force cosine → text LIKE."""
+    async def _delete_chunks(self, where: str, args: tuple) -> None:
+        """Delete document chunks and their vector rows (the caller commits)."""
+        if not self._has_vec and await self._try_load_vec_table():
+            self._has_vec = True  # a table made while embeddings were on: its rows go too
+        if self._has_vec:
+            async with self.db.execute(f"SELECT id FROM document_chunks WHERE {where}", args) as cursor:
+                old_ids = [r[0] for r in await cursor.fetchall()]
+            for i in range(0, len(old_ids), 500):
+                batch = old_ids[i:i + 500]
+                try:
+                    await self.db.execute(
+                        f"DELETE FROM vec_chunks WHERE chunk_id IN ({','.join('?' * len(batch))})", batch)
+                except Exception:
+                    pass
+        await self.db.execute(f"DELETE FROM document_chunks WHERE {where}", args)
+
+    async def search_documents(
+        self, query: str, limit: int = 5, user_id: str = "_global", include_local: bool = True,
+    ) -> list[dict]:
+        """Search document chunks: sqlite-vec ANN, then brute-force cosine, then text LIKE."""
+        only = "" if include_local else " AND local_only = 0"
+        # Nothing stored for this user: skip the embedding call (a network trip or a model load per message)
+        async with self.db.execute(
+            f"SELECT 1 FROM document_chunks WHERE user_id = ?{only} LIMIT 1", (user_id,),
+        ) as cursor:
+            if await cursor.fetchone() is None:
+                return []
+
+        # One embedding of the query serves both vector paths
+        query_embedding = await self.embedder.embed(query) if self.embedder.name != "none" else []
 
         # Path 1: sqlite-vec ANN search (fast, O(log n))
-        if self._has_vec and self.embedder.name != "none":
-            query_embedding = await self.embedder.embed(query)
-            if query_embedding:
-                query_blob = serialize_embedding_blob(query_embedding)
-                if query_blob:
-                    try:
-                        # Over-fetch to allow post-filtering by user_id
+        if self._has_vec and query_embedding:
+            query_blob = serialize_embedding_blob(query_embedding)
+            if query_blob:
+                try:
+                    # Over-fetch to allow post-filtering by user_id
+                    async with self.db.execute(
+                        "SELECT chunk_id, distance FROM vec_chunks "
+                        "WHERE embedding MATCH ? AND k = ?",
+                        (query_blob, limit * 5),
+                    ) as cursor:
+                        vec_rows = await cursor.fetchall()
+
+                    if vec_rows:
+                        chunk_ids = [r[0] for r in vec_rows]
+                        placeholders = ",".join("?" * len(chunk_ids))
                         async with self.db.execute(
-                            "SELECT chunk_id, distance FROM vec_chunks "
-                            "WHERE embedding MATCH ? AND k = ?",
-                            (query_blob, limit * 5),
+                            f"SELECT id, source, chunk_index, content FROM document_chunks "
+                            f"WHERE id IN ({placeholders}) AND user_id = ?{only}",
+                            (*chunk_ids, user_id),
                         ) as cursor:
-                            vec_rows = await cursor.fetchall()
+                            rows = await cursor.fetchall()
 
-                        if vec_rows:
-                            chunk_ids = [r[0] for r in vec_rows]
-                            placeholders = ",".join("?" * len(chunk_ids))
-                            async with self.db.execute(
-                                f"SELECT id, source, chunk_index, content FROM document_chunks "
-                                f"WHERE id IN ({placeholders}) AND user_id = ?",
-                                (*chunk_ids, user_id),
-                            ) as cursor:
-                                rows = await cursor.fetchall()
-
-                            # Preserve vec ordering (nearest first)
-                            id_to_row = {r[0]: r for r in rows}
-                            results = []
-                            for chunk_id, _ in vec_rows:
-                                if chunk_id in id_to_row:
-                                    r = id_to_row[chunk_id]
-                                    results.append({"source": r[1], "chunk": r[2], "content": r[3]})
-                                    if len(results) >= limit:
-                                        break
-                            if results:
-                                return results
-                    except Exception as e:
-                        logger.warning("sqlite-vec search failed, falling back to brute-force: %s", e)
+                        # Preserve vec ordering (nearest first)
+                        id_to_row = {r[0]: r for r in rows}
+                        results = []
+                        for chunk_id, _ in vec_rows:
+                            if chunk_id in id_to_row:
+                                r = id_to_row[chunk_id]
+                                results.append({"source": r[1], "chunk": r[2], "content": r[3]})
+                                if len(results) >= limit:
+                                    break
+                        if results:
+                            return results
+                except Exception as e:
+                    logger.warning("sqlite-vec search failed, falling back to brute-force: %s", e)
 
         # Path 2: Brute-force cosine similarity (no row cap)
-        if self.embedder.name != "none":
-            query_embedding = await self.embedder.embed(query)
-            if query_embedding:
-                async with self.db.execute(
-                    "SELECT source, chunk_index, content, embedding FROM document_chunks "
-                    "WHERE user_id = ? AND embedding IS NOT NULL",
-                    (user_id,),
-                ) as cursor:
-                    candidates = await cursor.fetchall()
+        if query_embedding:
+            async with self.db.execute(
+                f"SELECT source, chunk_index, content, embedding FROM document_chunks "
+                f"WHERE user_id = ?{only} AND embedding IS NOT NULL",
+                (user_id,),
+            ) as cursor:
+                candidates = await cursor.fetchall()
 
-                scored: list[tuple[float, dict]] = []
-                for source, idx, content, emb_blob in candidates:
-                    emb = deserialize_embedding_blob(emb_blob)
-                    if emb:
-                        score = cosine_similarity(query_embedding, emb)
-                        scored.append((score, {"source": source, "chunk": idx, "content": content}))
+            scored: list[tuple[float, dict]] = []
+            for source, idx, content, emb_blob in candidates:
+                emb = deserialize_embedding_blob(emb_blob)
+                if emb:
+                    score = cosine_similarity(query_embedding, emb)
+                    scored.append((score, {"source": source, "chunk": idx, "content": content}))
 
-                scored.sort(key=lambda x: x[0], reverse=True)
-                return [item for _, item in scored[:limit]]
+            scored.sort(key=lambda x: x[0], reverse=True)
+            return [item for _, item in scored[:limit]]
 
         # Path 3: Text fallback (no embeddings)
         q = f"%{query.lower()}%"
         async with self.db.execute(
             "SELECT source, chunk_index, content FROM document_chunks "
-            "WHERE user_id = ? AND LOWER(content) LIKE ? "
+            f"WHERE user_id = ?{only} AND LOWER(content) LIKE ? "
             "ORDER BY created_at DESC LIMIT ?",
             (user_id, q, limit),
         ) as cursor:
@@ -759,7 +912,22 @@ class MemoryStore:
         return cursor.rowcount > 0
 
     async def close(self) -> None:
-        if self._fts_task and not self._fts_task.done():
-            self._fts_task.cancel()
+        for task in list(self._tasks):
+            task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
         if self._db:
             await self._db.close()
+
+
+def _rank_memories(query: list[float], rows: list[tuple], limit: int) -> tuple[list[dict], set[str]]:
+    """The `limit` rows closest to the query, and the keys of every row that had a usable vector."""
+    scored: list[tuple[float, dict]] = []
+    seen: set[str] = set()
+    for key, value, tags, emb_json in rows:
+        emb = deserialize_embedding(emb_json)
+        if emb:
+            scored.append((cosine_similarity(query, emb), {"key": key, "value": value, "tags": tags}))
+            seen.add(key)
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [item for _, item in scored[:limit]], seen

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
 
+from micropaw import privacy
 from micropaw.config import CONFIG_DIR
 from micropaw.tools.base import Tool, ToolContext
+from micropaw.tools.outbound_scan import question, refusal, remote_hosts
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +70,11 @@ class FilesTool(Tool):
         "required": ["action"],
     }
 
+    def needs_approval(self, args: dict[str, Any], context: ToolContext) -> str | None:
+        if args.get("action") == "save" and (hosts := remote_hosts(str(args.get("path", "")), args.get("content", ""))):
+            return question(str(args.get("path", "")), hosts)
+        return None
+
     async def execute(self, args: dict[str, Any], context: ToolContext) -> str:
         action = args["action"]
 
@@ -82,8 +90,10 @@ class FilesTool(Tool):
             target = _safe_path(rel)
             if not target:
                 return "Error: Invalid path (must stay within files directory)."
+            if (hosts := remote_hosts(rel, content)) and privacy.airgapped():
+                return refusal(hosts)
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
+            await asyncio.to_thread(target.write_text, content, encoding="utf-8")
             return f"Saved: {rel} ({_human_size(len(content.encode('utf-8')))})"
 
         elif action == "read":
@@ -93,7 +103,7 @@ class FilesTool(Tool):
             target = _safe_path(rel)
             if not target or not target.is_file():
                 return f"Error: File not found: {rel}"
-            data = target.read_text(encoding="utf-8", errors="replace")
+            data = await asyncio.to_thread(target.read_text, encoding="utf-8", errors="replace")
             if len(data) > _DISPLAY_LIMIT:
                 return data[:_DISPLAY_LIMIT] + f"\n\n... (truncated, full file is {_human_size(target.stat().st_size)})"
             return data

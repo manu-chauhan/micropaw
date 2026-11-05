@@ -10,8 +10,6 @@ import sys
 from datetime import UTC
 
 import click
-from rich.console import Console
-from rich.table import Table
 
 from micropaw import __version__
 from micropaw.config import (
@@ -27,7 +25,23 @@ from micropaw.core.profile import ProfileError, build_runtimes
 from micropaw.providers.registry import Registry
 from micropaw.utils.logger import quiet_console, setup_logging
 
-console = Console()
+
+class _LazyConsole:
+    """rich loads on the first print. `paw start --headless` (a service, Docker) never prints, so it never pays."""
+
+    def __getattr__(self, name):
+        global console
+        from rich.console import Console
+        console = Console()
+        return getattr(console, name)
+
+
+console = _LazyConsole()
+
+
+def Table(*args, **kwargs):  # noqa: N802 (stands in for rich.table.Table, imported when a table is built)
+    from rich.table import Table as RichTable
+    return RichTable(*args, **kwargs)
 
 
 def _create_runtimes(config: Config) -> tuple[Registry, dict]:
@@ -52,47 +66,8 @@ def _make_gateway(config: Config, registry, channels):
 
 def _create_registry(config: Config):
     """Create and populate the tool registry, respecting disabled_tools config."""
-    import logging
-
-    from micropaw.tools.base import ToolRegistry
-    from micropaw.tools.calendar_tool import CalendarTool
-    from micropaw.tools.channel_send import ChannelSendTool
-    from micropaw.tools.contacts_tool import ContactsTool
-    from micropaw.tools.cron_tool import CronTool
-    from micropaw.tools.delegate import DelegateTool
-    from micropaw.tools.email_tool import EmailTool
-    from micropaw.tools.file_read import FileReadTool
-    from micropaw.tools.file_write import FileWriteTool
-    from micropaw.tools.files_tool import FilesTool
-    from micropaw.tools.har_tool import HarTool
-    from micropaw.tools.http_request import HttpRequestTool
-    from micropaw.tools.inspect_tool import InspectTool
-    from micropaw.tools.memory_tool import MemoryTool
-    from micropaw.tools.pdf_read import PdfReadTool
-    from micropaw.tools.sessions import SessionsTool
-    from micropaw.tools.shell import ShellTool
-    from micropaw.tools.skill_tool import SkillTool
-    from micropaw.tools.tool_output import ToolOutputTool
-    from micropaw.tools.vision import VisionTool
-    from micropaw.tools.web_browse import WebBrowseTool
-    from micropaw.tools.web_search import WebSearchTool
-
-    disabled = set(config.permissions.disabled_tools)
-    if disabled:
-        logging.getLogger(__name__).info("Disabled tools: %s", ", ".join(sorted(disabled)))
-
-    registry = ToolRegistry()
-    for tool in [
-        WebSearchTool(), WebBrowseTool(), FileReadTool(), FileWriteTool(),
-        ShellTool(), HttpRequestTool(), MemoryTool(), PdfReadTool(),
-        VisionTool(), SessionsTool(), DelegateTool(), CronTool(),
-        EmailTool(), CalendarTool(), ContactsTool(), FilesTool(),
-        ChannelSendTool(), InspectTool(), HarTool(), ToolOutputTool(), SkillTool(),
-    ]:
-        if tool.name not in disabled:
-            registry.register(tool)
-
-    return registry
+    from micropaw.core.toolsets import build_registry
+    return build_registry(config)
 
 
 def _create_channels(config: Config) -> list:
@@ -404,9 +379,51 @@ def export(conversation_id, fmt, output_file):
 
 
 @main.command()
+@click.option("--all", "everything", is_flag=True, help="Delete every message, memory, document, contact and log.")
+@click.option("--older-than", "older", default="", metavar="AGE", help="Delete what is older than AGE (30d, 4w).")
+@click.option("--yes", is_flag=True, help="Do not ask first.")
+def forget(everything, older, yes):
+    """Delete what MicroPaw remembers, and overwrite the space it used.
+
+    --all stops if the gateway is running. Copies you made (exports) and backups are not touched.
+    """
+    from micropaw import service as svc
+    from micropaw import storage
+    if everything == bool(older):
+        _fail(click.UsageError("Use --all, or --older-than 30d."))
+    storage.harden_home(CONFIG_DIR)  # a database made by this command is owner-only too
+    if everything:
+        if svc.running_gateway():
+            _fail(click.ClickException("MicroPaw is running. Stop it first: paw service stop"))
+        if not yes:
+            click.confirm("Delete every message, memory, document, contact and log?", abort=True)
+        for problem in storage.forget_all(DB_FILE, CONFIG_DIR):
+            console.print(f"[yellow]{problem}[/yellow]")
+        console.print("Done. Your config and keys are still there. Files you exported are not touched.")
+        return
+    try:
+        days = storage.parse_age(older)
+    except ValueError as e:
+        _fail(click.UsageError(str(e)))
+
+    async def sweep():
+        from micropaw.memory.store import MemoryStore
+        store = MemoryStore(DB_FILE)
+        await store.init()
+        try:
+            return await store.purge_older_than(days)
+        finally:
+            await store.close()
+
+    counts = asyncio.run(sweep())
+    counts["log lines and files"] = storage.purge_old_files(CONFIG_DIR, days)
+    console.print("Removed " + (", ".join(f"{n} {k}" for k, n in counts.items() if n) or "nothing") + ".")
+
+
+@main.command()
 @click.confirmation_option(prompt="This will delete all config and data. Are you sure?")
 def reset():
-    """Reset all configuration and data."""
+    """Reset all configuration and data. This is not a secure wipe: use `paw forget --all` first for that."""
     if CONFIG_DIR.exists():
         shutil.rmtree(CONFIG_DIR)
         console.print("[green]All MicroPaw data has been reset.[/green]")
@@ -428,7 +445,8 @@ def _start_headless() -> int:
 
     def make():
         config = load_config()
-        channels = [c for c in _create_channels(config) if c.name != "terminal"]
+        config.channels.terminal.enabled = False  # not built at all: it would load rich for nothing
+        channels = _create_channels(config)
         if not channels:
             console.print("[red]No channels enabled. Run 'paw setup' to configure.[/red]")
             sys.exit(1)
@@ -1119,6 +1137,34 @@ def scan():
             console.print(f"  [green]Suggested main model: {server.name}:{pick.main.name}[/green]")
     if ram:
         console.print(f"[dim]Memory: {ram / 2**30:.0f} GB. Models up to 60% of that are suggested.[/dim]")
+
+
+@models.command(name="fetch")
+@click.argument("what", type=click.Choice(["embeddings"]))
+@click.option("--model", default="", help="Embedding model name (default: the one this install uses).")
+def models_fetch(what, model):
+    """Download the embedding model into ~/.micropaw/models, for a computer that runs offline.
+
+    Run it on a connected machine, then copy the models folder to the offline one.
+    """
+    import subprocess
+
+    from micropaw import privacy
+    from micropaw.memory.embeddings import choose_local_model, models_dir
+    if privacy.airgapped():
+        _fail(click.ClickException(
+            "Airgapped mode never downloads. Run this on a connected machine and copy "
+            f"{models_dir()} to this one."))
+    name = choose_local_model(DB_FILE, model or load_config().embedding.model)
+    if privacy.local_only():
+        console.print("Local mode: this command connects to huggingface.co. MicroPaw itself still does not.")
+    console.print(f"Downloading {name} ...")
+    env = {k: v for k, v in os.environ.items() if k != "HF_HUB_OFFLINE"}  # a fresh process: the library reads it once
+    code = "import sys; from micropaw.memory.embeddings import fetch_local_model; fetch_local_model(sys.argv[1])"
+    result = subprocess.run([sys.executable, "-c", code, name], env=env)
+    if result.returncode != 0:
+        _fail(click.ClickException("The download failed. fastembed is needed: pip install 'micropaw[embeddings]'."))
+    console.print(f"Saved in {models_dir()}. Copy that folder to ~/.micropaw/models/fastembed on the offline machine.")
 
 
 @models.command(name="test")

@@ -115,7 +115,7 @@ async def stream_response(
         if now - last_edit >= edit_interval:
             last_edit = now
             try:
-                await edit_fn(accumulated[:max_msg_len - 4] + " ...")
+                await edit_fn(strip_images(accumulated)[:max_msg_len - 4] + " ...")
             except Exception as e:
                 logger.debug("%s stream edit failed: %s", platform, e)
 
@@ -131,8 +131,19 @@ async def stream_response(
             logger.error("%s send error: %s", platform, e)
 
 
+_MD_IMAGE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
+
+
+def strip_images(text: str) -> str:
+    """Markdown images become their alt text. A chat app or a viewer that loads the image would send the URL
+    (and anything the model put in it) to whoever runs that server."""
+    return _MD_IMAGE.sub(lambda m: m.group(1) or "image", text)
+
+
 def chunk_text(text: str, max_len: int) -> list[str]:
-    """Split text into chunks that fit within max_len, preferring newline boundaries."""
+    """Split a reply into chunks that fit within max_len, preferring newline boundaries.
+    Every outgoing reply passes through here, so images are stripped here."""
+    text = strip_images(text)
     if len(text) <= max_len:
         return [text]
     chunks: list[str] = []

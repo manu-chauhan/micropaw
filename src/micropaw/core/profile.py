@@ -210,10 +210,12 @@ def unknown_tool_names(patterns: list[str], names: list[str]) -> list[str]:
 def build_view(base: ToolRegistry, runtime: AgentRuntime) -> ToolRegistry:
     """The registry an agent uses: the shared one for an unfiltered main agent, else a view with its own
     delegate (its fast model, its tools) and vision (its vision model) tools."""
+    from micropaw.core.toolsets import default_allow
     p = runtime.profile
-    if p.name == "main" and not p.filters_tools:
+    allow = p.allow or default_allow(runtime)  # an agent's own list wins; else lean for a local model
+    if p.name == "main" and not (allow or p.deny):
         return base
-    view = ToolView(base, p.allow, p.deny)
+    view = ToolView(base, allow, p.deny)
     delegate, vision = base.get("delegate"), base.get("vision")
     if delegate is not None and hasattr(delegate, "bound"):
         view.bound["delegate"] = delegate.bound(runtime.fast or runtime.provider, view)

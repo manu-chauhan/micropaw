@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import logging
 import uuid
 from collections.abc import AsyncGenerator
@@ -58,7 +57,7 @@ class GeminiProvider(AIProvider):
                     tool_id_to_name[tc.id] = tc.name
 
         def inline(media) -> dict:
-            return {"inline_data": {"mime_type": media.mime_type, "data": base64.b64encode(media.data).decode()}}
+            return {"inline_data": {"mime_type": media.mime_type, "data": media.b64()}}
 
         responses: list[dict] = []  # parallel function responses, flushed as ONE user turn
         images: list[dict] = []  # tool-result images, placed after the responses in that turn

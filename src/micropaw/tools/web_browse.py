@@ -268,44 +268,40 @@ class WebBrowseTool(Tool):
     name = "web_browse"
     marks = True
     description = (
-        "Browse URLs, interact with pages, and take screenshots. "
-        "Actions: 'browse' (load URL and extract content), 'click' (click an element), "
-        "'type' (type into an input), 'scroll' (scroll the page), 'screenshot' (capture the page). "
-        "'preview' (open an HTML file from the workspace on a local page, then report console errors, "
-        "window.__state and a screenshot). "
-        "Pages persist across actions within a conversation turn. "
-        "YouTube URLs automatically extract the video transcript."
+        "Browse pages and take screenshots. Actions: browse (load a URL), click, type, scroll, screenshot, "
+        "preview (open a workspace HTML file; report console errors, window.__state and a screenshot). "
+        "The page stays open during a turn. YouTube URLs give the transcript."
     )
     parameters: dict[str, Any] = {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "description": "What to do: browse a URL, interact with current page, or take a screenshot",
+                "description": "What to do",
                 "enum": ["browse", "click", "type", "scroll", "screenshot", "preview"],
             },
             "path": {"type": "string", "description": "HTML file in the workspace (for 'preview')"},
             "screenshot": {
                 "type": "boolean",
-                "description": "For 'preview': include a screenshot (default true; turn off if the model cannot see)",
+                "description": "For preview: include a screenshot (default true)",
             },
-            "url": {"type": "string", "description": "The URL to browse (for 'browse' action)"},
+            "url": {"type": "string", "description": "The URL (browse)"},
             "extract": {
                 "type": "string",
-                "description": "What to extract after browsing: 'text', 'html', or 'title'",
+                "description": "What to extract (default text)",
                 "enum": ["text", "html", "title"],
             },
             "selector": {
                 "type": "string",
-                "description": "CSS selector or visible text to target (for click/type)",
+                "description": "CSS selector or visible text (click, type)",
             },
             "text": {
                 "type": "string",
-                "description": "Text to type into the input (for 'type' action)",
+                "description": "Text to type",
             },
             "direction": {
                 "type": "string",
-                "description": "Scroll direction (for 'scroll' action)",
+                "description": "Scroll direction",
                 "enum": ["down", "up"],
             },
         },

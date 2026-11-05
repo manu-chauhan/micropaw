@@ -24,6 +24,7 @@ from pathlib import Path
 from xml.sax.saxutils import escape
 
 from micropaw import config
+from micropaw.health import pid_alive, process_name
 
 logger = logging.getLogger(__name__)
 
@@ -344,8 +345,10 @@ def stop(timeout: float = 30.0) -> bool:
         _run(["launchctl", "bootout", f"{_uid_domain()}/{LABEL}"])
     elif sys.platform == "linux" and managed and systemd_available():
         _run(["systemctl", "--user", "stop", UNIT_NAME])
+    elif pid and os.name != "nt":
+        os.kill(pid, signal.SIGTERM)  # a gateway started by hand: running_gateway() checked it is ours
     elif pid:
-        request_stop()  # Windows, or a gateway started by hand
+        request_stop()  # Windows has no signal that stops a process cleanly
     if pid and not wait_exit(pid, timeout):
         if sys.platform == "win32" and managed:
             _run(schtasks_argv("end"))
@@ -371,52 +374,8 @@ def read_pid() -> int | None:
         return None
 
 
-def pid_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    if os.name == "nt":
-        import ctypes
-        k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-        handle = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
-        if not handle:
-            return False
-        try:
-            code = ctypes.c_ulong()
-            return bool(k32.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259  # STILL_ACTIVE
-        finally:
-            k32.CloseHandle(handle)
-    try:
-        os.kill(pid, 0)  # never on Windows: there it would terminate the process
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
 def _process_name(pid: int) -> str | None:
-    """Command line (POSIX) or image path (Windows) of a process; None when it can't be read."""
-    try:
-        if sys.platform == "linux":
-            return Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
-        if sys.platform == "darwin":
-            return subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True,
-                                  timeout=5).stdout
-        if os.name == "nt":
-            import ctypes
-            k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-            handle = k32.OpenProcess(0x1000, False, pid)
-            if not handle:
-                return None
-            try:
-                buf = ctypes.create_unicode_buffer(1024)
-                size = ctypes.c_ulong(1024)
-                return buf.value if k32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)) else None
-            finally:
-                k32.CloseHandle(handle)
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-    return None
+    return process_name(pid)
 
 
 def _is_paw(pid: int) -> bool:
@@ -517,15 +476,18 @@ async def supervise(
     max_delay: float = 60.0,
     max_restarts: int = 10,
     window: float = 3600.0,
-    poll: float = 2.0,
+    poll: float | None = None,
 ) -> int:
     """Run the gateway; restart it after a crash (5 s, doubling to 60 s, at most 10 per hour).
 
-    Returns 0 after a clean stop (signal or stop file) and 1 when it gave up.
+    Returns 0 after a clean stop (signal or stop file) and 1 when it gave up. `paw stop` sends SIGTERM
+    on Linux and macOS, so only Windows (poll=15 s by default) looks for the stop file; poll=0 never does.
     """
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()
-    watcher = asyncio.create_task(_watch_stop_file(stop, poll))
+    if poll is None:
+        poll = 15.0 if os.name == "nt" else 0.0  # an idle daemon should not wake up just to look for a file
+    watcher = asyncio.create_task(_watch_stop_file(stop, poll)) if poll else None
     restarts: deque[float] = deque()
     delay = first_delay
     try:
@@ -563,7 +525,8 @@ async def supervise(
             delay = min(delay * 2, max_delay)
         return 0
     finally:
-        watcher.cancel()
+        if watcher:
+            watcher.cancel()
 
 
 def run_headless(make_gateway: Callable) -> int:

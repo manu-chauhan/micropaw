@@ -36,7 +36,7 @@ if (-not (Test-Command "uv")) {
 }
 
 Write-Host "Installing $spec ..."
-uv tool install --upgrade $spec
+uv tool install --compile-bytecode --upgrade $spec
 if ($LASTEXITCODE -ne 0) { throw "uv tool install failed." }
 
 $toolBin = (uv tool dir --bin 2>$null)

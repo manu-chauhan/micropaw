@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import re
@@ -86,7 +85,7 @@ class OpenAIProvider(AIProvider):
             elif msg.role == "tool":
                 api_messages.append({"role": "tool", "tool_call_id": msg.tool_call_id, "content": msg.content})
                 for media in msg.media:
-                    b64 = base64.b64encode(media.data).decode()
+                    b64 = media.b64()
                     pending.append({"type": "image_url", "image_url": {"url": f"data:{media.mime_type};base64,{b64}"}})
                 if pending and (i + 1 == len(messages) or messages[i + 1].role != "tool"):
                     pending.append({"type": "text", "text": "Image returned by the tool."})
@@ -95,7 +94,7 @@ class OpenAIProvider(AIProvider):
             elif msg.role == "user" and msg.media:
                 parts: list[dict] = []
                 for media in msg.media:
-                    b64 = base64.b64encode(media.data).decode()
+                    b64 = media.b64()
                     parts.append({"type": "image_url", "image_url": {"url": f"data:{media.mime_type};base64,{b64}"}})
                 parts.append({"type": "text", "text": msg.content})
                 api_messages.append({"role": "user", "content": parts})

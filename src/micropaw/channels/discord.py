@@ -46,7 +46,7 @@ class DiscordChannel(Channel):
             denied = channel_ref.check_access(user_id)
             if denied is not None:
                 if denied and is_dm:
-                    await message.channel.send(denied)
+                    await message.channel.send(denied, suppress_embeds=True)
                 return
             text = message.content
 
@@ -59,18 +59,18 @@ class DiscordChannel(Channel):
             media = await channel_ref._read_attachments(message)
 
             if channel_ref._stream_handler:
-                placeholder = await message.channel.send("...")
+                placeholder = await message.channel.send("...", suppress_embeds=True)
                 await stream_response(
                     channel_ref._stream_handler, text, user_id, "discord", channel_id,
-                    edit_fn=lambda t: placeholder.edit(content=t),
-                    send_fn=lambda t: message.channel.send(t),
+                    edit_fn=lambda t: placeholder.edit(content=t, suppress=True),
+                    send_fn=lambda t: message.channel.send(t, suppress_embeds=True),
                     max_msg_len=MAX_MSG_LEN, edit_interval=STREAM_EDIT_INTERVAL, media=media,
                 )
             elif channel_ref._handler:
                 async with message.channel.typing():
                     response = await channel_ref._handler(text, user_id, "discord", channel_id, media=media)
                 for chunk in chunk_text(response, MAX_MSG_LEN):
-                    await message.channel.send(chunk)
+                    await message.channel.send(chunk, suppress_embeds=True)
 
         @client.event
         async def on_disconnect() -> None:
@@ -93,7 +93,7 @@ class DiscordChannel(Channel):
             return []
         media, notes = await fetch_media(files)
         for note in notes:
-            await message.channel.send(note)
+            await message.channel.send(note, suppress_embeds=True)
         return media
 
     def _approval_view(self, ask_id: str, allow_always: bool) -> Any:
@@ -199,11 +199,11 @@ class DiscordChannel(Channel):
     async def send_message(self, chat_id: str, text: str) -> None:
         if self._client and (channel := await self._target(chat_id)):
             for chunk in chunk_text(text, MAX_MSG_LEN):
-                await channel.send(chunk)
+                await channel.send(chunk, suppress_embeds=True)
 
     async def send_approval(self, chat_id: str, text: str, ask_id: str, allow_always: bool) -> None:
         if self._client and (channel := await self._target(chat_id)):
             *head, last = chunk_text(text, MAX_MSG_LEN - 80)  # room for the decision line added later
             for chunk in head:
-                await channel.send(chunk)
-            await channel.send(last, view=self._approval_view(ask_id, allow_always))
+                await channel.send(chunk, suppress_embeds=True)
+            await channel.send(last, view=self._approval_view(ask_id, allow_always), suppress_embeds=True)

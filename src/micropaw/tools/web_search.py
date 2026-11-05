@@ -81,7 +81,7 @@ async def _search_searxng(query: str, max_results: int, base_url: str | None = N
                 return f"Search results for '{query}' (via {source}):\n\n" + "\n\n".join(results)
 
             # Got a response but no results — try next instance
-            logger.debug("SearXNG %s returned no results for '%s'", url, query)
+            logger.debug("SearXNG %s returned no results", url)
 
         except Exception as e:
             logger.debug("SearXNG %s failed: %s", url, e)
@@ -225,5 +225,5 @@ class WebSearchTool(Tool):
             return result
 
         # All SearXNG instances failed — fall back to DuckDuckGo
-        logger.info("All SearXNG instances failed for '%s', falling back to DuckDuckGo", query)
+        logger.info("All SearXNG instances failed, falling back to DuckDuckGo")
         return await _search_duckduckgo(query, max_results)

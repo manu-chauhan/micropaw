@@ -23,12 +23,10 @@ def set_scheduler(scheduler: Scheduler) -> None:
 class CronTool(Tool):
     name = "cron"
     description = (
-        "Schedule tasks. Actions: 'add' (create a recurring or one-shot job), "
-        "'list' (show all jobs), 'remove' (delete a job by ID). "
-        "To act on incoming email, add a job with trigger 'email' and the exact sender address in "
-        "from_address. These jobs are unattended: each run reads the email, summarizes it and reports to the "
-        "owner, and anything that would change something is refused. Write the description as "
-        "'read, summarize, report', never as an action to take."
+        "Schedule tasks. Actions: add (a recurring or one-shot job), list, remove (by job_id). "
+        "For incoming email, add a job with trigger 'email' and the exact sender in from_address. "
+        "Email jobs run unattended: they read, summarize and report, and anything that changes something is "
+        "refused. Write their description as 'read, summarize, report'."
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -40,28 +38,27 @@ class CronTool(Tool):
             },
             "description": {
                 "type": "string",
-                "description": "Task description — what to do when the job fires (for add)",
+                "description": "What to do when the job fires",
             },
             "interval_seconds": {
                 "type": "integer",
-                "description": "How often to run, in seconds. E.g. 3600 = every hour (for add)",
+                "description": "Seconds between runs (3600 = hourly)",
             },
             "one_shot": {
                 "type": "boolean",
-                "description": "If true, run once after interval_seconds then auto-delete (for add)",
+                "description": "Run once after interval_seconds, then delete",
             },
             "trigger": {
                 "type": "string",
                 "enum": ["time", "email"],
-                "description": "'time' (default) uses interval_seconds. 'email' runs for each new email "
-                               "from from_address and needs no interval (for add)",
+                "description": "time (default, uses interval_seconds) or email (each new mail from from_address)",
             },
             "from_address": {"type": "string", "description": "Exact sender address (trigger 'email')"},
             "subject_contains": {"type": "string", "description": "Optional words the subject must contain"},
             "label": {"type": "string", "description": "Optional Gmail label to search in"},
             "job_id": {
                 "type": "integer",
-                "description": "Job ID to remove (for remove)",
+                "description": "Job to remove",
             },
         },
         "required": ["action"],

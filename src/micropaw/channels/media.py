@@ -14,6 +14,7 @@ from micropaw.security import validate_url
 logger = logging.getLogger(__name__)
 
 MAX_BYTES = 20 * 1024 * 1024
+SMALL_BOARD_MAX_BYTES = 8 * 1024 * 1024  # under 4 GB of RAM: a photo is held three times (raw, base64, request body)
 MAX_FILES = 4
 _IMAGES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 _HOPS = 3
@@ -39,9 +40,17 @@ def _kind(mime: str) -> str | None:
     return "audio" if mime.startswith("audio/") else None
 
 
-async def download(url: str, headers: dict[str, str] | None = None, limit: int = MAX_BYTES) -> bytes:
+def max_bytes() -> int:
+    """The largest file read from a chat: 20 MB, or 8 MB on a machine with under 4 GB of RAM."""
+    from micropaw.providers.ollama import ram_bytes
+    ram = ram_bytes()
+    return SMALL_BOARD_MAX_BYTES if ram is not None and ram < 4 * 1024 ** 3 else MAX_BYTES
+
+
+async def download(url: str, headers: dict[str, str] | None = None, limit: int = 0) -> bytes:
     """The body of url, read in chunks and stopped at the limit. A redirect is followed only to the
     same host over https, so a token in headers never goes to another host."""
+    limit = limit or max_bytes()
     origin = urlparse(url).hostname
     async with httpx.AsyncClient(timeout=60.0, follow_redirects=False) as client:
         for _ in range(_HOPS + 1):
@@ -67,12 +76,13 @@ async def download(url: str, headers: dict[str, str] | None = None, limit: int =
 
 
 async def fetch_media(
-    files: list[Attachment], token: str = "", token_host: str = "", limit: int = MAX_BYTES,
+    files: list[Attachment], token: str = "", token_host: str = "", limit: int = 0,
 ) -> tuple[list[MediaItem], list[str]]:
     """(media, notes). Images and audio only; notes say why a file was skipped.
 
     The token is sent only to token_host or its subdomains (Slack: "slack.com").
     """
+    limit = limit or max_bytes()
     items: list[MediaItem] = []
     notes: list[str] = []
     for f in files[:MAX_FILES]:

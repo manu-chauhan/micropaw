@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 
 from micropaw.channels.base import Channel, chunk_text
+from micropaw.utils.logger import short_hash
 
 logger = logging.getLogger(__name__)
 
@@ -153,13 +154,13 @@ class WhatsAppChannel(Channel):
                         "messaging_product": "whatsapp",
                         "to": to,
                         "type": "text",
-                        "text": {"body": text},
+                        "text": {"body": text, "preview_url": False},
                     },
                 )
                 if resp.status_code >= 400:
                     logger.error("WhatsApp API error %d: %s", resp.status_code, resp.text[:200])
         except httpx.TimeoutException:
-            logger.error("WhatsApp send timed out for recipient %s", to)
+            logger.error("WhatsApp send timed out for recipient %s", short_hash(to))
         except Exception as e:
             logger.error("WhatsApp send failed: %s", e)
 
