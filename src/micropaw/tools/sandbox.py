@@ -16,7 +16,8 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from micropaw.config import CONFIG_DIR, PermissionsConfig
+from micropaw import egress, privacy
+from micropaw.config import CONFIG_DIR, MCPServerConfig, PermissionsConfig
 
 PROBE_TIMEOUT = 3.0  # a cold start on WSL or a busy laptop can take over a second
 CONTAINER_PROBE_TIMEOUT = 5.0  # `docker info` talks to the daemon and is slower
@@ -117,8 +118,9 @@ def _available(kind: str) -> bool:
     if kind in _probes:
         return _probes[kind]
     if kind == "bwrap":
-        ok = sys.platform.startswith("linux") and shutil.which("bwrap") is not None and _run(
-            _bwrap(Sandbox("bwrap"), "true", Path(tempfile.gettempdir()).resolve(), {}).argv)
+        ok = sys.platform.startswith("linux") and shutil.which("bwrap") is not None and (
+            _selftest() if privacy.local_only() else _run(
+                _bwrap(Sandbox("bwrap"), "true", Path(tempfile.gettempdir()).resolve(), {}).argv))
     elif kind == "seatbelt":
         ok = sys.platform == "darwin" and shutil.which("sandbox-exec") is not None and _run(
             ["sandbox-exec", "-p", "(version 1)(allow default)", "/usr/bin/true"])
@@ -128,10 +130,41 @@ def _available(kind: str) -> bool:
     return ok
 
 
+_NO_ISOLATION = {
+    "win32": "Windows cannot cut a child process off the network without admin rights, so shell and MCP servers "
+             "are off in air-gapped mode.",
+    "darwin": "macOS sandbox-exec is not trusted to cut a child process off the network, so shell and MCP servers "
+              "are off in air-gapped mode.",
+}
+
+
+def isolation_error() -> str:
+    """Why children cannot be cut off from the network here, or '' when they can (bubblewrap works)."""
+    if not sys.platform.startswith("linux"):
+        return _NO_ISOLATION.get(sys.platform, _NO_ISOLATION["darwin"])
+    if shutil.which("bwrap") is None or not _available("bwrap"):
+        return ("Air-gapped mode needs bubblewrap with a working network namespace to run shell commands and MCP "
+                "servers. It is missing or blocked here, so they are off.")
+    return ""
+
+
+def isolation_ok() -> bool:
+    return not isolation_error()
+
+
 def resolve() -> Sandbox:
     """The sandbox in effect for the current settings (probes cached for the process)."""
     cfg = _settings()
     net, image, mode = cfg.sandbox_network, cfg.sandbox_image, cfg.sandbox
+    if privacy.local_only() and (privacy.airgapped() or "shell_network" not in privacy.settings().allow):
+        net = False  # a command with network can reach any host, around every search and fetch approval
+    if privacy.airgapped():
+        if mode in ("docker", "podman"):
+            return Sandbox("none", error="The Docker and Podman sandboxes pull images, so air-gapped mode refuses "
+                                         "them. Use the bubblewrap sandbox.")
+        if err := isolation_error():
+            return Sandbox("none", error=err)
+        return Sandbox("bwrap", False)
     if mode == "off":
         return Sandbox("none")
     if mode == "auto":
@@ -168,9 +201,21 @@ def _check_workspace(ws: Path, home: Path) -> None:
         raise SandboxError(f"The workspace {ws} is too wide for a sandbox (it holds your home or MicroPaw's files).")
 
 
-def _bwrap(sb: Sandbox, command: str, ws: Path, env: dict[str, str]) -> Wrapped:
-    a = ["bwrap", "--unshare-all"]
-    if sb.network:
+def bwrap_path() -> str:
+    """The bwrap program by absolute path, remembered by the egress guard as a trusted wrapper."""
+    path = shutil.which("bwrap") or "bwrap"
+    if (g := egress.installed()) is not None:
+        g.wrappers.add(os.path.normcase(path))
+    return path
+
+
+def _bwrap_args(share_net: bool, env: dict[str, str], home: str, binds: list[tuple[str, bool]],
+                setenv: dict[str, str] | None = None) -> list[str]:
+    """The bubblewrap flags shared by shell commands and MCP servers: no network unless asked, the system
+    folders read-only, /tmp /home /run /var empty (no unix sockets, no keys), MicroPaw's folder hidden, and an
+    environment built from an allow list. `binds` are (path, writable) pairs added on top."""
+    a = [bwrap_path(), "--unshare-all"]
+    if share_net:
         a += ["--share-net"]
     a += ["--die-with-parent", "--new-session"]
     bound = list(_SYSTEM_DIRS)
@@ -185,13 +230,89 @@ def _bwrap(sb: Sandbox, command: str, ws: Path, env: dict[str, str]) -> Wrapped:
             a += ["--ro-bind", d, d]
     for d in _HIDDEN_DIRS:
         a += ["--tmpfs", d]
-    a += ["--proc", "/proc", "--dev", "/dev", "--bind", str(ws), str(ws)]
-    a += ["--clearenv", "--setenv", "HOME", str(ws)]
+    a += ["--proc", "/proc", "--dev", "/dev"]
+    for path, writable in binds:
+        a += ["--bind" if writable else "--ro-bind", path, path]
+    cfg_dir = CONFIG_DIR.resolve()
+    exposed = not any(cfg_dir.is_relative_to(d) for d in _HIDDEN_DIRS) or any(
+        cfg_dir.is_relative_to(path) for path, _ in binds)
+    if exposed and cfg_dir.exists():  # a tool must not be able to rewrite the config, and so loosen the mode
+        a += ["--tmpfs", str(cfg_dir)]
+    a += ["--clearenv", "--setenv", "HOME", home]
     safe = {k: env[k] for k in _ENV_ALLOW if k in env}
     safe.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin")
-    for k, v in safe.items():
+    for k, v in {**safe, **(setenv or {})}.items():
         a += ["--setenv", k, v]
+    return a
+
+
+def _bwrap(sb: Sandbox, command: str, ws: Path, env: dict[str, str]) -> Wrapped:
+    a = _bwrap_args(sb.network, env, str(ws), [(str(ws), True)])
     return Wrapped([*a, "--chdir", str(ws), "--", "/bin/sh", "-c", command])
+
+
+# What an MCP server never gets, even when its config names it
+_MCP_ENV_DENY = {"DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "SSH_AUTH_SOCK", "DISPLAY", "WAYLAND_DISPLAY",
+                 "DOCKER_HOST"}
+
+
+def mcp_wrap(command: str, args: list[str], cfg: MCPServerConfig, env: dict[str, str]) -> Wrapped:
+    """An MCP server's argv inside bubblewrap: the same allow-list layout as the shell sandbox, with only the
+    folders the server declares (paths, write_paths) and its own program folder visible. Network only in local
+    mode, when the server says it needs it."""
+    real = Path(command).resolve()
+    binds = [(str(real.parent), False)] if not any(real.is_relative_to(d) for d in _SYSTEM_DIRS) else []
+    binds += [(str(Path(p).expanduser().resolve()), False) for p in cfg.paths if Path(p).expanduser().exists()]
+    binds += [(str(Path(p).expanduser().resolve()), True) for p in cfg.write_paths if Path(p).expanduser().exists()]
+    share = privacy.mode() == "local" and cfg.network
+    declared = {k: v for k, v in cfg.env.items() if k not in _MCP_ENV_DENY}
+    a = _bwrap_args(share, env, "/tmp", binds, declared)
+    return Wrapped([*a, "--chdir", "/tmp", "--", command, *args], {"PATH": env.get("PATH", "/usr/bin:/bin")})
+
+
+_SELFTEST = """
+import json, os, socket, sys
+r = {}
+s = socket.socket()
+s.settimeout(1.5)
+try:
+    s.connect(("192.0.2.1", 9))
+    r["net"] = "connected"
+except socket.timeout:
+    r["net"] = "timeout"
+except OSError:
+    r["net"] = "blocked"
+r["bus"] = "visible" if os.path.exists("/run/user/%d/bus" % os.getuid()) else "hidden"
+r["config"] = "visible" if sys.argv[1] and os.path.exists(sys.argv[1]) else "hidden"
+print(json.dumps(r))
+"""
+
+
+def _selftest() -> bool:
+    """Prove the wrapper cuts a child off: a connect to a test address fails at once (no route, not a timeout),
+    the session bus is not there, and a file placed in MicroPaw's folder cannot be seen."""
+    import json
+    sentinel = ""
+    if CONFIG_DIR.is_dir():
+        sentinel = str(CONFIG_DIR / f".selftest-{uuid.uuid4().hex[:8]}")
+        try:
+            Path(sentinel).touch()
+        except OSError:
+            sentinel = ""
+    python = Path(sys.executable).resolve()  # the real interpreter: a venv's links would not exist inside
+    prefix = Path(sys.base_prefix).resolve()
+    binds = [] if any(prefix.is_relative_to(d) for d in _SYSTEM_DIRS) else [(str(prefix), False)]
+    a = _bwrap_args(False, {}, "/tmp", binds)
+    try:
+        done = subprocess.run([*a, "--", str(python), "-I", "-c", _SELFTEST, sentinel],
+                              capture_output=True, text=True, timeout=PROBE_TIMEOUT + 2)
+        found = json.loads(done.stdout.strip().splitlines()[-1]) if done.returncode == 0 else {}
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        found = {}
+    finally:
+        if sentinel:
+            Path(sentinel).unlink(missing_ok=True)
+    return found.get("net") == "blocked" and found.get("bus") == "hidden" and found.get("config") == "hidden"
 
 
 def seatbelt_profile(sb: Sandbox, ws: Path, home: Path) -> str:

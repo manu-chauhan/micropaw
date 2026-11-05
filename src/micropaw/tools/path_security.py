@@ -36,6 +36,8 @@ SENSITIVE_DIRS = (
 SENSITIVE_FILES = (
     ".env", ".netrc", ".pgpass", ".git-credentials", ".npmrc", ".pypirc",
     "id_rsa", "id_ecdsa", "id_ed25519", "id_dsa",
+    # MicroPaw's own records: a copy that lands outside the config folder must not be writable either
+    "privacy_last_mode", "privacy_last_settings", "approved_actions.json",
 )
 
 # Windows and macOS file systems ignore case, so compare lowercased there
@@ -48,7 +50,13 @@ def _norm(p: str) -> str:
     return p.lower() if _FOLD_CASE else p
 
 
-_CONFIG_DIR = _norm(str(CONFIG_DIR))
+def _in_config_dir(resolved: str) -> bool:
+    """Under the config folder, whether it is a real folder or a symlink (stow, a mounted volume)."""
+    for base in (str(CONFIG_DIR), str(CONFIG_DIR.resolve())):
+        base = _norm(base).rstrip("/")
+        if resolved == base or resolved.startswith(base + "/"):
+            return True
+    return False
 
 
 def resolve_path(path_str: str, workspace: str = "") -> Path:
@@ -92,7 +100,7 @@ def validate_file_path(path_str: str) -> str | None:
         if resolved.startswith(etc_dir):
             return f"Access denied — {etc_dir} contains sensitive data."
 
-    if resolved.startswith(_CONFIG_DIR):
+    if _in_config_dir(resolved):
         return "Access denied — the MicroPaw config directory contains secrets."
 
     for pattern in SENSITIVE_DIRS:

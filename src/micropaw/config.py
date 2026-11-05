@@ -74,6 +74,9 @@ class CustomProviderConfig(BaseModel):
 
     base_url: str
     api_key_env: str = ""  # name of the environment variable that holds the key; "" = no key
+    kind: Literal["openai", "ollama"] = "openai"  # ollama: the native Ollama API, so num_ctx and keep_alive work
+    num_ctx: int = 0       # kind ollama: context size; 0 = 8192 for a server on another machine
+    keep_alive: str = ""   # kind ollama: how long the model stays loaded; "" = the ollama.keep_alive setting
 
 
 class AgentPersona(BaseModel):
@@ -122,6 +125,9 @@ class MCPServerConfig(BaseModel):
     timeout: float = 300.0    # seconds per call; decompiling can be slow
     enabled: bool = True
     tools_hash: str = ""      # sha256 of the tool list the owner approved; a change blocks the server
+    network: bool = False     # local mode only: the child may use the network (ignored in airgapped)
+    paths: list[str] = []     # folders the child may read when it is isolated (privacy local or airgapped)
+    write_paths: list[str] = []  # folders it may also write
 
     @model_validator(mode="after")
     def _needs_command_or_url(self) -> MCPServerConfig:
@@ -247,9 +253,25 @@ class PrivacyConfig(BaseModel):
     """
 
     mode: Literal["airgapped", "local", "normal"] = "normal"
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _spelling(cls, value):
+        from micropaw.privacy import PrivacyError, parse_mode
+        try:
+            return (parse_mode(value) or "normal") if isinstance(value, str) else value
+        except PrivacyError as e:
+            raise ValueError(str(e)) from e
+
     allow_lan: bool = True          # private ranges and Tailscale count as "this side" in airgapped and local
     lan_hosts: list[str] = []       # extra host names or CIDRs that count as local (names are never resolved to decide)
     allow_cloud_fallback: bool = False  # a local main model may fail over to a cloud model
+    allow_cloud_helpers: bool = False   # a local main model may use a cloud fast or vision model (normal mode)
+    share_with_cloud: bool = True       # USER.md and the location go to a cloud model (paw setup turns this off)
+    # Local-mode exceptions: telegram, discord, slack, whatsapp, google, web_fetch, web_browse, shell_network
+    allow: list[str] = []
+    # Airgapped: MCP servers over HTTP that you vouch for. MicroPaw cannot see where they send data.
+    trusted_local_services: list[str] = []
 
 
 class VoiceConfig(BaseModel):
@@ -416,8 +438,9 @@ def _apply_env_overrides(raw: dict) -> dict:
         for key in path[:-1]:
             d = d.setdefault(key, {})
         if env_var == "MICROPAW_PRIVACY":  # can only make the mode stricter, never looser
-            from micropaw.privacy import _strictest
-            value = _strictest(str(d.get(path[-1], "normal")), value.strip().lower())
+            from micropaw.privacy import _strictest, parse_mode
+            value = _strictest(parse_mode(d.get(path[-1]), "privacy.mode") or "normal",
+                               parse_mode(value, "MICROPAW_PRIVACY"))
         d[path[-1]] = value
     return raw
 
@@ -463,7 +486,10 @@ def load_config() -> Config:
         raw = _migrate_file(raw)
     _apply_env_overrides(raw)
     raw.pop("config_version", None)
-    return Config(**raw)
+    cfg = Config(**raw)
+    from micropaw import privacy
+    privacy.apply_floor(cfg)  # settings a strict run is holding back stay held in later loads
+    return cfg
 
 
 def _migrate(raw: dict) -> dict:

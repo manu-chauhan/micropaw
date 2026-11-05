@@ -17,6 +17,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+from micropaw import privacy
 from micropaw.channels.base import Channel
 from micropaw.config import CONFIG_DIR, CONFIG_FILE, DB_FILE, Config, load_config
 from micropaw.core.agent import Agent
@@ -102,7 +103,10 @@ class _AccessGuard:
         mtime = self._config_mtime()
         if mtime != self._mtime:
             self._mtime = mtime
-            self._channels = load_config().channels
+            cfg = load_config()
+            self._channels = cfg.channels
+            if cfg.privacy.mode != privacy.mode():  # the mode is fixed for this run, whatever the file says now
+                logger.warning("privacy.mode changed, restart to apply. This run stays %s.", privacy.mode())
         allowed = getattr(getattr(self._channels, platform, None), "allowed_users", None) or []
         return str(user_id) in {str(u).strip() for u in allowed}
 
@@ -255,6 +259,17 @@ class Gateway:
 
     async def start(self) -> None:
         """Initialize everything and start all channels."""
+        try:
+            report = privacy.enforce(self.config, self.channels, await privacy.remote_model_refusals(self.config))
+        except privacy.PrivacyError as e:  # lists every refusal at once; a restart would not change it
+            logger.error("%s", e)
+            print(e, file=sys.stderr)
+            raise SystemExit(1) from None
+        logger.info("%s", privacy.describe())
+        for line in report.notices:
+            logger.warning("%s", line)
+        for name in privacy.disabled_tools():
+            self.registry.unregister(name)
         set_known_secrets(config_secrets(self.config))
         from micropaw.tools import shell
         shell.EXTRA_SECRET_ENV.update(n.upper() for n in secret_env_names(self.config))
@@ -298,7 +313,7 @@ class Gateway:
         set_search_config(self.config.search)
 
         from micropaw.tools.google_auth import set_google_config
-        if self.config.google.enabled and self.config.google.client_id:
+        if self.config.google.enabled and self.config.google.client_id and not privacy.tool_refusal("google"):
             set_google_config(self.config.google)
 
         from micropaw.bus import MessageBus

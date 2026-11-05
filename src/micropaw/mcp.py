@@ -22,6 +22,7 @@ from typing import Any
 
 import httpx
 
+from micropaw import net, privacy
 from micropaw.config import MCPServerConfig, pin_mcp_tools
 from micropaw.providers.base import MediaItem
 from micropaw.tools.base import Tool, ToolContext, ToolResult
@@ -68,14 +69,32 @@ class MCPServer:
         command = shutil.which(self.config.command)
         if not command:
             raise MCPError(f"command not found: {self.config.command}")
+        env = {**_child_env(), **self.config.env}
+        argv, env = [command, *self.config.args], env
+        if privacy.local_only():
+            argv, env = await asyncio.to_thread(self._isolate, command, env)
         self._proc = await asyncio.create_subprocess_exec(
-            command, *self.config.args,
+            *argv,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            env={**_child_env(), **self.config.env},
+            env=env,
             limit=16 * 1024 * 1024,  # tool results can be large single lines
         )
         self._reader = asyncio.create_task(self._read())
         asyncio.create_task(self._drain_stderr())
+
+    def _isolate(self, command: str, env: dict[str, str]) -> tuple[list[str], dict[str, str]]:
+        """In local and airgapped mode the child runs in bubblewrap (same layout as the shell sandbox), with no
+        network unless the server asks and the mode is local. Airgapped refuses where that is not possible."""
+        from micropaw.tools import sandbox
+        if why := privacy.mcp_refusal(self.name, self.config):
+            raise MCPError(why)
+        if sandbox.isolation_ok():
+            wrapped = sandbox.mcp_wrap(command, self.config.args, self.config, env)
+            return wrapped.argv, wrapped.env or env
+        if privacy.airgapped():
+            raise MCPError(sandbox.isolation_error())
+        logger.warning("MCP server '%s' runs without network isolation: this system cannot provide it.", self.name)
+        return [command, *self.config.args], env
 
     async def start(self, timeout: float = _START_TIMEOUT) -> list[dict]:
         """Launch the server, do the handshake and return its tool definitions."""
@@ -226,14 +245,16 @@ class HTTPMCPServer(MCPServer):
 
         url = urlparse(self.config.url)
         self._local = (url.hostname or "").lower() in _LOCAL_HOSTS
+        if why := privacy.mcp_refusal(self.name, self.config):
+            raise MCPError(why)
         if not self._local:
             if url.scheme != "https":
                 raise MCPError("a server that is not on this computer must use https")
             if error := await validate_url(self.config.url):
                 raise MCPError(error)
         self._headers = {k: _expand_env(v) for k, v in self.config.headers.items()}
-        self._client = httpx.AsyncClient(
-            follow_redirects=False, timeout=httpx.Timeout(self.config.timeout, connect=15.0),
+        self._client = net.client(
+            self.config.url, follow_redirects=False, timeout=httpx.Timeout(self.config.timeout, connect=15.0),
         )
 
     async def _send(self, message: dict) -> None:

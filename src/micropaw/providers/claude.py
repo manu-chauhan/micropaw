@@ -7,8 +7,7 @@ import json
 import logging
 from collections.abc import AsyncGenerator
 
-import httpx
-
+from micropaw import net
 from micropaw.providers.base import (
     AIProvider,
     AIResponse,
@@ -41,7 +40,7 @@ class ClaudeProvider(AIProvider):
         self.max_tokens = max_tokens
         self.effort = effort
         self._api_url = f"{base_url.rstrip('/')}/v1/messages"
-        self._client = httpx.AsyncClient(timeout=http_timeout(120.0))
+        self._client = net.client(base_url, timeout=http_timeout(120.0), limits=net.LIMITS)
 
     def _headers(self) -> dict[str, str]:
         return {

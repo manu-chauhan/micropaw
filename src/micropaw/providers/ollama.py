@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 import httpx
 
+from micropaw import net, privacy
 from micropaw.providers.base import (
     AIProvider,
     AIResponse,
@@ -76,6 +77,7 @@ def default_num_ctx(ram: int | None = None) -> int:
 class ShowInfo:
     caps: frozenset[str] | None  # None: this Ollama is too old to list capabilities
     ctx: int | None              # the model's own maximum context
+    remote: bool = False         # the reply names a remote host or model: it runs on ollama.com, not here
 
     @property
     def tools(self) -> bool:
@@ -91,23 +93,37 @@ def parse_show(data: dict) -> ShowInfo:
     caps = data.get("capabilities")
     ctx = next((v for k, v in (data.get("model_info") or {}).items()
                 if k.endswith(".context_length") and isinstance(v, int)), None)
-    return ShowInfo(frozenset(caps) if isinstance(caps, list) else None, ctx)
+    return ShowInfo(frozenset(caps) if isinstance(caps, list) else None, ctx,
+                    bool(data.get("remote_host") or data.get("remote_model")))
 
 
-async def fetch_show(client: httpx.AsyncClient, host: str, model: str) -> ShowInfo | None:
-    """None when the model is not pulled or the server cannot be reached."""
+def _auth(api_key: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+
+async def show_status(client: httpx.AsyncClient, host: str, model: str, api_key: str = "") -> ShowInfo | str:
+    """/api/show as ShowInfo, or "down" (nothing listens there) or "failed" (it answered with an error or junk)."""
     try:
-        resp = await client.post(f"{host}/api/show", json={"model": model})
+        resp = await client.post(f"{host}/api/show", json={"model": model}, headers=_auth(api_key))
         resp.raise_for_status()
         return parse_show(resp.json())
-    except (httpx.HTTPError, ValueError):
-        return None
+    except httpx.ConnectError as e:
+        return "failed" if privacy.blocked(e) else "down"
+    except (httpx.HTTPError, ValueError, AttributeError):
+        return "failed"
 
 
-async def pull_model(host: str, model: str) -> AsyncIterator[dict]:
+async def fetch_show(client: httpx.AsyncClient, host: str, model: str, api_key: str = "") -> ShowInfo | None:
+    """None when the model is not pulled or the server cannot be reached."""
+    got = await show_status(client, host, model, api_key)
+    return got if isinstance(got, ShowInfo) else None
+
+
+async def pull_model(host: str, model: str, api_key: str = "") -> AsyncIterator[dict]:
     """Stream /api/pull progress: {"status", "total", "completed"} dicts, ending with status "success"."""
-    async with httpx.AsyncClient(timeout=httpx.Timeout(None, connect=5.0)) as client:
-        async with client.stream("POST", f"{host.rstrip('/')}/api/pull", json={"model": model}) as resp:
+    async with net.client(host, timeout=httpx.Timeout(None, connect=5.0)) as client:
+        async with client.stream("POST", f"{host.rstrip('/')}/api/pull", json={"model": model},
+                                 headers=_auth(api_key)) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
                 chunk = parse_sse(line, prefix="")
@@ -122,7 +138,7 @@ class OllamaProvider(AIProvider):
 
     def __init__(
         self, host: str = "http://localhost:11434", model: str = "llama3.1", max_tokens: int = 4096,
-        num_ctx: int = 0, keep_alive: str = "30m",
+        num_ctx: int = 0, keep_alive: str = "30m", api_key: str = "",
     ) -> None:
         host = host.rstrip("/")
         if not host.startswith(("http://", "https://")):
@@ -132,10 +148,13 @@ class OllamaProvider(AIProvider):
         self.max_tokens = max_tokens
         self.num_ctx = num_ctx or default_num_ctx()
         self.keep_alive = keep_alive
-        self._client = httpx.AsyncClient(timeout=http_timeout(300.0))  # local models can be slow
+        self.api_key = api_key  # for an Ollama behind a token proxy; sent only to this host
+        # local models can be slow
+        self._client = net.client(host, timeout=http_timeout(300.0), limits=net.LIMITS, headers=_auth(api_key))
         self._tools_supported = True  # set False when /api/show or the server says no
         self.info: ShowInfo | None = None  # from /api/show, filled by load_capabilities()
         self.missing = False  # the model is not pulled
+        self.show_state = ""  # "", "ok", "down" (not running) or "failed" (answered badly), from /api/show
 
     def _url(self) -> str:
         return f"{self.host}/api/chat"
@@ -143,7 +162,9 @@ class OllamaProvider(AIProvider):
     async def load_capabilities(self) -> ShowInfo | None:
         """Read /api/show once (cached). Never loads the model into memory."""
         if self.info is None:
-            self.info = await fetch_show(self._client, self.host, self.model)
+            got = await show_status(self._client, self.host, self.model, self.api_key)
+            self.info = got if isinstance(got, ShowInfo) else None
+            self.show_state = "ok" if self.info else got
             self.missing = self.info is None
             if self.info is not None:
                 self._tools_supported = self.info.tools
@@ -213,7 +234,22 @@ class OllamaProvider(AIProvider):
             ))
         return tool_calls
 
+    async def _refuse_cloud(self) -> None:
+        """In local and airgapped mode a model that runs on ollama.com is refused, whatever its name."""
+        if not privacy.local_only():
+            return
+        if self.info is None:
+            await self.load_capabilities()
+        if privacy.cloud_tagged(self.model) or (self.info and self.info.remote):
+            raise privacy.EgressBlocked(
+                f"privacy mode blocked the model {self.model}: it runs on ollama.com, not on this network")
+        if self.info is None and self.show_state == "failed":  # not knowing is not a yes
+            raise privacy.EgressBlocked(
+                f"privacy mode blocked the model {self.model}: Ollama gave no usable answer to /api/show, so it "
+                "cannot be confirmed that the model runs here. Is it pulled?")
+
     async def _do_chat(self, body: dict) -> dict:
+        await self._refuse_cloud()
         resp = await self._client.post(self._url(), json=body)
         if resp.status_code == 400 and "does not support tools" in resp.text:
             logger.warning("Model %s does not support tools — retrying without", self.model)
@@ -239,6 +275,7 @@ class OllamaProvider(AIProvider):
     async def chat_stream(
         self, messages: list[Message], tools: list[ToolDef] | None = None,
     ) -> AsyncGenerator[str | AIResponse, None]:
+        await self._refuse_cloud()
         body = self._build_body(messages, tools, stream=True)
         logger.debug("Streaming Ollama %s", self.model)
 

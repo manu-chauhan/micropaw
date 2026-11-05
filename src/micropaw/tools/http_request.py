@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import os
 from typing import Any
@@ -9,6 +10,7 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from micropaw import net, privacy
 from micropaw.security import _is_private_ip, validate_url
 from micropaw.tools.base import Tool, ToolContext
 
@@ -79,6 +81,8 @@ class HttpRequestTool(Tool):
     def needs_approval(self, args: dict[str, Any], context: ToolContext) -> str | None:
         """Anything but a plain GET changes something; after outside content, even a GET can carry data out."""
         method = args.get("method", "GET").upper()
+        if privacy.local_only() and not privacy.airgapped():
+            return f"{method} {args.get('url', '')}"  # local mode: every URL is shown and asked
         if method == "GET" and not context.marked:
             return None
         body = str(args.get("body") or "")
@@ -92,11 +96,19 @@ class HttpRequestTool(Tool):
         headers = args.get("headers") or {}
         body = args.get("body")
 
+        if refusal := privacy.tool_refusal("web_fetch"):
+            return f"Error: {refusal}"
+        if privacy.local_only() and method != "GET":
+            return "Error: Local mode allows web fetches with GET only."
+        if privacy.local_only() and (host := urlparse(url).hostname):
+            if why := await asyncio.to_thread(privacy.permit, host):  # the owner approved this URL just now
+                return f"Error: {why}"
+
         if error := await validate_url(url):
             return f"Error: {error}"
 
         try:
-            async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
+            async with net.client(timeout=15.0, follow_redirects=False) as client:
                 response = await _send(client, method, url, headers, body)
 
                 # Manual redirect following with SSRF check at each hop

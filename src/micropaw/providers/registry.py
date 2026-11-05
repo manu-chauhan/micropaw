@@ -3,18 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import ipaddress
 import logging
 import os
 import socket
+import time
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
-from functools import lru_cache
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import httpx
 
+from micropaw import net, privacy
 from micropaw.providers.base import AIProvider, AIResponse, Message, ToolDef
 from micropaw.providers.failover import (
     FallbackProvider,
@@ -39,6 +41,9 @@ class Preset:
     base_url: str  # with the version path when the server has one ("/v1", "/v4")
     key_env: str = ""  # "" = no key needed
     quirks: frozenset[str] = frozenset()
+    kind: str = "compat"  # "ollama" = the native Ollama API (your own named Ollama server)
+    num_ctx: int = 0
+    keep_alive: str = ""
 
 
 # Base URLs and quirks from research/11 (read 5 Nov 2026). Whether a preset is local comes from its URL host.
@@ -82,6 +87,14 @@ _DOWN = {
 }
 
 
+def _is_name(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Specs and local detection
 # ---------------------------------------------------------------------------
@@ -96,36 +109,91 @@ def parse_spec(spec: str) -> tuple[str, str]:
 _PRIVATE_NETS = [ipaddress.ip_network(n) for n in
                  ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7", "100.64.0.0/10")]
 
+DNS_TTL = 300.0     # seconds a finished lookup is remembered
+DNS_TIMEOUT = 2.0   # a bad DNS server on a small board must not stall start
+_dns: dict[str, tuple[bool, float]] = {}
+_dns_pool = concurrent.futures.ThreadPoolExecutor(2, thread_name_prefix="dns")
 
-@lru_cache(maxsize=128)
-def _resolves_private(host: str) -> bool:
+
+def _now() -> float:
+    return time.monotonic()
+
+
+def _lookup(host: str) -> bool | None:
+    """True when the name resolves only to loopback or private addresses, False when any answer is public,
+    None when the lookup failed or timed out. Only finished lookups are remembered, and only for DNS_TTL."""
+    hit = _dns.get(host)
+    if hit and hit[1] > _now():
+        return hit[0]
     try:
-        return all(_private_ip(ipaddress.ip_address(a[4][0])) for a in socket.getaddrinfo(host, None))
-    except (OSError, ValueError):
-        return False
+        infos = _dns_pool.submit(socket.getaddrinfo, host, None).result(timeout=DNS_TIMEOUT)
+        private = all(_private_ip(ipaddress.ip_address(a[4][0])) for a in infos)
+    except (OSError, ValueError, concurrent.futures.TimeoutError):
+        return None
+    _dns[host] = (private, _now() + DNS_TTL)
+    return private
+
+
+def _resolves_private(host: str) -> bool:
+    return _lookup(host) is True
 
 
 def _private_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return ip.is_loopback or any(ip in net for net in _PRIVATE_NETS)
 
 
-def is_local_url(url: str) -> bool:
-    """Loopback or a private network address. Derived from the host, never declared.
+def origin_of(url: str) -> str:
+    """scheme://host:port of a base URL, without the /v1 path."""
+    u = urlparse(url if "://" in url else f"http://{url}")
+    return f"{u.scheme}://{u.netloc}"
 
-    A plain-http host name is looked up once (a LAN box like "gpu-box"). https names count as cloud.
-    """
+
+async def ollama_verdict(client: httpx.AsyncClient, origin: str, model: str, key: str = "") -> str:
+    """Does this model run on the server at `origin`? Asks Ollama's /api/show, which also answers behind an
+    OpenAI-style /v1 address. "remote" (it names ollama.com or another host), "here", "down" (nothing listens),
+    "unknown" (an Ollama that gave no usable answer) or "other" (not an Ollama, so there is nothing to ask)."""
+    from micropaw.providers.ollama import ShowInfo, show_status
+    got = await show_status(client, origin, model, key)
+    if isinstance(got, ShowInfo):
+        return "remote" if got.remote else "here"
+    if got == "down":
+        return "down"
+    ollama = urlparse(origin).port == 11434
+    if not ollama:
+        try:
+            resp = await client.get(f"{origin}/api/tags", headers={"Authorization": f"Bearer {key}"} if key else {})
+            ollama = resp.status_code == 200 and isinstance(resp.json().get("models"), list)
+        except (httpx.HTTPError, ValueError, AttributeError):
+            pass
+    return "unknown" if ollama else "other"
+
+
+def _host_of(url: str) -> tuple[str, str]:
+    """(scheme, lower-case host) of a URL or bare host[:port]."""
     if "://" not in url:
         url = f"http://{url}"
     parsed = urlparse(url)
-    host = (parsed.hostname or "").lower()
+    return parsed.scheme, (parsed.hostname or "").lower()
+
+
+def is_local_url(url: str) -> bool:
+    """This machine or the local network. Derived from the host, never declared.
+
+    In airgapped and local mode: loopback, the LAN ranges (when privacy.allow_lan) and the names the owner listed
+    in privacy.lan_hosts, with no DNS lookup. Otherwise a plain-http host name is looked up (a LAN box like
+    "gpu-box"), and so is any Tailscale name (.ts.net). Other https names count as cloud.
+    """
+    scheme, host = _host_of(url)
     if not host:
         return False
+    if privacy.local_only():
+        return privacy.local_host(host)
     if host == "localhost" or host.endswith(".localhost"):
         return True
     try:
         return _private_ip(ipaddress.ip_address(host))
     except ValueError:
-        return parsed.scheme == "http" and _resolves_private(host)
+        return (scheme == "http" or host.endswith(".ts.net")) and _resolves_private(host)
 
 
 # ---------------------------------------------------------------------------
@@ -133,12 +201,17 @@ def is_local_url(url: str) -> bool:
 # ---------------------------------------------------------------------------
 
 class _Gate(AIProvider):
-    """Thin wrapper around one provider. `local` is the preset name for a local server, else None."""
+    """Thin wrapper around one provider. `local` is the preset name for a local server, else None.
+    `pending` is the host name of a LAN entry that did not resolve when MicroPaw started."""
 
-    def __init__(self, inner: AIProvider, sem: asyncio.Semaphore, local: str | None) -> None:
+    def __init__(self, inner: AIProvider, sem: asyncio.Semaphore, local: str | None,
+                 key_env: str = "", pending: str = "", verify: tuple[str, str, str] | None = None) -> None:
         self._inner = inner
+        self._verify_args = verify  # (origin, model, key) to ask Ollama's /api/show before the first chat
         self._sem = sem
         self._local = local
+        self._key_env = key_env
+        self._pending = pending
         self.name = inner.name
         self.model = getattr(inner, "model", "")
 
@@ -152,18 +225,79 @@ class _Gate(AIProvider):
             raise AttributeError(item)
         return getattr(self._inner, item)
 
+    async def _resolve_pending(self) -> None:
+        """A LAN name that was not found at start is looked up again; nothing is sent until it resolves to a
+        private address."""
+        if not self._pending:
+            return
+        state = await asyncio.to_thread(_lookup, self._pending)
+        if state is True:
+            self._pending = ""
+            return
+        if state is None:
+            err = httpx.ConnectError(f"cannot look up {self._pending}")
+            raise FriendlyError(
+                f"Cannot look up {self._pending} from this computer. Is it on, and is the name right? "
+                "You can use its address instead, for example 192.168.1.50.", err)
+        raise FriendlyError(
+            f"{self._pending} resolves to a public address, so plain http would send the key in clear text. "
+            "Use https, or a private address (192.168.x, 10.x, Tailscale 100.x).", PermissionError(self._pending))
+
+    async def _verify(self) -> None:
+        """An OpenAI-style address can be an Ollama that serves a model from ollama.com under a local name. Ask
+        once, and refuse in local and airgapped mode unless it is clear the model runs here."""
+        if self._verify_args is None:
+            return
+        origin, model, key = self._verify_args
+        async with net.client(origin, timeout=httpx.Timeout(5.0, connect=2.0), local=True) as client:
+            verdict = await ollama_verdict(client, origin, model, key)
+        if verdict in ("here", "other"):
+            self._verify_args = None
+        elif verdict in ("remote", "unknown"):
+            what = ("it runs on ollama.com, not on this network" if verdict == "remote" else
+                    "Ollama gave no usable answer to /api/show, so it cannot be confirmed that it runs here")
+            raise privacy.EgressBlocked(f"privacy mode blocked the model {model}: {what}")
+
+    def _where(self) -> tuple[str, bool]:
+        """(host:port, True when that is this machine) of the server behind this gate."""
+        raw = getattr(self._inner, "host", "") or getattr(self._inner, "_api_url", "")
+        if not raw:
+            return "", True
+        parsed = urlparse(raw if "://" in raw else f"http://{raw}")
+        host = (parsed.hostname or "").lower()
+        shown = f"{host}:{parsed.port}" if parsed.port else host  # never the user:password part
+        return shown, host in ("localhost", "::1") or host.startswith("127.") or host.endswith(".localhost")
+
     def _friendly(self, e: Exception) -> Exception:
         if self._local is None:
             return e
         root = unwrap(e)
+        where, loopback = self._where()
+        if privacy.blocked(e):
+            return FriendlyError(f"Blocked by privacy mode: {privacy.blocked(e)}", e)
         if isinstance(root, (httpx.ConnectError, httpx.ConnectTimeout)):
-            host = getattr(self._inner, "host", "") or urlparse(getattr(self._inner, "_api_url", "")).netloc
-            generic = f"The {self._local} server at {host} is not running. Start it and try again."
-            return FriendlyError(_DOWN.get(self._local, generic), e)
+            if loopback:
+                generic = f"The {self._local} server at {where} is not running. Start it and try again."
+                return FriendlyError(_DOWN.get(self._local, generic), e)
+            text = (f"Cannot reach {where}. Is that computer on and awake, "
+                    "and is the server set to listen on the network?")
+            if isinstance(root, httpx.ConnectTimeout):
+                text += f" A firewall on that computer may be blocking port {where.rpartition(':')[2] or 'the port'}."
+            return FriendlyError(text, e)
         if isinstance(root, httpx.TimeoutException):
+            if loopback:
+                return FriendlyError(
+                    "The local model did not answer within 5 minutes. It may still be loading. "
+                    "Try again, or use a smaller model.", e)
             return FriendlyError(
-                "The local model did not answer within 5 minutes. It may still be loading. "
-                "Try again, or use a smaller model.", e)
+                f"The model at {where} did not answer within 5 minutes. It may still be loading; "
+                "try again or pick a smaller model.", e)
+        if isinstance(root, httpx.HTTPStatusError) and root.response.status_code in (401, 403):
+            if self._key_env:
+                return FriendlyError(
+                    f"The server at {where} rejected the key in {self._key_env}. Check it in ~/.micropaw/.env.", e)
+            return FriendlyError(
+                f"The server at {where} needs a key. Run: paw models add {self._local} <url> --key-env <NAME>.", e)
         return e
 
     def _raise(self, e: Exception):
@@ -173,8 +307,10 @@ class _Gate(AIProvider):
         raise friendly from e
 
     async def chat(self, messages: list[Message], tools: list[ToolDef] | None = None) -> AIResponse:
+        await self._resolve_pending()
         async with self._sem:
             try:
+                await self._verify()
                 try:
                     return await self._inner.chat(messages, tools)
                 except Exception as e:
@@ -189,10 +325,12 @@ class _Gate(AIProvider):
     async def chat_stream(
         self, messages: list[Message], tools: list[ToolDef] | None = None,
     ) -> AsyncGenerator[str | AIResponse, None]:
+        await self._resolve_pending()
         async with self._sem:
             for attempt in (0, 1):
                 started = False
                 try:
+                    await self._verify()
                     async for item in self._inner.chat_stream(messages, tools):
                         started = True
                         yield item
@@ -220,10 +358,15 @@ class Endpoint:
     key_env: str = ""
     quirks: frozenset[str] = frozenset()
     kind: str = "compat"  # claude | openai | gemini | ollama | compat
+    num_ctx: int = 0
+    keep_alive: str = ""
+    pending: bool = False  # a LAN name that has not resolved yet: held back until it does
     local: bool = field(init=False)
 
     def __post_init__(self) -> None:
-        self.local = is_local_url(self.base_url)
+        # An Ollama cloud model is served through a local daemon but runs on ollama.com
+        self.local = (self.pending or is_local_url(self.base_url)) and not (
+            self.kind in ("ollama", "compat") and privacy.cloud_tagged(self.model))
 
 
 class Registry:
@@ -234,6 +377,7 @@ class Registry:
         self.problems: list[str] = []  # why a spec could not be built, for the caller to show
         self._cache: dict[str, AIProvider] = {}
         self._sems: dict[str, asyncio.Semaphore] = {}
+        self.pending: dict[str, str] = {}  # custom entry name -> host name still to be found
         from micropaw.memory.ledger import LateLedger
         self.ledger = LateLedger()  # bound by the gateway once the database is open
         self.presets = {**PRESETS, **self._custom()}
@@ -246,14 +390,24 @@ class Registry:
                 self.problems.append(f"Provider name '{name}' is built in; pick another name for your server.")
                 continue
             parsed = urlparse(cfg.base_url)
-            if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            host = (parsed.hostname or "").lower()
+            if parsed.scheme not in ("http", "https") or not host:
                 self.problems.append(f"Provider '{name}': base_url must start with http:// or https://.")
-            elif parsed.scheme == "http" and not is_local_url(cfg.base_url):
-                self.problems.append(
-                    f"Provider '{name}' refused: {cfg.base_url} is plain http to a host outside your own network, "
-                    "which would send the key in clear text. Use https.")
-            else:
-                out[name] = Preset(cfg.base_url, cfg.api_key_env)
+                continue
+            if parsed.scheme == "http" and not is_local_url(cfg.base_url):
+                state = None if privacy.local_only() else _lookup(host)
+                if state is None and not privacy.local_only() and _is_name(host):
+                    self.pending[name] = host  # not found yet (box asleep, mDNS not up): looked up again on first use
+                else:
+                    self.problems.append(
+                        f"Provider '{name}' refused: {host} "
+                        + ("is not on this machine or listed in privacy.lan_hosts. "
+                           f'Add "{host}" to privacy.lan_hosts to use it.' if privacy.local_only()
+                           else "resolves to a public address, so plain http would send the key in clear text. "
+                                "Use https, or a private address (192.168.x, 10.x, Tailscale 100.x)."))
+                    continue
+            out[name] = Preset(cfg.base_url, cfg.api_key_env, kind=cfg.kind if cfg.kind == "ollama" else "compat",
+                               num_ctx=cfg.num_ctx, keep_alive=cfg.keep_alive)
         return out
 
     def resolve(self, spec: str) -> Endpoint | None:
@@ -264,18 +418,43 @@ class Registry:
             cfg = getattr(pc, name)
             return Endpoint(name, model or cfg.model, cfg.base_url, kind=name)
         if name == "ollama":
-            return Endpoint(name, model or pc.ollama.model, pc.ollama.host, kind=name)
+            return Endpoint(name, model or pc.ollama.model, pc.ollama.host, kind=name,
+                            num_ctx=pc.ollama.num_ctx, keep_alive=pc.ollama.keep_alive)
         preset = self.presets.get(name)
         if preset is None or not model:
             return None
-        return Endpoint(name, model, preset.base_url, preset.key_env, preset.quirks)
+        return Endpoint(name, model, preset.base_url, preset.key_env, preset.quirks,
+                        "ollama" if preset.kind == "ollama" else "compat", preset.num_ctx, preset.keep_alive,
+                        pending=name in self.pending)
 
     def is_local(self, spec: str) -> bool:
         ep = self.resolve(spec)
         return ep is not None and ep.local
 
+    def refusal(self, spec: str, role: str = "") -> str | None:
+        """Why the privacy mode does not allow this model for this role, else None. Listed in plain words,
+        with the setting to change."""
+        ep = self.resolve(spec)
+        if ep is None or not privacy.local_only():
+            return None
+        mode = privacy.mode()
+        label = f"{role} model" if role else "model"
+        if ep.kind in ("ollama", "compat") and privacy.cloud_tagged(ep.model):
+            return (f"privacy.mode is {mode}: the {label} {spec} runs on ollama.com, even though the server is "
+                    "on this machine. Use a model that runs here.")
+        if ep.local:
+            return None
+        host = urlparse(ep.base_url if "://" in ep.base_url else f"http://{ep.base_url}").hostname or ep.base_url
+        fix = (f' If it is a computer on your network, add "{host}" to privacy.lan_hosts.'
+               if ep.kind in ("ollama", "compat") and _is_name(host) else "")
+        return (f"privacy.mode is {mode}: the {label} {spec} would send this chat to {host}. "
+                f"Use a local model or switch to normal.{fix}")
+
     def _sem(self, ep: Endpoint) -> asyncio.Semaphore:
-        key = urlparse(ep.base_url if "://" in ep.base_url else f"http://{ep.base_url}").netloc if ep.local else ep.name
+        key = ep.name
+        if ep.local:  # one gate per server, however its address is spelled
+            u = urlparse(ep.base_url if "://" in ep.base_url else f"http://{ep.base_url}")
+            key = f"{u.hostname}:{u.port or (443 if u.scheme == 'https' else 80)}"
         if key not in self._sems:
             self._sems[key] = asyncio.Semaphore(LOCAL_CONCURRENCY if ep.local else CLOUD_CONCURRENCY)
         return self._sems[key]
@@ -292,8 +471,13 @@ class Registry:
             return GeminiProvider(c.api_key, ep.model, c.max_tokens, c.base_url) if c.api_key else None
         if ep.kind == "ollama":
             from micropaw.providers.ollama import OllamaProvider
-            c = pc.ollama
-            return OllamaProvider(c.host, ep.model, c.max_tokens, c.num_ctx, c.keep_alive)
+            key = os.environ.get(ep.key_env, "") if ep.key_env else ""
+            if ep.key_env and not key:
+                return None
+            # The context size follows the machine that runs the model, not the one MicroPaw runs on
+            remote_ctx = 0 if ep.local and _host_of(ep.base_url)[1] in ("localhost", "127.0.0.1", "::1") else 8192
+            return OllamaProvider(ep.base_url, ep.model, pc.ollama.max_tokens, ep.num_ctx or remote_ctx,
+                                  ep.keep_alive or pc.ollama.keep_alive, key)
         from micropaw.providers.openai import OpenAIProvider
         timeout = 300.0 if ep.local else 120.0  # local servers load the model on the first request
         if ep.kind == "openai":
@@ -305,11 +489,15 @@ class Registry:
             return None
         return OpenAIProvider(key, ep.model, pc.openai.max_tokens, ep.base_url, ep.quirks, timeout, ep.name)
 
-    def get(self, spec: str) -> AIProvider | None:
-        """The provider for "provider:model", built once. None when the name is unknown or its key is missing."""
+    def get(self, spec: str, role: str = "") -> AIProvider | None:
+        """The provider for "provider:model", built once. None when the name is unknown, its key is missing, or
+        the privacy mode refuses it (the reason is added to `problems`)."""
         ep = self.resolve(spec)
         if ep is None:
             self.problems.append(f"Model '{spec}' is not usable: unknown provider, or no model after the colon.")
+            return None
+        if msg := self.refusal(spec, role):
+            self.problems.append(msg)
             return None
         key = f"{ep.name}:{ep.model}"
         if key not in self._cache:
@@ -318,33 +506,45 @@ class Registry:
                 need = ep.key_env or f"the {ep.name} API key"
                 self.problems.append(f"Model '{spec}' is not usable: {need} is not set.")
                 return None
-            self._cache[key] = _Gate(inner, self._sem(ep), ep.name if ep.local else None)
+            verify = None
+            if ep.kind == "compat" and ep.local and privacy.local_only():
+                verify = (origin_of(ep.base_url), ep.model, os.environ.get(ep.key_env, "") if ep.key_env else "")
+            self._cache[key] = _Gate(inner, self._sem(ep), ep.name if ep.local else None, ep.key_env,
+                                     self.pending.get(ep.name, ""), verify)
         return self._cache[key]
 
-    def _built(self, specs: list[str]) -> list[AIProvider]:
+    def _built(self, specs: list[str], role: str = "") -> list[AIProvider]:
         """The providers that build, in order, without duplicates. Specs that cannot build are skipped."""
         built: list[AIProvider] = []
         for spec in specs:
-            p = self.get(spec)
+            p = self.get(spec, role)
             if p is not None and p not in built:
                 built.append(p)
         return built
 
-    def chain(self, specs: list[str]) -> AIProvider | None:
+    def _hold_back(self, built: list[AIProvider]) -> tuple[list[AIProvider], list[str]]:
+        """A local first choice does not hand the chat to a cloud model when it fails, unless the owner allows it.
+        Returns the providers to use and the names held back."""
+        if len(built) < 2 or self.config.privacy.allow_cloud_fallback or not privacy.is_local_provider(built[0]):
+            return built, []
+        keep = [p for p in built if privacy.is_local_provider(p)]
+        return keep, [f"{p.name}:{getattr(p, 'model', '')}".rstrip(":") for p in built if p not in keep]
+
+    def chain(self, specs: list[str], role: str = "") -> AIProvider | None:
         """One provider, or a FallbackProvider when several build. Not metered: see `role`."""
-        built = self._built(specs)
+        built, held = self._hold_back(self._built(specs, role))
         if not built:
             return None
-        return built[0] if len(built) == 1 else FallbackProvider(built)
+        return built[0] if len(built) == 1 and not held else FallbackProvider(built, held)
 
     def role(self, agent: str, role: str, specs: list[str]) -> AIProvider | None:
         """Like `chain`, but every provider is metered on its own, so the ledger records the one that answered."""
         from micropaw.providers.metered import meter
-        metered = [meter(p, agent=agent, role=role, ledger=self.ledger, budget=self.config.budget)
-                   for p in self._built(specs)]
+        built, held = self._hold_back(self._built(specs, role))
+        metered = [meter(p, agent=agent, role=role, ledger=self.ledger, budget=self.config.budget) for p in built]
         if not metered:
             return None
-        return metered[0] if len(metered) == 1 else FallbackProvider(metered)
+        return metered[0] if len(metered) == 1 and not held else FallbackProvider(metered, held)
 
     async def close(self) -> None:
         for provider in self._cache.values():
@@ -414,7 +614,8 @@ async def _probe(client: httpx.AsyncClient, name: str, kind: str, url: str) -> L
 
 async def scan_local(targets: dict[str, tuple[str, str]] | None = None) -> list[LocalServer]:
     """Probe the usual local ports in parallel (300 ms to connect). Returns the servers that answered."""
-    async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=0.3)) as client:
+    # Local servers and the LAN never go through an HTTP proxy from the environment
+    async with net.client(timeout=httpx.Timeout(3.0, connect=0.3), local=True) as client:
         found = await asyncio.gather(*(_probe(client, n, k, u) for n, (k, u) in (targets or LOCAL_SERVERS).items()))
     return [s for s in found if s]
 

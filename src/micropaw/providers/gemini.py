@@ -7,8 +7,7 @@ import logging
 import uuid
 from collections.abc import AsyncGenerator
 
-import httpx
-
+from micropaw import net
 from micropaw.providers.base import (
     AIProvider,
     AIResponse,
@@ -38,8 +37,8 @@ class GeminiProvider(AIProvider):
         self.model = model
         self.max_tokens = max_tokens
         self._api_base = f"{base_url.rstrip('/')}/v1beta/models"
-        self._client = httpx.AsyncClient(
-            timeout=http_timeout(120.0),
+        self._client = net.client(
+            base_url, timeout=http_timeout(120.0), limits=net.LIMITS,
             headers={"x-goog-api-key": api_key},
         )
 

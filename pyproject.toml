@@ -58,8 +58,8 @@ dev = [
 ]
 
 [project.scripts]
-paw = "micropaw.cli:main"
-micropaw = "micropaw.cli:main"
+paw = "micropaw._boot:main"
+micropaw = "micropaw._boot:main"
 
 [project.urls]
 Homepage = "https://github.com/manu-chauhan/micropaw"

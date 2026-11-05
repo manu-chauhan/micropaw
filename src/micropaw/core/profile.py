@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fnmatch
+import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -13,6 +14,9 @@ from micropaw.tools.base import Tool, ToolRegistry
 if TYPE_CHECKING:
     from micropaw.providers.base import AIProvider
     from micropaw.providers.registry import Registry
+
+
+logger = logging.getLogger(__name__)
 
 
 class ProfileError(ValueError):
@@ -87,6 +91,14 @@ def resolve_profiles(config: Config, registry: Registry) -> dict[str, AgentProfi
         dropped: list[str] = []
         fast = _inherit("fast", name, ac.fast, config.models.fast, registry, restrict, dropped)
         vision = _inherit("vision", name, ac.vision, config.models.vision, registry, restrict, dropped)
+        if is_main and registry.is_local(main) and not config.privacy.allow_cloud_helpers:
+            # Compaction, delegates and photos run on these: a local main model keeps them local unless allowed
+            if fast and not registry.is_local(fast):
+                dropped.append(fast)
+                fast = ""
+            if vision and not registry.is_local(vision):
+                dropped.append(vision)
+                vision = ""
         if ac.fallbacks is not None:
             fallbacks = list(ac.fallbacks)
             if restrict and (bad := [s for s in fallbacks if not registry.is_local(s)]):
@@ -140,6 +152,10 @@ def build_runtimes(config: Config, registry: Registry) -> dict[str, AgentRuntime
     """Providers for every agent, from the registry. Raises ProfileError when one has no usable main model."""
     runtimes: dict[str, AgentRuntime] = {}
     for name, profile in resolve_profiles(config, registry).items():
+        if profile.dropped:
+            logger.warning("Agent '%s' uses a local model, so these cloud models are not used: %s. "
+                           "Set privacy.allow_cloud_helpers (or allow_cloud on the agent) to allow them.",
+                           name, ", ".join(profile.dropped))
         provider = registry.role(name, "chat", [profile.main, *profile.fallbacks])
         if provider is None:
             why = registry.problems[-1] if registry.problems else "no provider"

@@ -1,5 +1,5 @@
 """Allow running MicroPaw with ``python -m micropaw``."""
 
-from micropaw.cli import main
+from micropaw._boot import main
 
 main()

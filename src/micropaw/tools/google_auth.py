@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
 
+from micropaw import net, privacy
 from micropaw.config import CONFIG_DIR, private_dir
 
 logger = logging.getLogger(__name__)
@@ -38,14 +39,14 @@ _config: Any = None
 
 
 async def api_get(token: str, url: str, params: dict | None = None) -> dict:
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with net.client(url, timeout=15.0) as client:
         resp = await client.get(url, params=params or {}, headers={"Authorization": f"Bearer {token}"})
         resp.raise_for_status()
         return resp.json()
 
 
 async def api_post(token: str, url: str, body: dict) -> dict:
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with net.client(url, timeout=15.0) as client:
         resp = await client.post(
             url, json=body,
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
@@ -55,7 +56,7 @@ async def api_post(token: str, url: str, body: dict) -> dict:
 
 
 async def api_delete(token: str, url: str) -> int:
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with net.client(url, timeout=15.0) as client:
         resp = await client.delete(url, headers={"Authorization": f"Bearer {token}"})
         resp.raise_for_status()
         return resp.status_code
@@ -68,6 +69,8 @@ def api_error(e: httpx.HTTPStatusError, service: str) -> str:
 
 async def ensure_token(service: str = "Google") -> tuple[str | None, str | None]:
     """Get token or return error message. Returns (token, None) or (None, error)."""
+    if refusal := privacy.tool_refusal("google"):
+        return None, f"Error: {refusal}"
     token = await get_access_token()
     if token:
         return token, None
@@ -148,7 +151,7 @@ async def get_access_token() -> str | None:
         return None
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with net.client(_TOKEN_URL, timeout=10.0) as client:
             resp = await client.post(_TOKEN_URL, data={
                 "client_id": _config.client_id,
                 "client_secret": _config.client_secret,
@@ -203,6 +206,8 @@ def _run_auth_server() -> str | None:
 
 async def authorize() -> str:
     """Run one-time OAuth2 authorization flow for enabled Google services."""
+    if refusal := privacy.tool_refusal("google"):
+        return f"Error: {refusal}"
     if not _config or not _config.client_id or not _config.client_secret:
         return (
             "Error: Google services not configured. Run 'paw setup' to set "
@@ -235,7 +240,7 @@ async def authorize() -> str:
         )
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with net.client(_TOKEN_URL, timeout=15.0) as client:
             resp = await client.post(_TOKEN_URL, data={
                 "client_id": _config.client_id,
                 "client_secret": _config.client_secret,
