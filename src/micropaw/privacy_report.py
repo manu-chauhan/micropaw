@@ -35,6 +35,9 @@ def _model_row(spec: str, registry) -> tuple[str, str, str]:
     return host, where, urlparse(ep.base_url).scheme
 
 
+_NEARBY = ("your network", "your tailnet")
+
+
 def status_line(config: Config | None = None) -> str:
     """"Privacy: local (your network allowed)"."""
     from micropaw.config import load_config
@@ -49,8 +52,10 @@ def status_line(config: Config | None = None) -> str:
     return f"Privacy: {mode}{extra}"
 
 
-def rows(config: Config) -> list[tuple[str, str, str, str]]:
-    """(what, goes to, where, scheme) for every place data can go. The scheme is only set for models."""
+def rows(config: Config, hide_lan: bool = False) -> list[tuple[str, str, str, str]]:
+    """(what, goes to, where, scheme) for every place data can go. The scheme is only set for models.
+    hide_lan leaves out the address of anything on your network: a vendor chat app shows it to the vendor
+    and to everyone in a group."""
     from micropaw.core.profile import ProfileError, resolve_profiles
     from micropaw.providers.registry import Registry
     from micropaw.tools import web_search
@@ -62,6 +67,12 @@ def rows(config: Config) -> list[tuple[str, str, str, str]]:
     def add(what: str, to: str, where: str, scheme: str = "") -> None:
         out.append((what, to, where, scheme))
 
+    def shown(host: str, where: str) -> str:
+        return "a server" if hide_lan and where in _NEARBY else host
+
+    def at(host: str, where: str) -> str:
+        return "" if hide_lan and where in _NEARBY else f" at {host}"
+
     try:
         profiles = resolve_profiles(config, registry)
     except ProfileError as e:
@@ -72,7 +83,7 @@ def rows(config: Config) -> list[tuple[str, str, str, str]]:
                            *((f"fallback {i + 1}", s) for i, s in enumerate(p.fallbacks))):
             if spec:
                 host, where, scheme = _model_row(spec, registry)
-                add(f"{role} model ({p.name} agent)", f"{spec} at {host}", where, scheme)
+                add(f"{role} model ({p.name} agent)", f"{spec}{at(host, where)}", where, scheme)
     emb = config.embedding
     if emb.enabled == "false":
         add("memory search", "off", "-")
@@ -80,14 +91,14 @@ def rows(config: Config) -> list[tuple[str, str, str, str]]:
         add("memory search", "OpenAI, text of your messages and files", "the internet")
     elif emb.provider == "ollama" or (emb.provider == "auto" and emb.enabled == "true"):
         host, where = destination(config.provider_config.ollama.host)
-        add("memory search", f"Ollama at {host}", where)
+        add("memory search", f"Ollama{at(host, where)}", where)
     else:
         add("memory search", "on this computer if installed", "this computer")
     for what, ep in (("speech to text", _endpoint(config) if config.voice.stt else None),
                      ("text to speech", tts_endpoint(config) if config.voice.tts else None)):
         if ep:
             host, where = destination(ep[0])
-            add(what, host, where)
+            add(what, shown(host, where), where)
         else:
             add(what, "off", "-")
     plan = web_search.plan(config.search, privacy.mode(), False)
@@ -103,7 +114,7 @@ def rows(config: Config) -> list[tuple[str, str, str, str]]:
         for b in plan.backends:
             label, url = names[b]
             where = destination(url)[1] if url else ("this computer" if b == "docs" else "the internet")
-            add("web search", label + (f" at {destination(url)[0]}" if url else ""), where)
+            add("web search", label + (at(destination(url)[0], where) if url else ""), where)
     allow = webfetch.privacy_allow(config)
     fetch_on = privacy.mode() == "normal" or (privacy.mode() == "local" and "web_fetch" in allow)
     add("web pages (http_request)", "any public site you approve" if fetch_on else "off",
@@ -123,7 +134,7 @@ def rows(config: Config) -> list[tuple[str, str, str, str]]:
             continue
         if srv.url:
             host, where = destination(srv.url)
-            add(f"MCP {name}", f"{host}. MicroPaw cannot see where that server sends data", where)
+            add(f"MCP {name}", f"{shown(host, where)}. MicroPaw cannot see where that server sends data", where)
         else:
             add(f"MCP {name}", "a program on this computer, which may use the network itself", "this computer")
     return out
@@ -151,12 +162,12 @@ def facts(config: Config) -> list[tuple[str, str]]:
     return out
 
 
-def render(config: Config) -> str:
-    """Plain text for /privacy and `paw privacy`."""
+def render(config: Config, platform: str = "terminal") -> str:
+    """Plain text for /privacy and `paw privacy`. On a vendor chat channel no address on your network is shown."""
     lines = [status_line(config), ""]
     lines += [f"{k}: {v}" for k, v in facts(config)]
     lines += ["", "Where data goes:"]
-    lines += [f"- {what}: {to} ({where})" for what, to, where, _ in rows(config)]
+    lines += [f"- {what}: {to} ({where})" for what, to, where, _ in rows(config, platform in _VENDOR_CHANNELS)]
     lines += ["", "A local address is not proof that a server keeps data local: a proxy such as LiteLLM or "
                   "Open WebUI can forward to the cloud. MicroPaw cannot check that."]
     return "\n".join(lines)

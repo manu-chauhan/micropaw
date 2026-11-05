@@ -233,8 +233,16 @@ def _choose_privacy(questionary, config: Config) -> str:
     return mode
 
 
+def _search_default(config: Config) -> str:
+    """The "Web search?" answer that keeps a search the owner set up. The config default (auto, no key) is off."""
+    s = config.search
+    if s.provider == "searxng":
+        return "searxng"
+    return "auto" if s.provider in ("brave", "duckduckgo") or (s.provider == "auto" and s.brave_api_key) else "off"
+
+
 def _ask_search(questionary, config: Config) -> None:
-    """Normal mode: name who sees the queries, and preselect off."""
+    """Normal mode: name who sees the queries. Enter keeps a search that is set up, else off."""
     choice = questionary.select(
         "Web search?",
         choices=[
@@ -243,7 +251,7 @@ def _ask_search(questionary, config: Config) -> None:
                                value="auto"),
             questionary.Choice("My own SearXNG server", value="searxng"),
         ],
-        default="off",
+        default=_search_default(config),
     ).ask() or "off"
     config.search.provider = choice
     if choice == "searxng":
@@ -266,6 +274,26 @@ def _ask_browser(questionary, config: Config, mode: str) -> bool:
         config.privacy.allow = [*config.privacy.allow, "web_browse"]
     return bool(questionary.confirm("Install web browsing support? (Playwright + Chromium, ~150MB)",
                                     default=False).ask())
+
+
+def _load_existing(questionary) -> Config:
+    """The saved config. Settings this start held back (config.json is looser than the last run) are kept
+    only if the owner says so here, so setup never saves them over an edit without a word."""
+    config = load_config()
+    if (held := privacy.held_settings()) and questionary.confirm(
+            f"config.json has privacy settings that are looser than the last run ({', '.join(held)}). "
+            "Keep them?", default=False).ask():
+        config = load_config(hold=False)
+    return config
+
+
+def _ask_web_fetch(questionary, config: Config, mode: str) -> None:
+    """Local mode has no http_request until privacy.allow names web_fetch."""
+    if mode != "local" or "web_fetch" in config.privacy.allow:
+        return
+    if questionary.confirm("Allow fetching web pages (the http_request tool)? It reaches the internet, and every "
+                           "page address is shown to you for approval first.", default=False).ask():
+        config.privacy.allow = [*config.privacy.allow, "web_fetch"]
 
 
 def _ask_retention(questionary, config: Config) -> None:
@@ -408,7 +436,7 @@ def run_setup(reset: bool = False) -> None:
         from micropaw.config import CONFIG_FILE
         shutil.copy2(CONFIG_FILE, CONFIG_FILE.with_name(CONFIG_FILE.name + ".bak"))
         console.print(f"[dim]The old settings are kept in {CONFIG_FILE.name}.bak[/dim]")
-    config = load_config() if config_exists() and not reset else Config()
+    config = _load_existing(questionary) if config_exists() and not reset else Config()
 
     privacy_mode = _choose_privacy(questionary, config)
 
@@ -455,6 +483,7 @@ def run_setup(reset: bool = False) -> None:
 
     if privacy_mode == "normal":
         _ask_search(questionary, config)
+    _ask_web_fetch(questionary, config, privacy_mode)
     _ask_retention(questionary, config)
 
     # Persona

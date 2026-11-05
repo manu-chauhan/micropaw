@@ -307,6 +307,33 @@ def privacy_cmd(ctx):
         click.echo(privacy_report.render(load_config()))
 
 
+@privacy_cmd.command(name="allow")
+@click.argument("feature", type=click.Choice(["web_fetch", "web_browse", "google"]))
+@click.option("--yes", is_flag=True, help="Do not ask first.")
+def privacy_allow(feature, yes):
+    """Turn on web_fetch (web pages), web_browse (browser) or google in local mode, and remember the choice.
+
+    Editing privacy.allow in config.json by hand is held back at the next start, because a file edit
+    cannot be told apart from a change made by a tool. This command records it as your choice.
+    """
+    from micropaw import privacy
+    from micropaw.config import update_config_file
+    if privacy.mode() == "airgapped":
+        _fail(click.ClickException("Air-gapped mode allows no outside hosts, so nothing can be allowed."))
+    click.echo(f"{feature} reaches the internet in local mode. Every address is shown to you for approval first.")
+    if not yes and not click.confirm("Allow it?", default=False):
+        click.echo("Nothing changed.")
+        return
+    def add(raw: dict) -> None:
+        allow = raw.setdefault("privacy", {}).setdefault("allow", [])
+        if feature not in allow:
+            allow.append(feature)
+
+    update_config_file(add)
+    privacy.confirm_mode(privacy.mode(), load_config(hold=False))  # what is on disk, not what this start held back
+    click.echo(f"Allowed: {feature}. It takes effect the next time MicroPaw starts.")
+
+
 @privacy_cmd.command(name="share-history")
 @click.option("--yes", is_flag=True, help="Do not ask first.")
 def privacy_share_history(yes):

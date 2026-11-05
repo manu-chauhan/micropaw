@@ -65,6 +65,12 @@ def _record_file():
     return CONFIG_DIR / "privacy_last_mode"
 
 
+def confirm_hint(mode: str) -> str:
+    """How to confirm a looser setting on purpose, in the shells people use."""
+    return (f"start once with MICROPAW_CONFIRM_PRIVACY={mode} (PowerShell: $env:MICROPAW_CONFIRM_PRIVACY='{mode}', "
+            f"cmd: set MICROPAW_CONFIRM_PRIVACY={mode}, then run paw)")
+
+
 def remembered(chosen: str) -> tuple[str, str]:
     """The mode to run with and a loud note when it differs from the config. A config that is looser than the
     last run (a tool or a child process may have rewritten it) is not obeyed until the owner confirms it at a
@@ -80,7 +86,7 @@ def remembered(chosen: str) -> tuple[str, str]:
             note = f"privacy.mode is now {chosen}, as you confirmed (it was {last})."
         else:
             note = (f"privacy.mode in config.json is {chosen}, but this install last ran as {last}. Staying at "
-                    f"{last}. To loosen it on purpose, start once with MICROPAW_CONFIRM_PRIVACY={chosen}.")
+                    f"{last}. To loosen it on purpose, run paw setup, or {confirm_hint(chosen)}.")
             chosen = last
     if chosen != "normal" or last:
         try:
@@ -106,6 +112,7 @@ def confirm_mode(chosen: str, config: Config | None = None) -> None:
 _FLAGS = ("allow_lan", "allow_cloud_fallback", "allow_cloud_helpers", "share_with_cloud")
 _LISTS = ("lan_hosts", "allow", "trusted_local_services")
 _floor: dict | None = None
+_held: list[str] = []  # the settings hold_loosened put back in this process
 
 
 def _settings_file():
@@ -170,6 +177,7 @@ def hold_loosened(config: Config, mode: str) -> str:
     the mode this install runs with (after `remembered`). Returns a loud note, or ""."""
     import json
     global _floor
+    _held.clear()
     try:
         last = json.loads(_settings_file().read_text())
     except (OSError, ValueError):
@@ -179,12 +187,18 @@ def hold_loosened(config: Config, mode: str) -> str:
     if prev and os.environ.get("MICROPAW_CONFIRM_PRIVACY", "").strip().lower() != mode:
         if held := _tighten(config, prev):
             _floor = prev
+            _held.extend(held)
             note = ("These privacy settings in config.json are looser than the last run: " + ", ".join(held)
-                    + f". Keeping the old values. To use them on purpose, start once with "
-                    f"MICROPAW_CONFIRM_PRIVACY={mode}.")
+                    + ". Keeping the old values. To use them on purpose, run paw setup, "
+                    f"paw privacy allow web_fetch (or web_browse, google), or {confirm_hint(mode)}.")
     if mode != "normal" or last:
         _write_settings(mode, config)
     return note
+
+
+def held_settings() -> list[str]:
+    """The settings this process is holding back because config.json is looser than the last run."""
+    return list(_held)
 
 
 def apply_floor(config: Config) -> None:

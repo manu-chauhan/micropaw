@@ -542,8 +542,9 @@ def config_exists() -> bool:
     return CONFIG_FILE.exists()
 
 
-def load_config() -> Config:
-    """Load config from ~/.micropaw/config.json with env var overrides."""
+def load_config(hold: bool = True) -> Config:
+    """Load config from ~/.micropaw/config.json with env var overrides. hold=False skips the privacy settings
+    that a strict run is holding back (the owner chose to use them, at a terminal)."""
     raw: dict = {}
     on_disk = False  # raw came from a file that parsed
     _logger = logging.getLogger(__name__)
@@ -584,7 +585,8 @@ def load_config() -> Config:
         raise ConfigError(f"The config file {CONFIG_FILE} has a problem at '{where}': "
                           f"{why}. Fix it, or run: paw setup --reset") from None
     from micropaw import privacy
-    privacy.apply_floor(cfg)  # settings a strict run is holding back stay held in later loads
+    if hold:
+        privacy.apply_floor(cfg)  # settings a strict run is holding back stay held in later loads
     return cfg
 
 
