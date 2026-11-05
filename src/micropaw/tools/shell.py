@@ -93,11 +93,13 @@ _BLOCKED_RE = [re.compile(p, re.IGNORECASE) for p in BLOCKED_PATTERNS]
 
 # Env var names that usually hold credentials; children never see them
 _SECRET_ENV = SECRET_NAME
+# Names the config points at for secrets (the gateway fills this); they need not look secret
+EXTRA_SECRET_ENV: set[str] = set()
 
 
 def _child_env() -> dict[str, str]:
     """The current environment minus API keys, tokens and other secrets."""
-    return {k: v for k, v in os.environ.items() if not _SECRET_ENV.search(k)}
+    return {k: v for k, v in os.environ.items() if not _SECRET_ENV.search(k) and k.upper() not in EXTRA_SECRET_ENV}
 
 
 # No stdin (a command that reads it would fight the terminal channel); its own process group on POSIX

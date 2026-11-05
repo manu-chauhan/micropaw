@@ -165,3 +165,44 @@ def test_log_filter_redacts_message_and_traceback():
         rec = logging.LogRecord("x", logging.ERROR, __file__, 1, "oops", (), sys.exc_info())
     f.filter(rec)
     assert SECRET not in rec.getMessage() and rec.exc_info is None
+
+
+async def test_gateway_start_hides_env_secrets_the_config_names(monkeypatch, tmp_path):
+    import asyncio
+    from unittest.mock import MagicMock
+
+    from micropaw import gateway as gw_mod
+    from micropaw.tools import shell
+
+    value, bearer = "s3cr3t-llm-key-value-123456", "bearer-value-abcdef-123456"
+    monkeypatch.setenv("GPUBOX_PASS", value)
+    monkeypatch.setenv("MCP_BEARER", bearer)
+    monkeypatch.setattr(shell, "EXTRA_SECRET_ENV", set())
+    monkeypatch.setattr(gw_mod, "DB_FILE", tmp_path / "d.db")
+    monkeypatch.setattr(gw_mod, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("micropaw.scheduler.Scheduler.run", lambda self: asyncio.sleep(0))
+    c = Config.model_validate({
+        "providers": {"gpubox": {"base_url": "https://llm.example.com/v1", "api_key_env": "GPUBOX_PASS"}},
+        "mcp_servers": {"x": {"url": "https://m.example.com/mcp",
+                              "headers": {"Authorization": "Bearer ${MCP_BEARER}"}}},
+        "embedding": {"enabled": "false"},
+    })
+    assert shell._child_env().get("GPUBOX_PASS") == value
+
+    class Terminal:
+        name = "terminal"
+
+        def set_handler(self, h): pass
+        def set_stream_handler(self, h): pass
+        def set_access(self, h): pass
+
+        async def start(self): pass
+        async def stop(self): pass
+
+    try:
+        await gw_mod.Gateway(c, MagicMock(), MagicMock(), [Terminal()]).start()
+        env = shell._child_env()
+        assert "GPUBOX_PASS" not in env and "MCP_BEARER" not in env and "PATH" in env
+        assert r.redact(f"leak {value} and {bearer}") == "leak [redacted:GPUBOX_PASS] and [redacted:MCP_BEARER]"
+    finally:
+        r.set_known_secrets({})

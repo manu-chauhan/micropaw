@@ -26,7 +26,7 @@ from micropaw.providers.base import AIProvider
 from micropaw.providers.registry import Registry
 from micropaw.scheduler import AgentGoneError
 from micropaw.tools.base import ToolRegistry
-from micropaw.utils.redact import config_secrets, redact, set_known_secrets
+from micropaw.utils.redact import add_known_secret, config_secrets, redact, secret_env_names, set_known_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -251,6 +251,11 @@ class Gateway:
     async def start(self) -> None:
         """Initialize everything and start all channels."""
         set_known_secrets(config_secrets(self.config))
+        from micropaw.tools import shell
+        shell.EXTRA_SECRET_ENV.update(n.upper() for n in secret_env_names(self.config))
+        for name in secret_env_names(self.config):  # keys read from env vars the config names
+            if os.environ.get(name):
+                add_known_secret(name, os.environ[name])
         from micropaw.tools import sandbox
         sandbox.configure(self.config.permissions)
         sb = await asyncio.to_thread(sandbox.resolve)  # probe now, off the event loop

@@ -72,7 +72,8 @@ def config_secrets(config: Any) -> dict[str, str]:
         if isinstance(node, dict):
             for k, v in node.items():
                 walk(v, f"{path}.{k}" if path else str(k))
-        elif isinstance(node, str) and node and SECRET_NAME.search(path.rsplit(".", 1)[-1]):
+        elif isinstance(node, str) and node and SECRET_NAME.search(path.rsplit(".", 1)[-1]) \
+                and not path.endswith("_env"):  # api_key_env holds the NAME of a variable, not a secret
             found[path] = node
 
     data = config.model_dump()
@@ -82,6 +83,19 @@ def config_secrets(config: Any) -> dict[str, str]:
         for var, value in server.get("env", {}).items():
             found[f"mcp.{name}.{var}"] = value
     return found
+
+
+_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def secret_env_names(config: Any) -> set[str]:
+    """Env var names the config points at for secrets: provider api_key_env and ${NAME} in MCP headers.
+    Names like GPUBOX_PASS do not look secret, so they are listed here instead of guessed."""
+    names = {p.api_key_env for p in config.providers.values() if p.api_key_env}
+    for server in config.mcp_servers.values():
+        for value in server.headers.values():
+            names.update(_ENV_REF.findall(value))
+    return names
 
 
 def redact(text: str) -> str:
