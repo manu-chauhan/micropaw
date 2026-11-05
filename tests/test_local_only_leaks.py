@@ -442,3 +442,25 @@ async def test_an_inline_helper_that_saw_local_data_taints_the_parent_turn(tool_
     ctx = ToolContext("c", "u", "terminal")
     assert await helper.execute({"task": "look"}, ctx) == "done"
     assert ctx.tainted is tainted
+
+
+class _Reader(_Peek):
+    """A tool that reads outside content (web, email): run_tool marks the turn."""
+    name, marks = "reader", True
+
+    async def execute(self, args, context):
+        return "outside text"
+
+
+async def test_an_inline_helper_that_read_outside_content_marks_the_parent_turn():
+    from micropaw.tools.base import ToolContext, ToolRegistry
+    from micropaw.tools.delegate import DelegateTool
+    registry = ToolRegistry()
+    registry.register(_Reader())
+    helper = DelegateTool().bound(_CallsThenAnswers("reader"), registry)
+    ctx = ToolContext("c", "u", "terminal")
+    assert await helper.execute({"task": "look"}, ctx) == "done"
+    assert ctx.marked is True
+    quiet = ToolContext("c", "u", "terminal")
+    assert await DelegateTool().bound(_CallsThenAnswers(""), registry).execute({"task": "x"}, quiet) == "done"
+    assert quiet.marked is False

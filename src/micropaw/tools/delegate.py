@@ -114,6 +114,7 @@ class DelegateTool(Tool):
             return await agent.run(task)
         finally:
             context.tainted = context.tainted or inline.tainted  # the reply may repeat what the helper saw
+            context.marked = context.marked or inline.marked  # and outside text the helper read still counts
 
 
 async def _run_background(agent: SubAgent, task: str, channel: str, chat_id: str) -> None:
