@@ -80,7 +80,7 @@ def test_explicit_but_missing_is_an_error(monkeypatch):
 
 def test_docker_refused_inside_container_with_socket(monkeypatch):
     monkeypatch.setattr(sandbox, "_available", lambda kind: True)
-    monkeypatch.setattr(Path, "exists", lambda self: str(self) in ("/.dockerenv", "/var/run/docker.sock"))
+    monkeypatch.setattr(Path, "exists", lambda self: self.as_posix() in ("/.dockerenv", "/var/run/docker.sock"))
     _cfg(sandbox="docker")
     assert "Docker socket" in sandbox.resolve().error
 
@@ -158,6 +158,7 @@ def test_workspace_containing_config_dir_is_refused(monkeypatch, tmp_path):
         sandbox.wrap(Sandbox("bwrap"), "true", tmp_path / "ws", {}, home=tmp_path / "elsewhere")
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the profile refuses backslash paths; seatbelt only runs on macOS")
 def test_seatbelt_profile_text():
     home = Path("/Users/me")
     off = sandbox.seatbelt_profile(Sandbox("seatbelt"), Path("/Users/me/work"), home)
@@ -175,6 +176,7 @@ def test_seatbelt_rejects_quote_in_path():
         sandbox.seatbelt_profile(Sandbox("seatbelt"), Path('/Users/me/a"b'), Path("/Users/me"))
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the profile refuses backslash paths; seatbelt only runs on macOS")
 def test_seatbelt_wrapped_argv():
     w = sandbox.wrap(Sandbox("seatbelt"), "ls", Path("/tmp/ws-test"), {"A": "b"}, home=Path("/Users/me"))
     assert w.argv[:2] == ["sandbox-exec", "-p"] and w.argv[-3:] == ["/bin/sh", "-c", "ls"]
@@ -280,10 +282,14 @@ def test_failure_detection():
 # --- shell on the host ------------------------------------------------------------
 
 def test_description_names_the_dialect(monkeypatch):
+    monkeypatch.setattr(shell, "shell_dialect", lambda: "sh")
     assert "written for sh" in shell.ShellTool().description
-    monkeypatch.setattr(shell.os, "name", "nt")
-    assert shell.shell_dialect() == "powershell"
+    monkeypatch.setattr(shell, "shell_dialect", lambda: "powershell")
     assert "written for PowerShell" in shell.ShellTool().description
+
+
+def test_dialect_follows_the_os(monkeypatch):
+    assert shell.shell_dialect() == ("powershell" if os.name == "nt" else "sh")
 
 
 @pytest.mark.parametrize("cmd", [

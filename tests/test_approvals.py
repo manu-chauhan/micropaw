@@ -139,8 +139,11 @@ class TestApprovals:
 
 
 class TestToolRules:
-    def test_shell_asks_unless_disabled_and_unmarked(self):
+    def test_shell_asks_unless_disabled_and_unmarked(self, monkeypatch):
+        from micropaw.tools import sandbox
+        from micropaw.tools.sandbox import Sandbox
         from micropaw.tools.shell import ShellTool
+        monkeypatch.setattr(sandbox, "resolve", lambda: Sandbox("bwrap"))  # a host without one always asks
         tool = ShellTool()
         assert "ls -la" in tool.needs_approval({"command": "ls -la"}, _ctx(allow_shell=True))
         assert tool.needs_approval({"command": "ls"}, _ctx(allow_shell=True, confirm_dangerous=False)) is None
