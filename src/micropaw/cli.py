@@ -1475,7 +1475,10 @@ def docs_add(folder):
                 except (OSError, ValueError) as e:
                     notes.append(f"{path}: {e}")
                     continue
-                if n := await store.ingest_document(str(path), text):
+                except Exception:  # one bad file must not stop the rest
+                    notes.append(f"{path}: could not read this file")
+                    continue
+                if n := await store.ingest_document(str(path.resolve()), text):  # one source per file
                     files, chunks = files + 1, chunks + n
         finally:
             await store.close()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import logging
 from pathlib import Path
 
@@ -80,8 +81,16 @@ def read_file(path: Path) -> str:
             from pypdf import PdfReader
         except ImportError:
             raise ValueError("PDF files need the pdf extra: paw extras add pdf") from None
-        return "\n".join(page.extract_text() or "" for page in PdfReader(str(path)).pages)
-    return path.read_text(encoding="utf-8", errors="replace")
+        try:
+            return "\n".join(page.extract_text() or "" for page in PdfReader(str(path)).pages)
+        except Exception:  # pypdf has its own errors for broken, encrypted and odd files
+            raise ValueError("could not read this PDF") from None
+    data = path.read_bytes()
+    boms = (codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)  # Notepad's "Unicode" text
+    text = data.decode("utf-16" if data.startswith(boms) else "utf-8-sig", errors="replace")
+    if "\x00" in text:
+        raise ValueError("this is not a text file this tool can read")
+    return text
 
 
 def find_files(folder: Path) -> list[Path]:

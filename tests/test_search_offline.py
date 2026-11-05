@@ -408,3 +408,68 @@ async def test_a_failing_search_request_never_logs_the_query(mode, caplog):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def _docs_add(tmp_path, monkeypatch, *args, cwd=None):
+    import micropaw.cli as cli
+    monkeypatch.setattr(cli, "DB_FILE", tmp_path / "data.db")
+    if cwd:
+        monkeypatch.chdir(cwd)
+    return CliRunner().invoke(main, ["docs", "add", *args])
+
+
+def _sources(tmp_path):
+    import sqlite3
+    con = sqlite3.connect(tmp_path / "data.db")
+    try:
+        return sorted({r[0] for r in con.execute("SELECT source FROM document_chunks")})
+    finally:
+        con.close()
+
+
+def test_paw_docs_add_goes_on_after_a_pdf_that_cannot_be_read(tmp_path, monkeypatch):
+    import sys
+    import types
+
+    class Bad:
+        def __init__(self, path):
+            raise RuntimeError("Stream has ended unexpectedly")
+    monkeypatch.setitem(sys.modules, "pypdf", types.SimpleNamespace(PdfReader=Bad))
+    folder = tmp_path / "docs"
+    folder.mkdir()
+    (folder / "bad.pdf").write_bytes(b"%PDF-1.4 garbage")
+    (folder / "ok.txt").write_text("alpha bravo")
+    r = _docs_add(tmp_path, monkeypatch, str(folder))
+    assert r.exit_code == 0, r.output
+    assert "bad.pdf: could not read this PDF" in r.output and "Indexed 1 file(s)" in r.output
+
+
+def test_paw_docs_add_reads_utf16_files_and_skips_binary_junk(tmp_path, monkeypatch):
+    folder = tmp_path / "docs"
+    folder.mkdir()
+    (folder / "u16.txt").write_bytes("hello zebra".encode("utf-16"))
+    (folder / "bom.txt").write_bytes(b"\xef\xbb\xbfplain bom")
+    (folder / "junk.txt").write_bytes(b"ab\x00cd\x00ef")
+    r = _docs_add(tmp_path, monkeypatch, str(folder))
+    assert "junk.txt: this is not a text file" in r.output and "Indexed 2 file(s)" in r.output
+    import asyncio
+
+    async def text():
+        s = MemoryStore(tmp_path / "data.db")
+        await s.init()
+        try:
+            async with s.db.execute("SELECT content FROM document_chunks ORDER BY content") as cur:
+                return [row[0] for row in await cur.fetchall()]
+        finally:
+            await s.close()
+    assert asyncio.run(text()) == ["hello zebra", "plain bom"]
+
+
+def test_paw_docs_add_stores_one_source_per_file_however_it_is_reached(tmp_path, monkeypatch):
+    folder = tmp_path / "docs"
+    folder.mkdir()
+    (folder / "ok.txt").write_text("alpha bravo")
+    _docs_add(tmp_path, monkeypatch, str(folder))
+    _docs_add(tmp_path, monkeypatch, ".", cwd=folder)
+    _docs_add(tmp_path, monkeypatch, str(folder), cwd=tmp_path.parent)
+    assert _sources(tmp_path) == [str((folder / "ok.txt").resolve())]
