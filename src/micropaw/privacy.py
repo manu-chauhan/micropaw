@@ -216,7 +216,7 @@ def local_host(host: str) -> bool:
     host = (host or "").strip().lower().rstrip(".")
     if not host:
         return False
-    if host == "localhost" or host.endswith(".localhost"):
+    if host == "localhost":  # not x.localhost: the system resolver may send that name out
         return True
     ip = egress.parse_ip(host.strip("[]"))
     if ip is not None:

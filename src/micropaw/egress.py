@@ -35,7 +35,19 @@ class EgressBlocked(PermissionError):  # noqa: N818 - the name the plan and the 
 def _clean(host: object) -> str:
     if isinstance(host, bytes):
         host = host.decode("ascii", "replace")
-    return str(host).split("%", 1)[0].strip().lower().rstrip(".")
+    host = str(host).strip().lower()
+    if ":" in host:  # an IPv6 literal may carry a scope id; in a name a '%' is never dropped
+        host = host.split("%", 1)[0]
+    return host.rstrip(".")
+
+
+def valid_name(host: object) -> bool:
+    """A host name made only of letters, digits, dot, dash and underscore. A NUL byte, a space, a '%' or a slash
+    makes the C resolver read a different name from the one the rules compared."""
+    if isinstance(host, bytes):
+        host = host.decode("ascii", "replace")
+    name = str(host).strip().lower().rstrip(".")
+    return bool(name) and all(c.isalnum() or c in "._-" for c in name)
 
 
 def parse_ip(host: object) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
@@ -84,6 +96,8 @@ class Guard:
             self._ips_ok[str(parse_ip(ip) or ip)] = until
 
     def is_open(self, host: object) -> bool:
+        if not valid_name(host):
+            return False
         name = _clean(host)
         return any(name == s.lstrip(".") or name.endswith(s if s.startswith(".") else "." + s)
                    for s in self.open_suffixes)
@@ -121,10 +135,12 @@ class Guard:
         if host is None or host == "" or host == b"":
             return True
         name = _clean(host)
-        if not name or name == "localhost" or name.endswith(".localhost"):
-            return True
         if parse_ip(name) is not None:
             return self.address_ok(name)
+        if not valid_name(host):
+            return False
+        if name == "localhost":  # not x.localhost: the system resolver may send that name out
+            return True
         return (name in self.names or name in self.own or self._live(self._names_ok, name)
                 or self.is_open(name))
 

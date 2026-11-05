@@ -63,7 +63,7 @@ def test_listed_ranges_and_addresses_pass_without_allow_lan():
 
 @pytest.mark.parametrize("event,host,ok", [
     ("socket.getaddrinfo", "example.com", False), ("socket.getaddrinfo", "localhost", True),
-    ("socket.getaddrinfo", "x.localhost", True), ("socket.getaddrinfo", None, True),
+    ("socket.getaddrinfo", "x.localhost", False), ("socket.getaddrinfo", None, True),
     ("socket.getaddrinfo", "", True), ("socket.getaddrinfo", "8.8.8.8", False),
     ("socket.getaddrinfo", "127.0.0.1", True), ("socket.getaddrinfo", "gpu-box", True),
     ("socket.getaddrinfo", b"example.com", False), ("socket.gethostbyname", "example.com", False),
@@ -342,3 +342,32 @@ def test_windows_proactor_connects_ask_the_guard(monkeypatch):
     with pytest.raises(egress.EgressBlocked):
         p.sendto(sock, b"x", 0, ("1.1.1.1", 53))
     assert calls == [("connect", ("127.0.0.1", 80)), ("sendto", ("127.0.0.1", 80))]
+
+
+@pytest.mark.parametrize("host", [
+    "evil.com\x00.localhost", b"evil.com\x00.localhost", "evil.com\x00.telegram.org",
+    "exfil-data.attacker.example.localhost",
+    "evil.com%.telegram.org", "127.0.0.1%evil.com", "gpu-box\x00.evil.com", "a b.telegram.org", "evil.com/.localhost",
+])
+def test_a_name_with_a_nul_or_odd_character_or_a_localhost_label_is_refused(host):
+    g = guard(mode="local", names={"gpu-box"}, open_suffixes=[".telegram.org"])
+    assert g.decide("socket.getaddrinfo", (host, 80, 0, 0, 0)) is not None
+    assert g.check_host(host) is not None
+    assert not g.is_open(host)
+
+
+def test_clean_names_still_pass_and_a_scope_id_only_belongs_to_an_ipv6_literal():
+    g = guard(mode="local", names={"gpu-box"}, open_suffixes=[".telegram.org"])
+    assert g.check_host("api.telegram.org") is None and g.check_host("GPU-Box.") is None
+    assert g.check_host("localhost") is None and g.check_host("fe80::1%eth0") is None
+
+
+def test_vendor_addresses_are_not_learned_for_a_name_with_a_nul(monkeypatch):
+    from micropaw import privacy
+    g = guard(mode="local", open_suffixes=[".telegram.org"])
+    monkeypatch.setattr(socket, "getaddrinfo", lambda host, *a, **k: [(2, 1, 6, "", ("203.0.113.9", 0))])
+    privacy._learn_vendor_addresses(g)
+    socket.getaddrinfo("example.com\x00.telegram.org", 80)
+    assert g.decide("socket.connect", (FakeSock(), ("203.0.113.9", 80))) is not None
+    socket.getaddrinfo("api.telegram.org", 80)
+    assert g.decide("socket.connect", (FakeSock(), ("203.0.113.9", 80))) is None
