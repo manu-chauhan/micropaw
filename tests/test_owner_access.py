@@ -215,3 +215,26 @@ class TestMoreSecretPaths:
     def test_sandbox_env_override(self, monkeypatch, cfg_file):
         monkeypatch.setenv("MICROPAW_SANDBOX", "off")
         assert config_mod.load_config().permissions.sandbox == "off"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="creating a symlink needs a privilege on Windows")
+def test_a_symlinked_config_folder_is_still_protected(tmp_path, monkeypatch):
+    """The folder the owner sees (~/.micropaw) may be a link to the real one; the real path must be protected."""
+    from micropaw.tools import path_security
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "home" / ".micropaw"
+    link.parent.mkdir()
+    link.symlink_to(real, target_is_directory=True)
+    monkeypatch.setattr(path_security, "CONFIG_DIR", link)
+    for name in ("config.json", "privacy_last_mode", "approved_actions.json", "anything.txt"):
+        for check in (path_security.validate_write_path, path_security.validate_file_path):
+            assert "config directory" in (check(str(link / name)) or ""), (name, check.__name__)
+            assert "config directory" in (check(str(real / name)) or ""), (name, check.__name__)
+    assert path_security.validate_write_path(str(tmp_path / "home" / ".micropaw-notes.txt")) is None
+
+
+def test_the_privacy_records_are_protected_by_name_anywhere(tmp_path):
+    from micropaw.tools.path_security import validate_write_path
+    for name in ("privacy_last_mode", "privacy_last_settings", "approved_actions.json"):
+        assert validate_write_path(str(tmp_path / name)) is not None
