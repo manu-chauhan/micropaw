@@ -289,9 +289,16 @@ class EmbeddingConfig(BaseModel):
 
 
 class SearchConfig(BaseModel):
-    provider: Literal["auto", "searxng", "brave", "duckduckgo"] = "auto"
+    """off: no search. offline: Kiwix and your own documents, no internet. searxng: your own server.
+    auto: your own SearXNG or Brave if set, else public instances (never in airgapped or local mode).
+    """
+
+    provider: Literal["auto", "off", "offline", "kiwix", "docs", "searxng", "brave", "duckduckgo"] = "auto"
     brave_api_key: str = ""
     searxng_url: str = ""  # self-hosted SearXNG URL, e.g. "http://localhost:8888"
+    kiwix_url: str = ""    # kiwix-serve on this computer or your network, e.g. "http://localhost:8080"
+    kiwix_books: list[str] = []  # book names to search (up to 5), e.g. ["wikipedia_en_all_nopic_2026-06"]
+    proxy: str = ""        # socks5h:// or socks5:// proxy for your own SearXNG (needs: pip install micropaw[tor])
 
 
 class PrivacyConfig(BaseModel):

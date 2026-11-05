@@ -149,8 +149,9 @@ class _Approvals:
             self._rules = set()
 
     def _rule(self, tool: str, text: str, marked: bool) -> str:
-        """The exact action as a rule key, or "" when rules don't apply (outside content was read)."""
-        return "" if marked else hashlib.sha256(f"{tool}\n{text}".encode()).hexdigest()
+        """The exact action as a rule key, or "" when rules don't apply (outside content was read, or a search:
+        the model writes the query, so no "always" for it)."""
+        return "" if marked or tool == "web_search" else hashlib.sha256(f"{tool}\n{text}".encode()).hexdigest()
 
     def _remember(self, rule: str) -> None:
         self._rules.add(rule)
@@ -295,7 +296,7 @@ class Gateway:
         set_provider(self.vision_provider or self.provider)
 
         from micropaw.tools.web_search import set_search_config
-        set_search_config(self.config.search)
+        set_search_config(self.config.search, self.config.privacy, self.store)
 
         from micropaw.tools.google_auth import set_google_config
         if self.config.google.enabled and self.config.google.client_id:

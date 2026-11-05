@@ -40,6 +40,7 @@ slack = ["slack-bolt>=1.18"]
 whatsapp = ["aiohttp>=3.9"]
 browser = ["playwright>=1.40"]
 pdf = ["pypdf>=4.0"]
+tor = ["httpx[socks]"]  # a SOCKS proxy (Tor) for your own SearXNG
 embeddings = ["fastembed>=0.4"]  # offline ONNX embeddings (~175 MB); Ollama or OpenAI need nothing extra
 all = [
     "python-telegram-bot>=21.0",

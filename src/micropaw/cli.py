@@ -51,6 +51,11 @@ def _make_gateway(config: Config, registry, channels):
     return Gateway(config, main.provider, registry, channels, main.fast, main.vision, runtimes=runtimes, models=models)
 
 
+def _privacy_allow(config: Config) -> list[str]:
+    """The features named in privacy.allow (web_browse, web_fetch, ...)."""
+    return list(getattr(config.privacy, "allow", None) or [])
+
+
 def _create_registry(config: Config):
     """Create and populate the tool registry, respecting disabled_tools config."""
     import logging
@@ -81,6 +86,13 @@ def _create_registry(config: Config):
     disabled = set(config.permissions.disabled_tools)
     if disabled:
         logging.getLogger(__name__).info("Disabled tools: %s", ", ".join(sorted(disabled)))
+
+    from micropaw import privacy
+    mode, allow = privacy.mode(), _privacy_allow(config)
+    if mode == "airgapped" or (mode == "local" and "web_browse" not in allow):
+        disabled.add("web_browse")  # a browser is a child process with its own network
+    if mode == "airgapped" or (mode == "local" and "web_fetch" not in allow):
+        disabled.add("http_request")
 
     registry = ToolRegistry()
     for tool in [
@@ -1297,6 +1309,48 @@ async def _test_model(registry: Registry, spec: str) -> tuple[str, str, str]:
             info = await p.load_capabilities()
             vision = "yes" if info and info.vision else "no"
     return chat, tools, vision
+
+
+@main.group()
+def docs():
+    """Your own documents, searched offline."""
+
+
+@docs.command(name="add")
+@click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=str))
+def docs_add(folder):
+    """Index the .txt, .md and .pdf files in a folder for offline keyword search. Nothing leaves this computer."""
+    from pathlib import Path
+
+    from micropaw import docsearch
+    from micropaw.memory.store import MemoryStore
+
+    async def run() -> tuple[int, int, list[str]]:
+        store = MemoryStore(DB_FILE)  # no embedder: nothing is sent anywhere
+        await store.init()
+        files = chunks = 0
+        notes: list[str] = []
+        try:
+            for path in await asyncio.to_thread(docsearch.find_files, Path(folder)):
+                if path.stat().st_size > docsearch.MAX_FILE_BYTES:
+                    notes.append(f"{path} is too big (over 10 MB), skipped")
+                    continue
+                try:
+                    text = await asyncio.to_thread(docsearch.read_file, path)
+                except (OSError, ValueError) as e:
+                    notes.append(f"{path}: {e}")
+                    continue
+                if n := await store.ingest_document(str(path), text):
+                    files, chunks = files + 1, chunks + n
+        finally:
+            await store.close()
+        return files, chunks, notes
+
+    files, chunks, notes = asyncio.run(run())
+    for note in notes:
+        click.echo(note)
+    click.echo(f"Indexed {files} file(s), {chunks} piece(s). Search them with the web_search tool when "
+               "search.provider is offline or docs.")
 
 
 @main.group()
