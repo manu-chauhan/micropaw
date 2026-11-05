@@ -5,12 +5,13 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import os
+import socket
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import httpx
 
-from micropaw import net, privacy, webfetch
+from micropaw import egress, net, privacy, webfetch
 from micropaw.security import _is_private_ip, validate_url
 from micropaw.tools.base import Tool, ToolContext
 
@@ -37,6 +38,43 @@ def _check_peer(response: httpx.Response, url: str) -> None:
     peer = stream.get_extra_info("server_addr") if stream else None
     if peer and _is_private_ip(ipaddress.ip_address(peer[0])):
         raise _BlockedError(f"{urlparse(url).hostname} connected to a private address ({peer[0]})")
+
+
+class _PinnedTransport(httpx.AsyncBaseTransport):
+    """Local mode: resolve the name here, refuse any non-public answer, and connect to the address checked.
+    The name still goes in the Host header and in TLS, so a DNS answer that changes later cannot reach
+    this machine or the network (the privacy guard always allows those)."""
+
+    def __init__(self, inner: httpx.AsyncBaseTransport) -> None:
+        self.inner = inner
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        if egress.parse_ip(host) is None:
+            port = request.url.port or (443 if request.url.scheme == "https" else 80)
+            try:
+                infos = await asyncio.to_thread(socket.getaddrinfo, host, port, type=socket.SOCK_STREAM)
+            except OSError as e:
+                raise httpx.ConnectError(f"Cannot look up {host}.") from e
+            addrs = list(dict.fromkeys(i[4][0] for i in infos))
+            private = [a for a in addrs if _is_private_ip(egress.parse_ip(a))]
+            if private or not addrs:
+                why = f"{host} resolved to a private address ({private[0]})" if private else f"Cannot look up {host}."
+                raise httpx.ConnectError(why) from privacy.EgressBlocked(why)
+            privacy.guard().permit("", 120.0, addrs[:1])
+            request.url = request.url.copy_with(host=addrs[0])
+            request.extensions = {**request.extensions, "sni_hostname": host}
+        elif _is_private_ip(egress.parse_ip(host)):
+            why = f"{host} is a private address"
+            raise httpx.ConnectError(why) from privacy.EgressBlocked(why)
+        return await self.inner.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        await self.inner.aclose()
+
+
+def _inner_transport() -> httpx.AsyncBaseTransport:
+    return httpx.AsyncHTTPTransport(verify=net.ssl_context())
 
 
 async def _send(client: httpx.AsyncClient, method: str, url: str, headers: dict, body: Any) -> httpx.Response:
@@ -165,7 +203,8 @@ class HttpRequestTool(Tool):
             if why := await asyncio.to_thread(privacy.permit, host):  # the owner approved this URL just now
                 return f"Error: {why}"
         try:
-            final, response, data = await webfetch.fetch_clean(url, check=validate_url, max_bytes=MAX_DOWNLOAD + 1)
+            final, response, data = await webfetch.fetch_clean(
+                url, check=validate_url, max_bytes=MAX_DOWNLOAD + 1, transport=_PinnedTransport(_inner_transport()))
         except webfetch.FetchError as e:
             blocked = privacy.blocked(e)
             return f"Error: {blocked or e}"

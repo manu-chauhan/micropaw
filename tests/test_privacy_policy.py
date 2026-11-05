@@ -552,7 +552,6 @@ def test_private_lan_hosts_entries_are_not_refused():
 async def test_http_request_in_local_mode_shows_the_cleaned_address_and_fetches_it_clean(monkeypatch):
     import httpx
 
-    from micropaw import net
     from micropaw.tools.base import ToolContext
     from micropaw.tools.http_request import HttpRequestTool
     tool = HttpRequestTool()
@@ -570,15 +569,12 @@ async def test_http_request_in_local_mode_shows_the_cleaned_address_and_fetches_
         seen.append(request)
         return httpx.Response(200, text="hello", headers={"content-type": "text/plain"})
 
-    real = net.client
-    monkeypatch.setattr(net, "client", lambda *a, **k: real(*a, transport=httpx.MockTransport(handler), **k))
-    monkeypatch.setattr(privacy, "permit", lambda host, *a, **k: privacy.guard().permit(host, 120.0, ()))
-
-    async def fine(url):
-        return None
-    monkeypatch.setattr("micropaw.tools.http_request.validate_url", fine)
+    monkeypatch.setattr("micropaw.tools.http_request._inner_transport", lambda: httpx.MockTransport(handler))
+    monkeypatch.setattr(socket, "getaddrinfo", lambda host, *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))])
+    assert privacy.permit("example.com") is None  # what the owner's yes does, with the real guard
     out = await tool.execute({"url": "https://example.com/p?utm_source=a&id=7",
                               "headers": {"Authorization": "secret"}}, ctx)
     assert out.startswith("HTTP 200") and "URL: https://example.com/p?id=7" in out and out.endswith("hello")
-    assert str(seen[0].url) == "https://example.com/p?id=7"
+    assert seen[0].url.path == "/p" and seen[0].url.query == b"id=7"
+    assert seen[0].url.host == "93.184.216.34" and seen[0].headers["host"] == "example.com"
     assert "authorization" not in seen[0].headers and "referer" not in seen[0].headers

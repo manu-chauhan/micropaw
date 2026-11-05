@@ -498,7 +498,10 @@ def permit(host: str, ttl: float = 120.0, ips: tuple[str, ...] = (), resolve: bo
         return "Air-gapped mode allows no outside hosts."
     g = guard()
     g.permit(host, ttl, ips)
-    if ips or not resolve or egress.parse_ip(host) is not None:
+    if egress.parse_ip(host) is not None:  # an address literal: the owner approved that address
+        g.permit("", ttl, (host,))
+        return None
+    if ips or not resolve:
         return None
     try:
         found = {a[4][0] for a in socket.getaddrinfo(host, None)}
