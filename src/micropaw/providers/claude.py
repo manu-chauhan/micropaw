@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
 from collections.abc import AsyncGenerator
@@ -55,7 +54,7 @@ class ClaudeProvider(AIProvider):
         return {
             "type": "image",
             "source": {"type": "base64", "media_type": media.mime_type,
-                        "data": base64.b64encode(media.data).decode()},
+                        "data": media.b64()},
         }
 
     def _build_body(self, messages: list[Message], tools: list[ToolDef] | None) -> dict:

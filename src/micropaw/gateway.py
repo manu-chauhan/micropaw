@@ -32,6 +32,7 @@ from micropaw.providers.ollama import ram_bytes
 from micropaw.providers.registry import Registry
 from micropaw.scheduler import AgentGoneError
 from micropaw.tools.base import ToolRegistry
+from micropaw.utils.logger import allow_content, short_hash
 from micropaw.utils.redact import add_known_secret, config_secrets, redact, secret_env_names, set_known_secrets
 
 logger = logging.getLogger(__name__)
@@ -65,20 +66,25 @@ class _RateLimiter:
     def check(self, user_id: str) -> bool:
         """Return True if the request is allowed, False if rate-limited."""
         now = time.monotonic()
-        window = self._windows.setdefault(user_id, [])
-        # Prune entries older than 60 seconds
         cutoff = now - 60.0
-        self._windows[user_id] = window = [t for t in window if t > cutoff]
+        if len(self._windows) > 256:  # a key nobody comes back to would stay for the life of the process
+            self._windows = {k: w for k, w in self._windows.items() if w and w[-1] > cutoff}
+        window = [t for t in self._windows.get(user_id, []) if t > cutoff]
+        if not window:
+            self._windows.pop(user_id, None)
 
         if len(window) >= self.messages_per_minute:
+            self._windows[user_id] = window
             return False
 
         # Burst check: no more than burst_limit in 5 seconds
         recent = sum(1 for t in window if t > now - 5.0)
         if recent >= self.burst_limit:
+            self._windows[user_id] = window
             return False
 
         window.append(now)
+        self._windows[user_id] = window
         return True
 
 
@@ -129,10 +135,8 @@ class _AccessGuard:
         if key in self._replied or len(self._replied) >= self._MAX_REPLIES_PER_DAY:
             return ""
         self._replied.add(key)
-        logger.warning(
-            "Refused %s user %s (not allowed). If this is you, run: paw allow %s %s",
-            platform, user_id, platform, user_id,
-        )
+        logger.warning("Refused %s user %s (not allowed). The reply to them says how to allow it.",
+                       platform, short_hash(str(user_id)))
         return (
             f"This assistant is private. Your {platform} ID is {user_id}.\n"
             f"If this is your assistant, run this on its computer: paw allow {platform} {user_id}"
@@ -267,6 +271,9 @@ class Gateway:
     async def start(self) -> None:
         """Initialize everything and start all channels."""
         set_known_secrets(config_secrets(self.config))
+        from micropaw.utils import audit
+        audit.configure(self.config.storage.audit)
+        allow_content(self.config.storage.log_content)
         from micropaw.tools import shell
         shell.EXTRA_SECRET_ENV.update(n.upper() for n in secret_env_names(self.config))
         for name in secret_env_names(self.config):  # keys read from env vars the config names
@@ -483,7 +490,8 @@ class Gateway:
             return "I can only read text, photos and voice notes."
         # Internal platforms (heartbeat, system) bypass rate limiting
         if platform not in self._INTERNAL_PLATFORMS:
-            if not self._rate_limiter.check(user_id):
+            # Web chat is owner-only behind a token, and every connection has a new id: one key for all of them
+            if not self._rate_limiter.check("webchat" if platform == "webchat" else user_id):
                 return "You're sending messages too fast. Please wait a moment."
         max_size = self.config.context.max_message_size
         if len(text) > max_size:
@@ -657,7 +665,7 @@ class Gateway:
         if (waiting := self._approvals.waiting(f"{platform}:{channel_id or user_id}")) is not None:
             return f"Waiting for your answer to [{waiting}]: reply yes {waiting} or no {waiting}."
         self._record_channel_activity(platform, user_id, channel_id)
-        logger.debug("[%s] %s: %s", platform, user_id, text[:80])
+        logger.debug("[%s] %s: %s", platform, short_hash(user_id), text[:80], extra={"content": True})
         if agent_name:  # a scheduled job runs on the agent that made it, never on another one
             agent = self.agents.get(agent_name)
             if agent is None:
@@ -674,7 +682,7 @@ class Gateway:
             else:
                 response = await agent.handle_message(text, user_id, platform, channel_id, media=media)
         self._track_usage(agent)
-        logger.debug("[%s] MicroPaw: %s", platform, response[:80])
+        logger.debug("[%s] MicroPaw: %s", platform, response[:80], extra={"content": True})
         return redact(response)
 
     # Internal platforms that should not be registered as real channels
@@ -928,6 +936,8 @@ class Gateway:
             except Exception as e:
                 logger.error("Error closing embedding provider: %s", e)
 
+        from micropaw.tools.delegate import cancel_background
+        await cancel_background()
         for agent in self.agents.values():
             await agent.stop_background()  # an auto-ingest must not write to a closed database
         if self.store:

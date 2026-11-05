@@ -56,7 +56,7 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 echo "Installing $spec ..."
-uv tool install --upgrade "$spec"
+uv tool install --compile-bytecode --upgrade "$spec"
 
 bin_dir="$(uv tool dir --bin 2>/dev/null || true)"
 [ -n "$bin_dir" ] || bin_dir="$HOME/.local/bin"

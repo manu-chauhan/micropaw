@@ -11,6 +11,7 @@ from micropaw.bus import MessageBus, OutboundMessage
 from micropaw.core.subagent import SubAgent
 from micropaw.providers.base import AIProvider
 from micropaw.tools.base import Tool, ToolContext, ToolRegistry
+from micropaw.utils.prices import is_local_provider
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,9 @@ _provider: AIProvider | None = None
 _bus: MessageBus | None = None
 _registry: ToolRegistry | None = None
 _max_iterations: int = 25
+_MAX_BACKGROUND = 2  # sub-agent loops at once: more only slow every model call on a small board
+_slots = asyncio.Semaphore(_MAX_BACKGROUND)
+_tasks: set[asyncio.Task] = set()  # asyncio keeps only weak references to tasks
 
 
 def set_delegate_deps(
@@ -80,20 +84,27 @@ class DelegateTool(Tool):
                 return "Error: Background mode requires message bus (not available)."
             # Runs after this turn ends: nobody is there to approve, and it gets its own
             # browser session so the main turn closing its page doesn't break it.
-            bg_context = dataclasses.replace(context, approve=None, conversation_id=f"{context.conversation_id}:bg")
+            bg_context = dataclasses.replace(
+                context, approve=None, conversation_id=f"{context.conversation_id}:bg",
+                local_data=context.local_data and is_local_provider(provider),
+            )
             agent = SubAgent(provider, registry=registry, tool_context=bg_context, max_iterations=_max_iterations)
-            asyncio.create_task(_run_background(agent, task, context.platform, context.chat_id))
+            job = asyncio.create_task(_run_background(agent, task, context.platform, context.chat_id))
+            _tasks.add(job)
+            job.add_done_callback(_tasks.discard)
             return f"Task delegated in background: {task[:80]}"
 
         # Inline: block until done. Shares the turn's context, so approvals and the mark carry over.
-        agent = SubAgent(provider, registry=registry, tool_context=context, max_iterations=_max_iterations)
+        inline = dataclasses.replace(context, local_data=context.local_data and is_local_provider(provider))
+        agent = SubAgent(provider, registry=registry, tool_context=inline, max_iterations=_max_iterations)
         return await agent.run(task)
 
 
 async def _run_background(agent: SubAgent, task: str, channel: str, chat_id: str) -> None:
     """Run a sub-agent in the background and publish result to bus."""
     try:
-        result = await agent.run(task)
+        async with _slots:
+            result = await agent.run(task)
         if _bus and not _bus.closed:
             await _bus.publish_outbound(OutboundMessage(
                 channel=channel,
@@ -102,3 +113,10 @@ async def _run_background(agent: SubAgent, task: str, channel: str, chat_id: str
             ))
     except Exception as e:
         logger.error("Background sub-agent failed: %s", e)
+
+
+async def cancel_background() -> None:
+    """Stop sub-agents still running (the gateway is stopping)."""
+    for job in list(_tasks):
+        job.cancel()
+    await asyncio.gather(*_tasks, return_exceptions=True)

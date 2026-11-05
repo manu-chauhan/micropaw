@@ -10,8 +10,6 @@ import sys
 from datetime import UTC
 
 import click
-from rich.console import Console
-from rich.table import Table
 
 from micropaw import __version__
 from micropaw.config import (
@@ -27,7 +25,23 @@ from micropaw.core.profile import ProfileError, build_runtimes
 from micropaw.providers.registry import Registry
 from micropaw.utils.logger import quiet_console, setup_logging
 
-console = Console()
+
+class _LazyConsole:
+    """rich loads on the first print. `paw start --headless` (a service, Docker) never prints, so it never pays."""
+
+    def __getattr__(self, name):
+        global console
+        from rich.console import Console
+        console = Console()
+        return getattr(console, name)
+
+
+console = _LazyConsole()
+
+
+def Table(*args, **kwargs):  # noqa: N802 (stands in for rich.table.Table, imported when a table is built)
+    from rich.table import Table as RichTable
+    return RichTable(*args, **kwargs)
 
 
 def _create_runtimes(config: Config) -> tuple[Registry, dict]:
@@ -428,7 +442,8 @@ def _start_headless() -> int:
 
     def make():
         config = load_config()
-        channels = [c for c in _create_channels(config) if c.name != "terminal"]
+        config.channels.terminal.enabled = False  # not built at all: it would load rich for nothing
+        channels = _create_channels(config)
         if not channels:
             console.print("[red]No channels enabled. Run 'paw setup' to configure.[/red]")
             sys.exit(1)

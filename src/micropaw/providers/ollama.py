@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import functools
 import logging
 import os
@@ -160,7 +159,7 @@ class OllamaProvider(AIProvider):
         tool_names = {tc.id: tc.name for m in messages for tc in m.tool_calls}
         pending: list[str] = []  # images returned by tools, sent as a user message after the results
         for i, msg in enumerate(messages):
-            images = [base64.b64encode(m.data).decode() for m in msg.media if m.type == "image"]
+            images = [m.b64() for m in msg.media if m.type == "image"]
             if msg.role == "tool":
                 entry: dict = {"role": "tool", "content": msg.content}
                 if msg.tool_call_id in tool_names:

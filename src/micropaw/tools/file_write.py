@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from micropaw import privacy
 from micropaw.tools.base import Tool, ToolContext
+from micropaw.tools.outbound_scan import question, refusal, remote_hosts
 from micropaw.tools.path_security import in_workspace, resolve_path, runs_code_later, validate_write_path
 
 MAX_CONTENT_SIZE = 10_000_000  # 10MB
@@ -26,6 +28,8 @@ class FileWriteTool(Tool):
         if not context.allow_file_write:
             return None  # execute() refuses anyway
         path = resolve_path(args.get("path", ""), context.workspace)
+        if hosts := remote_hosts(str(path), str(args.get("content", ""))):
+            return question(str(path), hosts)  # even inside the workspace
         if in_workspace(path, context.workspace) and not runs_code_later(path):
             return None
         return f"Write {len(args.get('content', '')):,} characters to:\n{path}"
@@ -39,6 +43,8 @@ class FileWriteTool(Tool):
 
         if error := validate_write_path(str(path)):
             return f"Error: {error}"
+        if (hosts := remote_hosts(str(path), content)) and privacy.airgapped():
+            return refusal(hosts)
 
         if len(content) > MAX_CONTENT_SIZE:
             return f"Error: Content too large ({len(content):,} chars, max {MAX_CONTENT_SIZE:,})"

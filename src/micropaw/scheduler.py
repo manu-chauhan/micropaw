@@ -357,7 +357,8 @@ class Scheduler:
                 return
 
         # No compatible channel available — log and drop
-        logger.warning("No compatible channel for delivery (origin=%s): %s", channel, content[:200])
+        logger.warning("No compatible channel for delivery (origin=%s): %s", channel, content[:200],
+                       extra={"content": True})
 
     async def _deliver_all(self, origin_channel: str, origin_chat_id: str, content: str) -> None:
         """Deliver to ALL active channels — for reminders and urgent notifications."""

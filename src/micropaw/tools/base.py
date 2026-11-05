@@ -118,4 +118,4 @@ async def run_tool(tool: Tool, args: dict[str, Any], context: ToolContext) -> st
     finally:
         if tool.marks:
             context.marked = True
-        record(tool.name, args, outcome, context.conversation_id, ask, text)
+        record(tool.name, args, outcome, context.conversation_id, ask)

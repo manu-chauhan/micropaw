@@ -23,5 +23,5 @@ ENV PATH="/opt/venv/bin:$PATH" PYTHONUNBUFFERED=1 HOME=/home/paw MICROPAW_HOME=/
 USER 10001:10001
 WORKDIR /home/paw
 VOLUME /home/paw/.micropaw
-HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 CMD ["paw", "doctor", "--quiet"]
+HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 CMD ["python", "-m", "micropaw.health"]
 CMD ["paw", "start", "--headless"]

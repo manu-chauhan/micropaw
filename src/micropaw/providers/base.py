@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextvars
 import json
 import logging
@@ -65,6 +66,13 @@ class MediaItem:
     data: bytes
     mime_type: str  # "image/png", "image/jpeg", etc.
     outside: bool = False  # came from someone else (forwarded, shared): outside content, marks the chat
+    _b64: str | None = field(default=None, repr=False, compare=False)
+
+    def b64(self) -> str:
+        """The data as base64, made once: every model call of a turn, and every provider in a chain, shares it."""
+        if self._b64 is None:
+            self._b64 = base64.b64encode(self.data).decode()
+        return self._b64
 
 
 @dataclass(slots=True)

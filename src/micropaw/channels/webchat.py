@@ -10,6 +10,7 @@ import base64
 import hashlib
 import json
 import logging
+import re
 import secrets
 import struct
 import uuid
@@ -116,6 +117,38 @@ async def _read_http_request(reader: asyncio.StreamReader) -> dict[str, str] | N
 
 
 # ---------------------------------------------------------------------------
+# What the browser may do with the page
+# ---------------------------------------------------------------------------
+
+_HOST_OK = re.compile(r"^[A-Za-z0-9.\-:\[\]]{1,255}$")
+_LAN_WARNING = (
+    '<div class="warn">This page is plain http on your network. Anyone on it can read the chat. '
+    'Use it on a network you trust, or put it behind https.</div>'
+)
+
+
+def _is_loopback(host: str) -> bool:
+    return host in ("127.0.0.1", "localhost", "::1")
+
+
+def _hash(html: str, tag: str) -> str:
+    inline = re.search(rf"<{tag}>(.*?)</{tag}>", html, re.DOTALL)
+    digest = hashlib.sha256((inline.group(1) if inline else "").encode()).digest()
+    return "'sha256-" + base64.b64encode(digest).decode() + "'"
+
+
+def _page_headers(html: str, host: str) -> str:
+    """No third party, no referrer, nothing cached. The inline script and style are allowed by hash and
+    the page may open a WebSocket only to the address it came from."""
+    host = host if _HOST_OK.match(host) else ""
+    csp = (f"default-src 'self'; script-src {_hash(html, 'script')}; style-src {_hash(html, 'style')}; "
+           f"connect-src 'self' ws://{host} wss://{host}; img-src 'none'; base-uri 'none'; form-action 'none'; "
+           "frame-ancestors 'none'")
+    return (f"Content-Security-Policy: {csp}\r\nReferrer-Policy: no-referrer\r\n"
+            "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n")
+
+
+# ---------------------------------------------------------------------------
 # Channel
 # ---------------------------------------------------------------------------
 
@@ -158,7 +191,7 @@ class WebChatChannel(Channel):
         if headers.get("upgrade", "").lower() == "websocket":
             await self._handle_websocket(reader, writer, headers, path)
         elif path == "/" or path.startswith("/?"):
-            await self._serve_ui(writer, path)
+            await self._serve_ui(writer, path, headers.get("host", ""))
         elif path.startswith("/api/status"):
             await self._serve_status(writer, path)
         else:
@@ -174,14 +207,17 @@ class WebChatChannel(Channel):
                     return secrets.compare_digest(param[6:], self.auth_token)
         return False
 
-    async def _serve_ui(self, writer: asyncio.StreamWriter, path: str) -> None:
+    async def _serve_ui(self, writer: asyncio.StreamWriter, path: str, host: str = "") -> None:
         if not self._check_token(path):
             body = b"Access denied. Append ?token=YOUR_TOKEN to the URL."
-            writer.write(f"HTTP/1.1 401 Unauthorized\r\nContent-Length: {len(body)}\r\n\r\n".encode() + body)
+            writer.write(f"HTTP/1.1 401 Unauthorized\r\nCache-Control: no-store\r\nContent-Length: {len(body)}\r\n\r\n"
+                         .encode() + body)
         else:
             html = CHAT_HTML.replace('"__AUTH_TOKEN__"', json.dumps(self.auth_token))
+            html = html.replace("<!--WARN-->", "" if _is_loopback(self.host) else _LAN_WARNING)
             body = html.encode()
-            writer.write(f"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {len(body)}\r\n\r\n".encode() + body)
+            writer.write(f"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n{_page_headers(html, host)}"
+                         f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
         await writer.drain()
         writer.close()
 
@@ -192,13 +228,16 @@ class WebChatChannel(Channel):
             writer.close()
             return
         body = json.dumps({"status": "ok", "connections": len(self._connections)}).encode()
-        writer.write(f"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n".encode() + body)
+        writer.write(f"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n"
+                     f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
         await writer.drain()
         writer.close()
 
     async def _handle_websocket(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, headers: dict, path: str) -> None:
-        # Auth check
-        if not self._check_token(path):
+        # Auth: the token in the address (older pages), or none there and the token as the first message
+        # (the page, so the token does not stay in the browser history or a proxy log)
+        authed = self._check_token(path)
+        if "token=" in path and not authed:
             writer.write(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n")
             await writer.drain()
             writer.close()
@@ -235,6 +274,12 @@ class WebChatChannel(Channel):
         )
         writer.write(handshake.encode())
         await writer.drain()
+
+        if not authed and not await self._first_message_auth(reader):
+            writer.write(_ws_close())
+            await writer.drain()
+            writer.close()
+            return
 
         bare_id = uuid.uuid4().hex[:8]
         conn_id = f"webchat:{bare_id}"
@@ -277,6 +322,16 @@ class WebChatChannel(Channel):
             self._connections.pop(bare_id, None)
             logger.info("WebChat client disconnected: %s", conn_id)
             writer.close()
+
+    async def _first_message_auth(self, reader: asyncio.StreamReader) -> bool:
+        try:
+            frame = await asyncio.wait_for(_ws_read_frame(reader), timeout=10)
+            if frame is None or frame[0] != 0x1:
+                return False
+            token = str(json.loads(frame[1].decode()).get("auth", ""))
+        except (TimeoutError, ValueError, AttributeError, asyncio.IncompleteReadError, ConnectionError):
+            return False
+        return secrets.compare_digest(token.encode(), self.auth_token.encode())
 
     async def _safe_process_message(self, conn_id: str, writer: asyncio.StreamWriter, text: str) -> None:
         try:
@@ -338,9 +393,10 @@ class WebChatChannel(Channel):
 # ---------------------------------------------------------------------------
 
 CHAT_HTML = """<!DOCTYPE html>
-<html lang="en">
+<html lang="en" translate="no">
 <head>
 <meta charset="UTF-8">
+<meta name="google" content="notranslate">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MicroPaw Chat</title>
 <style>
@@ -351,6 +407,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .header .dot{width:10px;height:10px;border-radius:50%;background:#00ff88;animation:pulse 2s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 .messages{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:12px}
+.warn{background:#5c3b00;color:#ffd9a0;padding:8px 20px;font-size:13px}
 .msg{max-width:80%;padding:12px 16px;border-radius:16px;line-height:1.5;word-wrap:break-word;white-space:pre-wrap}
 .msg.user{align-self:flex-end;background:#0a3d62;border-bottom-right-radius:4px}
 .msg.bot{align-self:flex-start;background:#2a2a4a;border-bottom-left-radius:4px}
@@ -366,10 +423,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 </style>
 </head>
 <body>
-<div class="header"><span class="dot"></span><h1>MicroPaw</h1></div>
+<!--WARN--><div class="header"><span class="dot"></span><h1>MicroPaw</h1></div>
 <div class="messages" id="messages"></div>
 <div class="input-area">
-<input type="text" id="input" placeholder="Type a message..." autocomplete="off">
+<input type="text" id="input" placeholder="Type a message..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
 <button id="send">Send</button>
 </div>
 <script>
@@ -377,10 +434,11 @@ const msgs=document.getElementById('messages'),input=document.getElementById('in
 let ws,currentBot=null,reconnectTimer=null;
 const authToken="__AUTH_TOKEN__";
 
+history.replaceState(null,'',location.pathname);
 function connect(){
   const proto=location.protocol==='https:'?'wss':'ws';
-  ws=new WebSocket(`${proto}://${location.host}/ws?token=${encodeURIComponent(authToken)}`);
-  ws.onopen=()=>{btn.disabled=false;addSys('Connected')};
+  ws=new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen=()=>{ws.send(JSON.stringify({auth:authToken}));btn.disabled=false;addSys('Connected')};
   ws.onclose=()=>{btn.disabled=true;addSys('Disconnected. Reconnecting...');reconnectTimer=setTimeout(connect,2000)};
   ws.onerror=()=>ws.close();
   ws.onmessage=(e)=>{

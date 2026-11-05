@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import sys
 import uuid
 from collections.abc import Awaitable, Callable
@@ -18,6 +19,15 @@ from rich.table import Table
 from micropaw.channels.base import Channel
 
 console = Console()
+
+# Control characters other than newline and tab. ESC starts a terminal command: OSC 52 writes the clipboard
+# (which Windows, Apple and many clipboard managers sync off the machine), OSC 8 hides a link behind text.
+_CONTROLS = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def clean_text(text: str) -> str:
+    """Model text with every terminal control character removed, so none of it can act as a command."""
+    return _CONTROLS.sub("", text)
 
 SLASH_COMMANDS = {
     "/help": "Show available commands",
@@ -201,7 +211,7 @@ class TerminalChannel(Channel):
                 sys.stdout.write("\r" + " " * 40 + "\r")
                 console.print("[bold cyan]MicroPaw >[/bold cyan] ", end="")
                 first_chunk = False
-            sys.stdout.write(chunk)
+            sys.stdout.write(clean_text(chunk))
             sys.stdout.flush()
 
         console.print("[dim italic]  thinking...[/dim italic]", end="\r")
@@ -219,10 +229,11 @@ class TerminalChannel(Channel):
     def _print_response(self, response: str) -> None:
         console.print()
         console.print("[bold cyan]MicroPaw >[/bold cyan]")
+        response = clean_text(response)
         try:
-            console.print(Markdown(response), style="white")
+            console.print(Markdown(response, hyperlinks=False), style="white")  # links print their address in full
         except Exception:
-            console.print(response)
+            console.print(response, markup=False, highlight=False)
         console.print()
 
     def _show_usage_hint(self) -> None:
@@ -247,7 +258,7 @@ class TerminalChannel(Channel):
 
     async def ask_owner(self, text: str, allow_always: bool) -> str:
         """Ask on the console before a side effect. Returns "yes", "no" or "always"."""
-        console.print(Panel(escape(text), title="Approval needed", border_style="yellow"))
+        console.print(Panel(escape(clean_text(text)), title="Approval needed", border_style="yellow"))
         choices = "y = yes, n = no" + (", a = always" if allow_always else "")
         try:
             reply = await asyncio.get_running_loop().run_in_executor(
