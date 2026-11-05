@@ -134,7 +134,7 @@ MicroPaw:                "Revenue grew 23% in Q4, driven by..."
 
 - **Owner-only by default**: only accounts you list can talk to it. A stranger is told their ID once and refused. Add your own accounts with `paw allow telegram <id>`.
 
-- **Asks before it acts**: shell commands, sending email or messages, calendar changes, HTTP calls that change something, and writes outside your workspace (`~/micropaw`) wait for your yes. On Telegram, Discord, Slack and WhatsApp you reply `yes <id>`; the terminal asks inline. `always <id>` remembers that exact action.
+- **Asks before it acts**: shell commands, sending email or messages, calendar changes, HTTP calls that change something, and writes outside your workspace (`~/micropaw`) wait for your yes. On Telegram, Discord and Slack you tap Yes, No or Always, only the owner's tap counts, and typing `yes <id>` still works; WhatsApp takes the typed reply; the terminal asks inline. `always <id>` remembers that exact action.
 
 - **Knows when it has read something risky**: once a conversation has read a web page, an email, a file, command output or an MCP tool result, saved "always" rules stop applying and every outgoing action asks again, so a page can't quietly make it send your data somewhere. Only `/new` clears this.
 
@@ -321,6 +321,7 @@ Every feature works with a fully local setup, a cloud model, or a mix you choose
 | Summaries, sub-agents | `models.fast` | `ollama:qwen3.6` | `claude:claude-haiku-5-5` |
 | Photos | `models.vision` | `ollama:gemma4:e4b` | `openai:<model>` |
 | Voice notes | `voice.stt` | `local:<model>` (a whisper.cpp or faster-whisper server at `voice.stt_url`) | `groq:whisper-large-v3-turbo` |
+| Spoken replies (Telegram) | `voice.tts`, `voice.reply_with_voice` | `local:<model>` (an OpenAI-style speech server such as Kokoro-FastAPI at `voice.tts_url`) | `openai:gpt-4o-mini-tts` |
 | Search memory | `embedding` | Ollama `nomic-embed-text` | OpenAI embeddings |
 
 Model settings are `provider:model`. Besides `claude`, `openai`, `gemini` and `ollama`, these names work without extra setup: `lmstudio`, `llamacpp`, `vllm` (local, no key) and `openrouter`, `groq`, `deepseek`, `mistral`, `together` (key from `<NAME>_API_KEY`). A text-only local model can still use photos: set `models.vision` and the vision model describes them first.

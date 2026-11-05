@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from micropaw.channels.base import Channel, chunk_text, stream_response
+from micropaw.channels.base import Channel, approval_buttons, chunk_text, settled_note, stream_response
 from micropaw.providers.base import MediaItem
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ class TelegramChannel(Channel):
     async def start(self) -> None:
         try:
             from telegram import Update
-            from telegram.ext import Application, ContextTypes, filters
+            from telegram.ext import Application, CallbackQueryHandler, ContextTypes, filters
             from telegram.ext import MessageHandler as TGMsgHandler
         except ImportError:
             raise RuntimeError("python-telegram-bot not installed. Install with: pip install 'micropaw\\[telegram]'")
@@ -69,7 +69,9 @@ class TelegramChannel(Channel):
             async def send_typing() -> None:
                 await context.bot.send_chat_action(chat_id=chat.id, action="typing")
 
-            if self._stream_handler:
+            # A voice reply is spoken instead of typed, so it skips the live-edited text
+            voice_in = bool(msg.voice) and self._voice_on is not None and self._voice_on(user_id, channel_id)
+            if self._stream_handler and not (voice_in and self._handler):
                 placeholder = await context.bot.send_message(
                     chat_id=chat.id, text="...",
                     reply_to_message_id=update.message.message_id if is_group else None,
@@ -87,14 +89,14 @@ class TelegramChannel(Channel):
             elif self._handler:
                 await send_typing()
                 response = await self._handler(text, user_id, "telegram", channel_id, media=media)
-                for chunk in chunk_text(response, MAX_MSG_LEN):
-                    await context.bot.send_message(
-                        chat_id=chat.id, text=chunk,
-                        reply_to_message_id=update.message.message_id if is_group else None,
-                    )
+                reply_to = update.message.message_id if is_group else None
+                if not (voice_in and await self._send_voice(chat.id, response, user_id, channel_id, reply_to)):
+                    for chunk in chunk_text(response, MAX_MSG_LEN):
+                        await context.bot.send_message(chat_id=chat.id, text=chunk, reply_to_message_id=reply_to)
 
         # Commands too: /memory, /forget and /cron enable are handled by MicroPaw itself
         self._app.add_handler(TGMsgHandler(filters.TEXT | filters.PHOTO | filters.VOICE | filters.AUDIO, on_message))
+        self._app.add_handler(CallbackQueryHandler(self._on_press, pattern=r"^ap:"))
 
         logger.info("Telegram channel starting...")
         await self._app.initialize()
@@ -125,16 +127,73 @@ class TelegramChannel(Channel):
             for chunk in chunk_text(text, MAX_MSG_LEN):
                 await self._app.bot.send_message(chat_id=tid, text=chunk)
 
+    async def _on_press(self, update: Any, context: Any) -> None:
+        q = update.callback_query
+        msg = q.message
+        if not msg or not getattr(msg, "chat", None):
+            await q.answer()
+            return
+        channel_id = str(msg.chat.id) if msg.chat.type in ("group", "supergroup") else None
+        # Checked against the owner list, not just the chat: any group member can press a button
+        reply = self.press_approval(q.data, str(q.from_user.id), channel_id)
+        if reply is None:
+            await q.answer("Only the owner can answer this.", show_alert=True)
+            return
+        await q.answer(reply)
+        if (note := settled_note(reply)) is not None:
+            await q.edit_message_text(f"{msg.text}\n\n{note}")  # no reply_markup: the buttons go away
+
+    async def send_approval(self, chat_id: str, text: str, ask_id: str, allow_always: bool) -> None:
+        if not self._app:
+            return
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        try:
+            tid = int(chat_id.replace("telegram:", "", 1))
+        except ValueError:
+            logger.error("Telegram send_approval: invalid chat ID %r", chat_id)
+            return
+        *head, last = chunk_text(text, MAX_MSG_LEN - 80)  # room for the decision line added later
+        for chunk in head:
+            await self._app.bot.send_message(chat_id=tid, text=chunk)
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=data)
+                                          for label, data in approval_buttons(ask_id, allow_always)]])
+        await self._app.bot.send_message(chat_id=tid, text=last, reply_markup=keyboard)
+
+    async def _send_voice(self, chat_id: int, text: str, user_id: str, channel_id: str | None,
+                          reply_to: int | None) -> bool:
+        """Speak the reply. False (nothing sent) when synthesis or the upload failed."""
+        if not self._voice_say:
+            return False
+        try:
+            spoken = await self._voice_say(text, user_id, channel_id)
+            if spoken is None:
+                return False
+            from telegram import InputFile
+            data, mime = spoken
+            bot = self._app.bot
+            if mime == "audio/ogg":
+                await bot.send_voice(chat_id=chat_id, voice=InputFile(data, filename="reply.ogg"),
+                                     reply_to_message_id=reply_to)
+            else:
+                await bot.send_audio(chat_id=chat_id, audio=InputFile(data, filename="reply.mp3"),
+                                     reply_to_message_id=reply_to)
+            return True
+        except Exception as e:
+            logger.warning("Telegram voice reply failed, sending text: %s", e)
+            return False
+
 
 async def _download_media(msg: Any) -> list[MediaItem]:
     """The largest version of a photo, and voice notes or audio files (Telegram caps bot downloads at 20 MB)."""
     items: list[MediaItem] = []
+    outside = bool(getattr(msg, "forward_origin", None))  # a forwarded message was written by someone else
     if msg.photo:
         file = await msg.photo[-1].get_file()
-        items.append(MediaItem(type="image", data=bytes(await file.download_as_bytearray()), mime_type="image/jpeg"))
+        data = bytes(await file.download_as_bytearray())
+        items.append(MediaItem(type="image", data=data, mime_type="image/jpeg", outside=outside))
     clip = msg.voice or msg.audio
     if clip:
         file = await clip.get_file()
         data = bytes(await file.download_as_bytearray())
-        items.append(MediaItem(type="audio", data=data, mime_type=clip.mime_type or "audio/ogg"))
+        items.append(MediaItem(type="audio", data=data, mime_type=clip.mime_type or "audio/ogg", outside=outside))
     return items

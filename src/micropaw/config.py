@@ -250,10 +250,19 @@ class VoiceConfig(BaseModel):
     stt is "openai:<model>", a hosted preset ("groq:whisper-large-v3-turbo"), or "local:<model>"
     for a server on your machine at stt_url (e.g. a whisper.cpp or faster-whisper server).
     Empty = voice notes are not transcribed.
+
+    tts is the same kind of spec for spoken replies ("openai:gpt-4o-mini-tts", or "local:<model>" for an
+    OpenAI-style /v1/audio/speech server at tts_url, such as Kokoro-FastAPI). With reply_with_voice on,
+    a voice note from the owner gets a voice reply. tts_voice is the voice name
+    ("" = "alloy" for OpenAI, "af_heart" for a local server).
     """
 
     stt: str = ""
     stt_url: str = "http://localhost:8000"
+    tts: str = ""
+    tts_url: str = "http://localhost:8880"
+    tts_voice: str = ""
+    reply_with_voice: bool = False
 
 
 class SchedulerConfig(BaseModel):

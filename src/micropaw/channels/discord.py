@@ -6,7 +6,8 @@ import asyncio
 import logging
 from typing import Any
 
-from micropaw.channels.base import Channel, chunk_text, stream_response
+from micropaw.channels.base import Channel, approval_buttons, chunk_text, settled_note, stream_response
+from micropaw.channels.media import Attachment, fetch_media
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ class DiscordChannel(Channel):
                 text = text.replace(f"<@{client.user.id}>", "").replace(f"<@!{client.user.id}>", "").strip()
 
             channel_id = str(message.channel.id) if not is_dm else None
+            media = await channel_ref._read_attachments(message)
 
             if channel_ref._stream_handler:
                 placeholder = await message.channel.send("...")
@@ -62,11 +64,11 @@ class DiscordChannel(Channel):
                     channel_ref._stream_handler, text, user_id, "discord", channel_id,
                     edit_fn=lambda t: placeholder.edit(content=t),
                     send_fn=lambda t: message.channel.send(t),
-                    max_msg_len=MAX_MSG_LEN, edit_interval=STREAM_EDIT_INTERVAL,
+                    max_msg_len=MAX_MSG_LEN, edit_interval=STREAM_EDIT_INTERVAL, media=media,
                 )
             elif channel_ref._handler:
                 async with message.channel.typing():
-                    response = await channel_ref._handler(text, user_id, "discord", channel_id)
+                    response = await channel_ref._handler(text, user_id, "discord", channel_id, media=media)
                 for chunk in chunk_text(response, MAX_MSG_LEN):
                     await message.channel.send(chunk)
 
@@ -79,6 +81,42 @@ class DiscordChannel(Channel):
             logger.info("Discord session resumed")
 
         return client
+
+    async def _read_attachments(self, message: Any) -> list:
+        """Images and audio attached to the message, or forwarded inside it (those are from someone else)."""
+        files = [Attachment(a.url, a.content_type or "", a.size or 0, a.filename, outside=False)
+                 for a in message.attachments]
+        for snap in getattr(message, "message_snapshots", None) or []:
+            files += [Attachment(a.url, a.content_type or "", a.size or 0, a.filename, outside=True)
+                      for a in getattr(snap, "attachments", [])]
+        if not files:
+            return []
+        media, notes = await fetch_media(files)
+        for note in notes:
+            await message.channel.send(note)
+        return media
+
+    def _approval_view(self, ask_id: str, allow_always: bool) -> Any:
+        import discord
+        styles = {"yes": discord.ButtonStyle.success, "no": discord.ButtonStyle.danger}
+        view = discord.ui.View(timeout=600)
+        for label, data in approval_buttons(ask_id, allow_always):
+            style = styles.get(label.lower(), discord.ButtonStyle.secondary)
+            button = discord.ui.Button(label=label, custom_id=data, style=style)
+            button.callback = self._on_press
+            view.add_item(button)
+        return view
+
+    async def _on_press(self, interaction: Any) -> None:
+        # The press is checked against the owner, not just the channel: anyone in a server can click
+        channel_id = None if interaction.guild is None else str(interaction.channel_id)
+        reply = self.press_approval(interaction.data.get("custom_id", ""), str(interaction.user.id), channel_id)
+        if reply is None:
+            await interaction.response.send_message("Only the owner can answer this.", ephemeral=True)
+        elif (note := settled_note(reply)) is not None:
+            await interaction.response.edit_message(content=f"{interaction.message.content}\n\n{note}", view=None)
+        else:
+            await interaction.response.send_message(reply, ephemeral=True)
 
     async def start(self) -> None:
         try:
@@ -136,26 +174,36 @@ class DiscordChannel(Channel):
                 pass
         logger.info("Discord channel stopped.")
 
-    async def send_message(self, chat_id: str, text: str) -> None:
-        if self._client:
-            raw = chat_id.replace("discord:", "", 1)
-            if not raw:
-                logger.error("Discord send_message: empty target ID")
-                return
+    async def _target(self, chat_id: str) -> Any:
+        """The channel (or the owner's DM) for a chat ID, None if it can't be found."""
+        raw = chat_id.replace("discord:", "", 1)
+        if not raw:
+            logger.error("Discord send_message: empty target ID")
+            return None
+        try:
+            target_id = int(raw)
+        except ValueError:
+            logger.error("Discord send_message: invalid target ID %r", raw)
+            return None
+        # Try cached channel first (server channels), fall back to DM
+        channel = self._client.get_channel(target_id)
+        if not channel:
             try:
-                target_id = int(raw)
-            except ValueError:
-                logger.error("Discord send_message: invalid target ID %r", raw)
-                return
-            # Try cached channel first (server channels), fall back to DM
-            channel = self._client.get_channel(target_id)
-            if not channel:
-                try:
-                    user = await self._client.fetch_user(target_id)
-                    channel = await user.create_dm()
-                except Exception as e:
-                    logger.error("Discord DM resolve failed for %s: %s", target_id, e)
-                    return
-            if channel:
-                for chunk in chunk_text(text, MAX_MSG_LEN):
-                    await channel.send(chunk)
+                user = await self._client.fetch_user(target_id)
+                channel = await user.create_dm()
+            except Exception as e:
+                logger.error("Discord DM resolve failed for %s: %s", target_id, e)
+                return None
+        return channel
+
+    async def send_message(self, chat_id: str, text: str) -> None:
+        if self._client and (channel := await self._target(chat_id)):
+            for chunk in chunk_text(text, MAX_MSG_LEN):
+                await channel.send(chunk)
+
+    async def send_approval(self, chat_id: str, text: str, ask_id: str, allow_always: bool) -> None:
+        if self._client and (channel := await self._target(chat_id)):
+            *head, last = chunk_text(text, MAX_MSG_LEN - 80)  # room for the decision line added later
+            for chunk in head:
+                await channel.send(chunk)
+            await channel.send(last, view=self._approval_view(ask_id, allow_always))

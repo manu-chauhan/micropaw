@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
@@ -14,6 +15,30 @@ MessageHandler = Callable[..., Awaitable[str]]
 StreamHandler = Callable[..., Awaitable[str]]
 # (platform, user_id) -> None if allowed, else the reply for the sender ("" = stay silent)
 AccessCheck = Callable[[str, str], str | None]
+# (text, user_id, channel_id) -> "Approved.", "Declined." or a refusal; None if the sender is not the owner
+ApprovalAnswer = Callable[[str, str, str | None], str | None]
+# (user_id, channel_id) -> True when this chat's replies to a voice note go out as voice
+VoiceOn = Callable[[str, str | None], bool]
+# (text, user_id, channel_id) -> (audio bytes, mime type), or None when synthesis failed
+VoiceSay = Callable[[str, str, str | None], Awaitable["tuple[bytes, str] | None"]]
+
+_BUTTON = re.compile(r"^ap:([0-9a-f]{4}):(yes|no|always)$")
+
+
+def approval_hint(ask_id: str, allow_always: bool) -> str:
+    always = f", or 'always {ask_id}' to allow this exact action from now on" if allow_always else ""
+    return f"Reply 'yes {ask_id}' or 'no {ask_id}'{always}. This expires in 10 minutes."
+
+
+def approval_buttons(ask_id: str, allow_always: bool) -> list[tuple[str, str]]:
+    """(label, callback id) for each button. Always only when the ask allows a saved rule."""
+    words = ("yes", "no", "always") if allow_always else ("yes", "no")
+    return [(w.capitalize(), f"ap:{ask_id}:{w}") for w in words]
+
+
+def settled_note(reply: str) -> str | None:
+    """The line to put under an approval message once a button was used, None to leave the buttons."""
+    return None if reply.startswith("'always'") else reply
 
 
 class Channel(ABC):
@@ -25,6 +50,9 @@ class Channel(ABC):
         self._handler: MessageHandler | None = None
         self._stream_handler: StreamHandler | None = None
         self._access: AccessCheck | None = None
+        self._approval_answer: ApprovalAnswer | None = None
+        self._voice_on: VoiceOn | None = None
+        self._voice_say: VoiceSay | None = None
 
     def set_handler(self, handler: MessageHandler) -> None:
         self._handler = handler
@@ -34,6 +62,14 @@ class Channel(ABC):
 
     def set_access(self, check: AccessCheck) -> None:
         self._access = check
+
+    def press_approval(self, data: str, user_id: str, channel_id: str | None) -> str | None:
+        """Handle a button press. The reply from the approvals, or None if the pressing user is not
+        the owner or the button is not ours. This never waits on the per-chat lock."""
+        m = _BUTTON.match(data or "")
+        if not m or not self._approval_answer:
+            return None
+        return self._approval_answer(f"{m.group(2)} {m.group(1)}", str(user_id), channel_id)
 
     def check_access(self, user_id: str) -> str | None:
         """None if this sender may use the assistant, else the reply to send them ("" = silent)."""
@@ -50,6 +86,10 @@ class Channel(ABC):
 
     async def send_typing(self, chat_id: str) -> None:
         pass
+
+    async def send_approval(self, chat_id: str, text: str, ask_id: str, allow_always: bool) -> None:
+        """Ask the owner. Channels with buttons override this; the owner can always type the reply."""
+        await self.send_message(chat_id, f"{text}\n\n{approval_hint(ask_id, allow_always)}")
 
 
 async def stream_response(
