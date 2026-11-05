@@ -194,3 +194,53 @@ def test_the_wizard_says_it_could_not_find_the_name_before_probing(monkeypatch, 
     wiz._add_remote(Scripted({"Address of the other computer": "gpu-box.local"}), c, "ollama")
     out = capsys.readouterr().out
     assert "Could not find gpu-box.local" in out and "Nothing answered" not in out and not c.providers
+
+
+# --- wording that tells the truth about where a query or a reply goes ------------------------------
+
+def test_a_public_searxng_in_local_mode_is_called_the_internet_in_the_approval_and_warned_about(mode_of):
+    from micropaw import privacy_report
+    from micropaw.config import SearchConfig
+    from micropaw.tools import web_search
+    from micropaw.tools.base import ToolContext
+
+    async def yes(tool, text):
+        return True
+
+    mode_of("local")
+    cfg = Config(search={"provider": "searxng", "searxng_url": "https://searx.be"})
+    web_search.set_search_config(cfg.search)
+    try:
+        ask = web_search.WebSearchTool().needs_approval(
+            {"query": "my private text"}, ToolContext(conversation_id="c", user_id="u", platform="terminal",
+                                                      approve=yes))
+        assert ask.startswith("Search via the internet (searx.be, direct)") and "your SearXNG" not in ask
+        warn = {n: (m, d) for n, m, d in privacy_report.advice(cfg)}["Search server"]
+        assert warn[0] == "warn" and "searx.be is on the internet" in warn[1]
+        own = Config(search={"provider": "searxng", "searxng_url": "http://127.0.0.1:8888"})
+        assert "Search server" not in {n for n, _, _ in privacy_report.advice(own)}
+    finally:
+        web_search.set_search_config(SearchConfig())
+
+
+def test_an_https_server_on_your_network_is_not_called_plain_http(mode_of):
+    from micropaw import privacy_report
+    mode_of("local")
+    for url, warned in (("https://192.168.1.50:8443/v1", False), ("http://192.168.1.51:11434/v1", True)):
+        c = Config(agents={"main": {"model": "box:m"}}, providers={"box": {"base_url": url}})
+        got = {n: d for n, _, d in privacy_report.advice(c)}
+        assert ("Model on your network" in got) is warned
+        if warned:
+            assert "192.168.1.51:11434" in got["Model on your network"]
+
+
+def test_vendor_channels_get_the_name_and_where_but_not_the_address_of_a_network_model():
+    from micropaw import privacy_report
+    from micropaw.providers.registry import Registry
+    c = Config(providers={"box": {"base_url": "https://192.168.1.50:8443/v1"}})
+    reg = Registry(c)
+    assert privacy_report.reply_label("box:m", "hi", reg, c) == "\n\n[via box (192.168.1.50:8443, your network)]"
+    for platform in ("telegram", "discord", "slack", "whatsapp"):
+        assert privacy_report.reply_label("box:m", "hi", reg, c, platform) == "\n\n[via box, your network]"
+    assert privacy_report.reply_label("box:m", "hi", reg, c, "webchat").startswith("\n\n[via box (192.168.1.50")
+    assert privacy_report.reply_label("claude", "hi", reg, c, "telegram") == "\n\n[via claude (api.anthropic.com)]"

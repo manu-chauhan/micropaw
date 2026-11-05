@@ -118,6 +118,12 @@ def _unattended(context: ToolContext) -> bool:
     return context.approve is None or context.platform in _UNATTENDED
 
 
+def _why(e: Exception) -> str:
+    """The error type and HTTP status only: httpx error text holds the whole URL, which holds the query."""
+    status = getattr(getattr(e, "response", None), "status_code", None)
+    return type(e).__name__ + (f" {status}" if status else "")
+
+
 def _proxy_label(proxy: str) -> str:
     p = urlparse(proxy)
     return f"through {p.scheme}://{p.hostname}" + (f":{p.port}" if p.port else "")
@@ -169,7 +175,7 @@ async def _search_searxng(query: str, max_results: int, base_url: str | None = N
         except ImportError:
             raise
         except Exception as e:
-            logger.debug("SearXNG %s failed: %s", url, e)
+            logger.debug("SearXNG %s failed: %s", _host(url), _why(e))
     return None
 
 
@@ -199,7 +205,7 @@ async def _search_brave(query: str, max_results: int, api_key: str) -> str | Non
             return None
         return f"Brave Search error: HTTP {e.response.status_code}"
     except Exception as e:
-        logger.debug("Brave Search failed: %s", e)
+        logger.debug("Brave Search failed: %s", _why(e))
         return None
 
 
@@ -304,7 +310,7 @@ async def _search_kiwix(query: str, max_results: int, cfg: Any, conv_id: str) ->
                         if len(data) > KIWIX_MAX_BYTES:
                             break
         except httpx.HTTPError as e:
-            logger.debug("Kiwix at %s failed: %s", base, e)
+            logger.debug("Kiwix at %s failed: %s", _host(base), _why(e))
             sources.append(f"{book or 'Kiwix'} (not answering at {_host(base)})")
             continue
         name, date = book_label(book or "Kiwix")
@@ -406,8 +412,11 @@ class WebSearchTool(Tool):
         if not p.online or (privacy.mode() == "normal" and not context.marked):
             return None
         cfg = _search_config
-        where = {"searxng": f"your SearXNG at {_host(cfg.searxng_url) if cfg and cfg.searxng_url else '?'}"
-                            + (f" ({_proxy_label(cfg.proxy)})" if cfg and cfg.proxy else " (direct)"),
+        host = _host(cfg.searxng_url) if cfg and cfg.searxng_url else "?"
+        route = f"{_proxy_label(cfg.proxy)}" if cfg and cfg.proxy else "direct"
+        local = bool(cfg and cfg.searxng_url and privacy.is_local_url(cfg.searxng_url))
+        where = {"searxng": f"your SearXNG at {host} ({route})" if local  # a public address is not "your own server"
+                 else f"the internet ({host}, {route})",
                  "public": "public SearXNG instances, then DuckDuckGo", "brave": "Brave Search",
                  "duckduckgo": "DuckDuckGo"}[next(b for b in p.backends if b in _ONLINE)]
         first = "your offline sources, then " if "kiwix" in p.backends else ""

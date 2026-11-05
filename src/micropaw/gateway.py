@@ -685,7 +685,7 @@ class Gateway:
         from micropaw import privacy_report
         spec = agent.profile.main if agent.profile else self.config.provider
         try:
-            return privacy_report.reply_label(spec, response, self.models, self.config)
+            return privacy_report.reply_label(spec, response, self.models, self.config, platform)
         except Exception as e:  # a label must never lose the answer
             logger.debug("Reply label failed: %s", e)
             return ""

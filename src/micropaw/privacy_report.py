@@ -26,12 +26,13 @@ def destination(url: str) -> tuple[str, str]:
     return host, {"this computer": "this computer", "tailnet": "your tailnet"}.get(modelscan.where(url), "your network")
 
 
-def _model_row(spec: str, registry) -> tuple[str, str]:
+def _model_row(spec: str, registry) -> tuple[str, str, str]:
+    """(host, where, scheme)."""
     ep = registry.resolve(spec) if spec else None
     if ep is None:
-        return spec or "(not set)", "unknown"
+        return spec or "(not set)", "unknown", ""
     host, where = destination(ep.base_url)
-    return host, where
+    return host, where, urlparse(ep.base_url).scheme
 
 
 def status_line(config: Config | None = None) -> str:
@@ -48,48 +49,52 @@ def status_line(config: Config | None = None) -> str:
     return f"Privacy: {mode}{extra}"
 
 
-def rows(config: Config) -> list[tuple[str, str, str]]:
-    """(what, goes to, where) for every place data can go."""
+def rows(config: Config) -> list[tuple[str, str, str, str]]:
+    """(what, goes to, where, scheme) for every place data can go. The scheme is only set for models."""
     from micropaw.core.profile import ProfileError, resolve_profiles
     from micropaw.providers.registry import Registry
     from micropaw.tools import web_search
     from micropaw.utils.voice import _endpoint, tts_endpoint
 
     registry = Registry(config)
-    out: list[tuple[str, str, str]] = []
+    out: list[tuple[str, str, str, str]] = []
+
+    def add(what: str, to: str, where: str, scheme: str = "") -> None:
+        out.append((what, to, where, scheme))
+
     try:
         profiles = resolve_profiles(config, registry)
     except ProfileError as e:
         profiles = {}
-        out.append(("agents", str(e), "unknown"))
+        add("agents", str(e), "unknown")
     for p in profiles.values():
         for role, spec in (("main", p.main), ("fast", p.fast or p.main), ("vision", p.vision),
                            *((f"fallback {i + 1}", s) for i, s in enumerate(p.fallbacks))):
             if spec:
-                host, where = _model_row(spec, registry)
-                out.append((f"{role} model ({p.name} agent)", f"{spec} at {host}", where))
+                host, where, scheme = _model_row(spec, registry)
+                add(f"{role} model ({p.name} agent)", f"{spec} at {host}", where, scheme)
     emb = config.embedding
     if emb.enabled == "false":
-        out.append(("memory search", "off", "-"))
+        add("memory search", "off", "-")
     elif emb.provider == "openai":
-        out.append(("memory search", "OpenAI, text of your messages and files", "the internet"))
+        add("memory search", "OpenAI, text of your messages and files", "the internet")
     elif emb.provider == "ollama" or (emb.provider == "auto" and emb.enabled == "true"):
         host, where = destination(config.provider_config.ollama.host)
-        out.append(("memory search", f"Ollama at {host}", where))
+        add("memory search", f"Ollama at {host}", where)
     else:
-        out.append(("memory search", "on this computer if installed", "this computer"))
+        add("memory search", "on this computer if installed", "this computer")
     for what, ep in (("speech to text", _endpoint(config) if config.voice.stt else None),
                      ("text to speech", tts_endpoint(config) if config.voice.tts else None)):
         if ep:
             host, where = destination(ep[0])
-            out.append((what, host, where))
+            add(what, host, where)
         else:
-            out.append((what, "off", "-"))
+            add(what, "off", "-")
     plan = web_search.plan(config.search, privacy.mode(), False)
     if config.search.provider == "off":
-        out.append(("web search", "off", "-"))
+        add("web search", "off", "-")
     elif plan.refusal:
-        out.append(("web search", "refused: " + plan.refusal, "-"))
+        add("web search", "refused: " + plan.refusal, "-")
     else:
         names = {"kiwix": ("Kiwix", config.search.kiwix_url), "docs": ("your documents", ""),
                  "searxng": ("your SearXNG", config.search.searxng_url),
@@ -98,29 +103,29 @@ def rows(config: Config) -> list[tuple[str, str, str]]:
         for b in plan.backends:
             label, url = names[b]
             where = destination(url)[1] if url else ("this computer" if b == "docs" else "the internet")
-            out.append(("web search", label + (f" at {destination(url)[0]}" if url else ""), where))
+            add("web search", label + (f" at {destination(url)[0]}" if url else ""), where)
     allow = webfetch.privacy_allow(config)
     fetch_on = privacy.mode() == "normal" or (privacy.mode() == "local" and "web_fetch" in allow)
-    out.append(("web pages (http_request)", "any public site you approve" if fetch_on else "off",
-                "the internet" if fetch_on else "-"))
+    add("web pages (http_request)", "any public site you approve" if fetch_on else "off",
+        "the internet" if fetch_on else "-")
     browse_on = privacy.mode() == "normal" or (privacy.mode() == "local" and "web_browse" in allow)
-    out.append(("web browser", "any public site" if browse_on else "off", "the internet" if browse_on else "-"))
+    add("web browser", "any public site" if browse_on else "off", "the internet" if browse_on else "-")
     for name, vendor in _VENDOR_CHANNELS.items():
         if getattr(config.channels, name).enabled:
-            out.append((f"channel {name}", f"every message passes through {vendor}", "the internet"))
+            add(f"channel {name}", f"every message passes through {vendor}", "the internet")
     for name in ("terminal", "webchat"):
         if getattr(config.channels, name).enabled:
             host = config.channels.webchat.host if name == "webchat" else "this computer"
-            out.append((f"channel {name}", host, "this computer" if host in ("127.0.0.1", "localhost", "this computer")
-                        else "your network"))
+            add(f"channel {name}", host,
+                "this computer" if host in ("127.0.0.1", "localhost", "this computer") else "your network")
     for name, srv in config.mcp_servers.items():
         if not srv.enabled:
             continue
         if srv.url:
             host, where = destination(srv.url)
-            out.append((f"MCP {name}", f"{host}. MicroPaw cannot see where that server sends data", where))
+            add(f"MCP {name}", f"{host}. MicroPaw cannot see where that server sends data", where)
         else:
-            out.append((f"MCP {name}", "a program on this computer, which may use the network itself", "this computer"))
+            add(f"MCP {name}", "a program on this computer, which may use the network itself", "this computer")
     return out
 
 
@@ -151,14 +156,15 @@ def render(config: Config) -> str:
     lines = [status_line(config), ""]
     lines += [f"{k}: {v}" for k, v in facts(config)]
     lines += ["", "Where data goes:"]
-    lines += [f"- {what}: {to} ({where})" for what, to, where in rows(config)]
+    lines += [f"- {what}: {to} ({where})" for what, to, where, _ in rows(config)]
     lines += ["", "A local address is not proof that a server keeps data local: a proxy such as LiteLLM or "
                   "Open WebUI can forward to the cloud. MicroPaw cannot check that."]
     return "\n".join(lines)
 
 
-def label(spec: str, registry, config: Config) -> str:
-    """"via claude (api.anthropic.com)" or "via ollama on this machine"."""
+def label(spec: str, registry, config: Config, platform: str = "terminal") -> str:
+    """"via claude (api.anthropic.com)" or "via ollama on this machine". On a channel run by a vendor (and so
+    seen by everyone in a group chat) a model on your network is named without its address."""
     ep = registry.resolve(spec) if spec else None
     if ep is None:
         return f"via {spec}" if spec else ""
@@ -167,19 +173,21 @@ def label(spec: str, registry, config: Config) -> str:
         return f"via {ep.name} on this machine"
     if ep.name == "ollama" and host.endswith("ollama.com"):
         return "via Ollama cloud (ollama.com)"
+    if where != "the internet" and platform in _VENDOR_CHANNELS:
+        return f"via {ep.name}, {where}"
     return f"via {ep.name} ({host}{'' if where == 'the internet' else ', ' + where})"
 
 
 _ANSWERED_BY = re.compile(r"\[answered by (\S+?) because")
 
 
-def reply_label(spec: str, response: str, registry, config: Config) -> str:
+def reply_label(spec: str, response: str, registry, config: Config, platform: str = "terminal") -> str:
     """The line for the end of a reply. A reply that a fallback answered names that provider instead."""
     if not config.display.show_provider:
         return ""
     if m := _ANSWERED_BY.search(response):
         spec = m.group(1)
-    text = label(spec, registry, config)
+    text = label(spec, registry, config, platform)
     return f"\n\n[{text}]" if text else ""
 
 
@@ -189,19 +197,27 @@ def advice(config: Config) -> list[tuple[str, str, str]]:
     import sys
     from pathlib import Path
 
+    from micropaw.tools import web_search
+
     mode = privacy.mode()
     out: list[tuple[str, str, str]] = [("Privacy mode", "pass", status_line(config).removeprefix("Privacy: "))]
     table = rows(config)
-    models = [(what, to, where) for what, to, where in table if " model (" in what]
-    cloud = [f"{what.split(' model')[0]} {to.split(' at ')[0]}" for what, to, where in models
+    models = [(what, to, where, scheme) for what, to, where, scheme in table if " model (" in what]
+    cloud = [f"{what.split(' model')[0]} {to.split(' at ')[0]}" for what, to, where, _ in models
              if where == "the internet"]
     if mode == "normal" and cloud:
         out.append(("Cloud models", "warn", "Messages go to the internet for: " + ", ".join(dict.fromkeys(cloud))))
-    plain = [to.split(" at ")[1] for _, to, where in models if where == "your network" and " at " in to]
+    plain = [to.split(" at ")[1] for _, to, where, scheme in models
+             if where == "your network" and scheme == "http" and " at " in to]
     if plain:
         out.append(("Model on your network", "warn", f"Plain http, not encrypted: {', '.join(dict.fromkeys(plain))}. "
                     "Use Tailscale or https if others share the network."))
-    if any(to.startswith("ollama") and where == "this computer" for _, to, where in models):
+    searx = config.search.searxng_url
+    if mode == "local" and searx and "searxng" in web_search.plan(config.search, mode, False).backends \
+            and not privacy.is_local_url(searx):
+        out.append(("Search server", "warn", f"Your SearXNG at {destination(searx)[0]} is on the internet, not on "
+                    "this computer or your network. Each query goes out only after you approve it."))
+    if any(to.startswith("ollama") and where == "this computer" for _, to, where, _ in models):
         server = Path.home() / ".ollama" / "server.json"
         try:
             off = json.loads(server.read_text()).get("disable_ollama_cloud") is True

@@ -259,8 +259,9 @@ async def test_airgapped_search_only_connects_to_loopback(kiwix, mode, monkeypat
     assert seen and all(a[0] in ("127.0.0.1", "::1") for a in seen)
 
 
-def test_local_mode_asks_for_every_online_query_and_shows_it_in_full(mode):
+def test_local_mode_asks_for_every_online_query_and_shows_it_in_full(mode, monkeypatch):
     mode("local")
+    monkeypatch.setattr(privacy, "is_local_url", lambda url: True)  # search.home.lan is named in privacy.lan_hosts
     cfg = SearchConfig(searxng_url="http://search.home.lan:8888", proxy="socks5h://127.0.0.1:9050")
     web_search.set_search_config(cfg)
     got = []
@@ -379,3 +380,31 @@ async def test_the_offline_header_only_says_no_internet_when_the_server_is_on_yo
     monkeypatch.setattr(privacy, "is_local_url", lambda url: False)
     out = await WebSearchTool().execute({"query": "python"}, ctx())
     assert "no internet used" not in out and "is not on your network" in out
+
+
+# --- queries are not logged, even at debug level ---
+
+class Forbidden(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        self.send_error(403)
+
+
+async def test_a_failing_search_request_never_logs_the_query(mode, caplog):
+    import logging
+    srv = serve(Forbidden)
+    url = f"http://127.0.0.1:{srv.server_port}"
+    try:
+        mode("local")
+        secret = "my+secret+diagnosis+xyz"
+        with caplog.at_level(logging.DEBUG):
+            await web_search._search_searxng("my secret diagnosis xyz", 5, url)
+            configure(provider="offline", kiwix_url=url, kiwix_books=["b"])
+            await WebSearchTool().execute({"query": "my secret diagnosis xyz"}, ctx())
+        assert "403" in caplog.text and "SearXNG" in caplog.text and "Kiwix" in caplog.text
+        assert "secret" not in caplog.text and secret not in caplog.text and "diagnosis" not in caplog.text
+    finally:
+        srv.shutdown()
+        srv.server_close()
