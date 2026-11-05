@@ -19,10 +19,10 @@ logger = logging.getLogger(__name__)
 
 _AGE = re.compile(r"^\s*(\d+)\s*([dw]?)\s*$", re.IGNORECASE)
 
-# Every table holding what was said, read or saved. Usage counts and scheduled jobs are not content.
+# Every table holding what was said, read or saved. Scheduled jobs are here too: their text is the owner's.
 _TABLES = (
     "messages", "conversations", "memories", "document_chunks", "contacts",
-    "email_seen", "email_runs", "chat_agent",
+    "email_seen", "email_runs", "chat_agent", "cron_jobs",
 )
 
 
@@ -90,12 +90,13 @@ def forget_all(db_file: Path, home: Path) -> list[str]:
         try:
             con.execute("PRAGMA secure_delete=ON")
             vec_ok = _load_vec(con)
-            for trigger in ("messages_fts_ai", "messages_fts_ad"):
+            for trigger in ("messages_fts_ai", "messages_fts_ad", "chunks_fts_ai", "chunks_fts_ad", "chunks_fts_au"):
                 con.execute(f"DROP TRIGGER IF EXISTS {trigger}")  # the next start makes them and the index again
-            try:
-                con.execute("DROP TABLE IF EXISTS messages_fts")  # its words sit in index blocks, not only in rows
-            except sqlite3.Error as e:  # SQLite without FTS5 cannot even open the table
-                problems.append(f"The search index was not cleared ({e}). It holds the words you wrote.")
+            for index in ("messages_fts", "chunks_fts"):
+                try:
+                    con.execute(f"DROP TABLE IF EXISTS {index}")  # its words sit in index blocks, not only in rows
+                except sqlite3.Error as e:  # SQLite without FTS5 cannot even open the table
+                    problems.append(f"The search index was not cleared ({e}). It holds the words you wrote.")
             for table in _TABLES:
                 try:
                     con.execute(f"DELETE FROM {table}")
@@ -120,33 +121,76 @@ def forget_all(db_file: Path, home: Path) -> list[str]:
     for pattern in ("audit.jsonl*",):
         for f in home.glob(pattern):
             _remove(f, problems)
-    shutil.rmtree(home / "outputs", ignore_errors=True)
+    for name in ("outputs", "outputs-local"):
+        shutil.rmtree(home / name, ignore_errors=True)
     for f in (home / "logs").glob("*.log*") if (home / "logs").is_dir() else []:
         _remove(f, problems)
     return problems
 
 
-def share_local_history(db_file: Path) -> dict[str, int]:
-    """Let a model that is not local see what was said and saved in local or airgapped mode: clear the flag
-    on every row and summary. This is the owner's choice (`paw privacy share-history`), never automatic."""
-    counts: dict[str, int] = {}
-    con = sqlite3.connect(db_file, timeout=10)
+def _columns(con: sqlite3.Connection, table: str) -> set[str]:
+    return {row[1] for row in con.execute(f"PRAGMA table_info({table})")}
+
+
+def local_row_count(db_file: Path) -> int:
+    """How many saved messages, memories, document pieces, contacts and jobs are hidden from cloud models.
+    0 for a database that is missing, empty or from an older version."""
+    if not db_file.exists() or not db_file.stat().st_size:
+        return 0
     try:
-        for table in ("messages", "memories", "document_chunks"):
-            cur = con.execute(f"UPDATE {table} SET local_only = 0 WHERE local_only = 1")
-            counts[table] = cur.rowcount
-        for key, text in con.execute("SELECT key, value FROM kv_meta WHERE key LIKE 'summary_cloud:%'").fetchall():
-            conv = key.split(":", 1)[1]  # fold the later summary into the shared one
-            row = con.execute("SELECT value FROM kv_meta WHERE key = ?", (f"summary:{conv}",)).fetchone()
-            con.execute("INSERT OR REPLACE INTO kv_meta (key, value) VALUES (?, ?)",
-                        (f"summary:{conv}", "\n\n".join(t for t in (row and row[0], text) if t)))
-            con.execute("DELETE FROM kv_meta WHERE key = ?", (key,))
-        cur = con.execute("DELETE FROM kv_meta WHERE key LIKE 'summary_local:%'")
-        counts["summaries"] = cur.rowcount
-        con.commit()
+        con = sqlite3.connect(f"file:{db_file}?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error:
+        return 0
+    try:
+        return sum(con.execute(f"SELECT COUNT(*) FROM {t} WHERE local_only = 1").fetchone()[0]
+                   for t in ("messages", "memories", "document_chunks", "contacts", "cron_jobs")
+                   if "local_only" in _columns(con, t))
+    except sqlite3.Error:
+        return 0
     finally:
         con.close()
-    return counts
+
+
+def _move_all(src: Path, dst: Path) -> int:
+    """Move every file under `src` to the same place under `dst`, then drop `src`. Returns the count."""
+    moved = 0
+    for f in [p for p in src.rglob("*") if p.is_file()] if src.is_dir() else []:
+        target = dst / f.relative_to(src)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(f, target)
+        moved += 1
+    shutil.rmtree(src, ignore_errors=True)
+    return moved
+
+
+def share_local_history(db_file: Path) -> dict[str, int]:
+    """Let a model that is not local see what was said and saved in local or airgapped mode: clear the flag
+    on every row and summary, and move the files and long outputs saved in that mode. This is the owner's
+    choice (`paw privacy share-history`), never automatic. A database or table that is not there counts as 0."""
+    counts: dict[str, int] = {}
+    if db_file.exists() and db_file.stat().st_size:
+        con = sqlite3.connect(db_file, timeout=10)
+        try:
+            for table in ("messages", "memories", "document_chunks", "contacts", "cron_jobs"):
+                if "local_only" in _columns(con, table):
+                    counts[table] = con.execute(f"UPDATE {table} SET local_only = 0 WHERE local_only = 1").rowcount
+            if _has_table(con, "kv_meta"):
+                for key, text in con.execute(
+                        "SELECT key, value FROM kv_meta WHERE key LIKE 'summary_cloud:%'").fetchall():
+                    conv = key.split(":", 1)[1]  # fold the later summary into the shared one
+                    row = con.execute("SELECT value FROM kv_meta WHERE key = ?", (f"summary:{conv}",)).fetchone()
+                    con.execute("INSERT OR REPLACE INTO kv_meta (key, value) VALUES (?, ?)",
+                                (f"summary:{conv}", "\n\n".join(t for t in (row and row[0], text) if t)))
+                    con.execute("DELETE FROM kv_meta WHERE key = ?", (key,))
+                counts["summaries"] = con.execute("DELETE FROM kv_meta WHERE key LIKE 'summary_local:%'").rowcount
+            con.commit()
+        finally:
+            con.close()
+    home = db_file.parent
+    counts["files"] = _move_all(home / "files-local", home / "files") + _move_all(
+        home / "outputs-local", home / "outputs")
+    return {k: counts.get(k, 0) for k in (
+        "messages", "memories", "document_chunks", "contacts", "cron_jobs", "summaries", "files")}
 
 
 def _has_table(con: sqlite3.Connection, name: str) -> bool:

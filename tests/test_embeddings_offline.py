@@ -31,6 +31,13 @@ GIB = 1024 ** 3
 
 
 @pytest.fixture(autouse=True)
+def _no_real_dns(monkeypatch):
+    # net.client decides "local" from the host, which looks a plain name up; keep that off the network
+    import micropaw.providers.registry as reg
+    monkeypatch.setattr(reg, "_lookup", lambda host: True)
+
+
+@pytest.fixture(autouse=True)
 def _normal_mode(monkeypatch, tmp_path):
     monkeypatch.setattr("micropaw.config.CONFIG_DIR", tmp_path)
     privacy._reset_for_tests()
@@ -113,7 +120,7 @@ async def test_the_start_probe_gives_up_on_a_dead_host_within_a_second(monkeypat
     seen = {}
 
     class Client:
-        def __init__(self, timeout):
+        def __init__(self, timeout, **kw):  # net.client also passes its hooks and TLS settings
             seen["timeout"] = timeout
 
         async def __aenter__(self):

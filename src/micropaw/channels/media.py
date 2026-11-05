@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from micropaw import net
 from micropaw.providers.base import MediaItem
 from micropaw.security import validate_url
 
@@ -52,7 +53,8 @@ async def download(url: str, headers: dict[str, str] | None = None, limit: int =
     same host over https, so a token in headers never goes to another host."""
     limit = limit or max_bytes()
     origin = urlparse(url).hostname
-    async with httpx.AsyncClient(timeout=60.0, follow_redirects=False) as client:
+    # validate_url refuses local hosts, so this is never a local connection (and no name is looked up here)
+    async with net.client(url, timeout=60.0, follow_redirects=False, local=False) as client:
         for _ in range(_HOPS + 1):
             if (blocked := await validate_url(url)) is not None:
                 raise MediaRefusedError(blocked)

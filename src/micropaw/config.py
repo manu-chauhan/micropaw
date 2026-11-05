@@ -338,7 +338,8 @@ class PrivacyConfig(BaseModel):
     allow_lan: bool = True          # private ranges and Tailscale count as "this side" in airgapped and local
     lan_hosts: list[str] = []       # extra host names or CIDRs that count as local (names are never resolved to decide)
     allow_cloud_fallback: bool = False  # a local main model may fail over to a cloud model
-    allow_cloud_helpers: bool = False   # a local main model may use a cloud fast or vision model (normal mode)
+    # a local main model may use a cloud fast or vision model (normal mode); each delegate task asks first
+    allow_cloud_helpers: bool = False
     share_with_cloud: bool = True       # USER.md and the location go to a cloud model (paw setup turns this off)
     # Local-mode exceptions: telegram, discord, slack, whatsapp, google, web_fetch, web_browse, shell_network
     allow: list[str] = []
@@ -542,8 +543,9 @@ def config_exists() -> bool:
     return CONFIG_FILE.exists()
 
 
-def load_config() -> Config:
-    """Load config from ~/.micropaw/config.json with env var overrides."""
+def load_config(hold: bool = True) -> Config:
+    """Load config from ~/.micropaw/config.json with env var overrides. hold=False skips the privacy settings
+    that a strict run is holding back (the owner chose to use them, at a terminal)."""
     raw: dict = {}
     on_disk = False  # raw came from a file that parsed
     _logger = logging.getLogger(__name__)
@@ -584,7 +586,8 @@ def load_config() -> Config:
         raise ConfigError(f"The config file {CONFIG_FILE} has a problem at '{where}': "
                           f"{why}. Fix it, or run: paw setup --reset") from None
     from micropaw import privacy
-    privacy.apply_floor(cfg)  # settings a strict run is holding back stay held in later loads
+    if hold:
+        privacy.apply_floor(cfg)  # settings a strict run is holding back stay held in later loads
     return cfg
 
 

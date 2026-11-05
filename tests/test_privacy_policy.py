@@ -547,3 +547,35 @@ def test_private_lan_hosts_entries_are_not_refused():
                                      "fe80::/10", "box", "::ffff:192.168.1.5"])
     assert privacy.settings().public == ()
     assert privacy.check_config(config(privacy_kw={"mode": "airgapped", "lan_hosts": ["10.0.0.0/8"]})).refusals == []
+
+
+async def test_http_request_in_local_mode_shows_the_cleaned_address_and_fetches_it_clean(monkeypatch):
+    import httpx
+
+    from micropaw.tools.base import ToolContext
+    from micropaw.tools.http_request import HttpRequestTool
+    tool = HttpRequestTool()
+    ctx = ToolContext("c", "u", "terminal")
+    set_mode("local", allow=["web_fetch"])
+    long = "x" * 50
+    text = tool.needs_approval({"url": f"https://example.com/{long}?utm_source=a&id=7#top"}, ctx)
+    assert text.splitlines()[0] == f"GET https://example.com/{long}?id=7"
+    assert "Long parts that could carry data" in text and "x" * 40 + "..." in text
+    assert tool.needs_approval({"url": "https://example.com/a"}, ctx) == "GET https://example.com/a"
+
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, text="hello", headers={"content-type": "text/plain"})
+
+    monkeypatch.setattr("micropaw.tools.http_request._inner_transport", lambda: httpx.MockTransport(handler))
+    monkeypatch.setattr(socket, "getaddrinfo", lambda host, *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))])
+    assert privacy.permit("example.com") is None  # what the owner's yes does, with the real guard
+    out = await tool.execute({"url": "https://example.com/p?utm_source=a&id=7",
+                              "headers": {"Authorization": "secret"}}, ctx)
+    assert out.startswith("Note: headers are ignored in local mode.\nHTTP 200") and out.endswith("hello")
+    assert "URL: https://example.com/p?id=7" in out
+    assert seen[0].url.path == "/p" and seen[0].url.query == b"id=7"
+    assert seen[0].url.host == "93.184.216.34" and seen[0].headers["host"] == "example.com"
+    assert "authorization" not in seen[0].headers and "referer" not in seen[0].headers

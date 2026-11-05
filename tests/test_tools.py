@@ -795,7 +795,7 @@ class TestYouTubeTranscriptFetch:
         ]
         mock_responses[1].json.return_value = player_json
 
-        with patch("micropaw.tools.web_browse.httpx.AsyncClient") as mock_client_cls:
+        with patch("micropaw.tools.web_browse.net.client") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -821,7 +821,7 @@ class TestYouTubeTranscriptFetch:
             "captions": {"playerCaptionsTracklistRenderer": {"captionTracks": []}},
         }
 
-        with patch("micropaw.tools.web_browse.httpx.AsyncClient") as mock_client_cls:
+        with patch("micropaw.tools.web_browse.net.client") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)

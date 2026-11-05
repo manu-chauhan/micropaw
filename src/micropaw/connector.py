@@ -8,6 +8,7 @@ import httpx
 from rich.console import Console
 from rich.panel import Panel
 
+from micropaw import net
 from micropaw.config import Config, load_config, save_config
 
 console = Console()
@@ -32,10 +33,16 @@ def _ask_owner_ids(platform: str, current: list[str]) -> list[str]:
     raw = questionary.text("Your user ID(s), comma-separated:", default=",".join(current)).ask() or ""
     return [u.strip() for u in raw.split(",") if u.strip()]
 
+def _send(method: str, url: str, timeout: float, **kwargs) -> httpx.Response:
+    """One request through the guarded client (the guard and proxy rules of every other connection)."""
+    with net.sync_client(url, timeout=timeout) as client:
+        return client.request(method, url, **kwargs)
+
+
 def validate_telegram_token(token: str) -> tuple[bool, str]:
     """Validate Telegram bot token via getMe. Returns (ok, detail)."""
     try:
-        resp = httpx.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10)
+        resp = _send("GET", f"https://api.telegram.org/bot{token}/getMe", timeout=10)
         data = resp.json()
         if data.get("ok"):
             username = data["result"].get("username", "unknown")
@@ -50,8 +57,8 @@ def validate_telegram_token(token: str) -> tuple[bool, str]:
 def validate_discord_token(token: str) -> tuple[bool, str]:
     """Validate Discord bot token via /users/@me. Returns (ok, detail)."""
     try:
-        resp = httpx.get(
-            "https://discord.com/api/v10/users/@me",
+        resp = _send(
+            "GET", "https://discord.com/api/v10/users/@me",
             headers={"Authorization": f"Bot {token}"},
             timeout=10,
         )
@@ -72,8 +79,8 @@ def validate_discord_token(token: str) -> tuple[bool, str]:
 def _get_discord_app_id(token: str) -> str | None:
     """Get the Discord application ID from a bot token."""
     try:
-        resp = httpx.get(
-            "https://discord.com/api/v10/users/@me",
+        resp = _send(
+            "GET", "https://discord.com/api/v10/users/@me",
             headers={"Authorization": f"Bot {token}"},
             timeout=10,
         )
@@ -94,8 +101,8 @@ def discord_invite_url(app_id: str) -> str:
 def validate_slack_token(bot_token: str) -> tuple[bool, str]:
     """Validate Slack bot token via auth.test. Returns (ok, detail)."""
     try:
-        resp = httpx.post(
-            "https://slack.com/api/auth.test",
+        resp = _send(
+            "POST", "https://slack.com/api/auth.test",
             headers={"Authorization": f"Bearer {bot_token}"},
             timeout=10,
         )
@@ -114,7 +121,7 @@ def validate_slack_token(bot_token: str) -> tuple[bool, str]:
 def validate_ollama(host: str) -> tuple[bool, str]:
     """Check if Ollama is reachable."""
     try:
-        resp = httpx.get(f"{host.rstrip('/')}/api/tags", timeout=5)
+        resp = _send("GET", f"{host.rstrip('/')}/api/tags", timeout=5)
         if resp.status_code == 200:
             models = resp.json().get("models", [])
             names = [m.get("name", "") for m in models[:5]]
@@ -136,8 +143,8 @@ def validate_provider_key(config: Config) -> tuple[bool, str]:
         if not key:
             return False, "no API key configured"
         try:
-            resp = httpx.post(
-                "https://api.anthropic.com/v1/messages",
+            resp = _send(
+                "POST", "https://api.anthropic.com/v1/messages",
                 headers={"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
                 json={
                     "model": config.provider_config.claude.model,
@@ -158,8 +165,8 @@ def validate_provider_key(config: Config) -> tuple[bool, str]:
         if not key:
             return False, "no API key configured"
         try:
-            resp = httpx.get(
-                "https://api.openai.com/v1/models",
+            resp = _send(
+                "GET", "https://api.openai.com/v1/models",
                 headers={"Authorization": f"Bearer {key}"},
                 timeout=10,
             )
@@ -175,8 +182,8 @@ def validate_provider_key(config: Config) -> tuple[bool, str]:
         if not key:
             return False, "no API key configured"
         try:
-            resp = httpx.get(
-                "https://generativelanguage.googleapis.com/v1beta/models",
+            resp = _send(
+                "GET", "https://generativelanguage.googleapis.com/v1beta/models",
                 headers={"x-goog-api-key": key},
                 timeout=10,
             )

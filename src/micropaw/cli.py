@@ -298,11 +298,58 @@ def status():
     console.print(table)
 
 
-@main.command(name="privacy")
-def privacy_cmd():
+@main.group(name="privacy", invoke_without_command=True)
+@click.pass_context
+def privacy_cmd(ctx):
     """Show where your data goes: the mode, every model, search, channel and server, and file permissions."""
-    from micropaw import privacy_report
-    click.echo(privacy_report.render(load_config()))
+    if ctx.invoked_subcommand is None:
+        from micropaw import privacy_report, storage
+        click.echo(privacy_report.render(load_config(), hidden=storage.local_row_count(DB_FILE)))
+
+
+@privacy_cmd.command(name="allow")
+@click.argument("feature", type=click.Choice(["web_fetch", "web_browse", "google"]))
+@click.option("--yes", is_flag=True, help="Do not ask first.")
+def privacy_allow(feature, yes):
+    """Turn on web_fetch (web pages), web_browse (browser) or google in local mode, and remember the choice.
+
+    Editing privacy.allow in config.json by hand is held back at the next start, because a file edit
+    cannot be told apart from a change made by a tool. This command records it as your choice.
+    """
+    from micropaw import privacy
+    from micropaw.config import update_config_file
+    if privacy.mode() == "airgapped":
+        _fail(click.ClickException("Air-gapped mode allows no outside hosts, so nothing can be allowed."))
+    click.echo(f"{feature} reaches the internet in local mode. Every address is shown to you for approval first.")
+    if not yes and not click.confirm("Allow it?", default=False):
+        click.echo("Nothing changed.")
+        return
+    def add(raw: dict) -> None:
+        allow = raw.setdefault("privacy", {}).setdefault("allow", [])
+        if feature not in allow:
+            allow.append(feature)
+
+    update_config_file(add)
+    privacy.confirm_mode(privacy.mode(), load_config(hold=False))  # what is on disk, not what this start held back
+    click.echo(f"Allowed: {feature}. It takes effect the next time MicroPaw starts.")
+
+
+@privacy_cmd.command(name="share-history")
+@click.option("--yes", is_flag=True, help="Do not ask first.")
+def privacy_share_history(yes):
+    """Let cloud models see what was saved in local or air-gapped mode."""
+    from micropaw import storage
+    click.echo("Rows saved in local or air-gapped mode become sendable to cloud models.")
+    if not DB_FILE.exists() or not DB_FILE.stat().st_size:
+        click.echo("There is no saved history yet.")
+        return
+    if not yes and not click.confirm("Share it?", default=False):
+        click.echo("Nothing changed.")
+        return
+    counts = storage.share_local_history(DB_FILE)
+    click.echo(f"Shared: {counts['messages']} messages, {counts['memories']} memories, "
+               f"{counts['document_chunks']} document pieces, {counts['summaries']} summaries, "
+               f"{counts['contacts']} contacts, {counts['cron_jobs']} scheduled jobs, {counts['files']} files.")
 
 
 @main.command()
@@ -428,7 +475,8 @@ def export(conversation_id, fmt, output_file):
 
 
 @main.command()
-@click.option("--all", "everything", is_flag=True, help="Delete every message, memory, document, contact and log.")
+@click.option("--all", "everything", is_flag=True,
+              help="Delete every message, memory, document, contact, scheduled job and log.")
 @click.option("--older-than", "older", default="", metavar="AGE", help="Delete what is older than AGE (30d, 4w).")
 @click.option("--yes", is_flag=True, help="Do not ask first.")
 def forget(everything, older, yes):
@@ -445,7 +493,7 @@ def forget(everything, older, yes):
         if svc.running_gateway():
             _fail(click.ClickException("MicroPaw is running. Stop it first: paw service stop"))
         if not yes:
-            click.confirm("Delete every message, memory, document, contact and log?", abort=True)
+            click.confirm("Delete every message, memory, document, contact, scheduled job and log?", abort=True)
         for problem in storage.forget_all(DB_FILE, CONFIG_DIR):
             console.print(f"[yellow]{problem}[/yellow]")
         console.print("Done. Your config and keys are still there. Files you exported are not touched.")
@@ -1429,7 +1477,10 @@ def docs():
 @docs.command(name="add")
 @click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=str))
 def docs_add(folder):
-    """Index the .txt, .md and .pdf files in a folder for offline keyword search. Nothing leaves this computer."""
+    """Index the .txt, .md and .pdf files in a folder for offline keyword search.
+
+    Indexing sends nothing. In normal mode a cloud embedder may embed the pieces at the next start.
+    """
     from pathlib import Path
 
     from micropaw import docsearch
@@ -1451,7 +1502,10 @@ def docs_add(folder):
                 except (OSError, ValueError) as e:
                     notes.append(f"{path}: {e}")
                     continue
-                if n := await store.ingest_document(str(path), text):
+                except Exception:  # one bad file must not stop the rest
+                    notes.append(f"{path}: could not read this file")
+                    continue
+                if n := await store.ingest_document(str(path.resolve()), text):  # one source per file
                     files, chunks = files + 1, chunks + n
         finally:
             await store.close()

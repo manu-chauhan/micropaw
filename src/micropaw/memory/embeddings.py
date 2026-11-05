@@ -6,6 +6,7 @@ dependencies), plus a null fallback.  Auto-detect picks Ollama, then local, neve
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -15,6 +16,8 @@ import time
 from abc import ABC, abstractmethod
 
 import httpx
+
+from micropaw import net, privacy
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +54,8 @@ class _Remote(EmbeddingProvider):
 
     label = "Embedding server"
 
-    def __init__(self) -> None:
-        self._client = httpx.AsyncClient(timeout=_TIMEOUT)
+    def __init__(self, url: str = "") -> None:
+        self._client = net.client(url, timeout=_TIMEOUT)
         self._down_until = 0.0
 
     async def _request(self, text: str) -> list[float]:
@@ -64,7 +67,7 @@ class _Remote(EmbeddingProvider):
         try:
             return await self._request(text)
         except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError,
-                httpx.UnsupportedProtocol, KeyError, IndexError, ValueError) as e:
+                httpx.UnsupportedProtocol, privacy.EgressBlocked, KeyError, IndexError, ValueError) as e:
             self._down_until = time.monotonic() + _RETRY_AFTER
             logger.warning("%s failed, memory search skips it for a minute: %s", self.label, e)
             return []
@@ -81,7 +84,7 @@ class OpenAIEmbedding(_Remote):
 
     def __init__(self, api_key: str = "", model: str = "text-embedding-3-small",
                  base_url: str = "https://api.openai.com") -> None:
-        super().__init__()
+        super().__init__(base_url)
         self.api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/").removesuffix("/v1")
@@ -105,10 +108,10 @@ class OllamaEmbedding(_Remote):
 
     def __init__(self, host: str = "http://localhost:11434", model: str = "nomic-embed-text",
                  keep_alive: str = "1m") -> None:
-        super().__init__()
         host = host.rstrip("/")
         if not host.startswith(("http://", "https://")):
             host = f"http://{host}"
+        super().__init__(host)
         self.host = host
         self.model = model
         # The chat model stays loaded for 30 minutes. This one leaves memory soon after the last message,
@@ -271,13 +274,23 @@ class NullEmbedding(EmbeddingProvider):
 async def probe_ollama(host: str, model: str = _DEFAULT_OLLAMA_MODEL) -> bool:
     """Check if Ollama is running and has the specified embedding model pulled."""
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=1.0)) as client:  # a down host costs 1 s
+        local = await asyncio.to_thread(privacy.is_local_url, host)  # a plain host name is looked up
+        timeout = httpx.Timeout(3.0, connect=1.0)  # a down host costs 1 s
+        async with net.client(host, timeout=timeout, local=local) as client:
             resp = await client.get(f"{host.rstrip('/')}/api/tags")
             resp.raise_for_status()
             models = resp.json().get("models", [])
             return any(m.get("name", "").startswith(model) for m in models)
     except Exception:
         return False
+
+
+def is_local_embedder(embedder: EmbeddingProvider) -> bool:
+    """True when the text stays on this machine or network: the built-in model, or a server on a local address."""
+    if embedder.name in ("local", "none"):
+        return True
+    url = getattr(embedder, "host", None) or getattr(embedder, "base_url", None)
+    return bool(url) and privacy.is_local_url(url)
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:

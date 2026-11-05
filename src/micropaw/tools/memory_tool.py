@@ -58,7 +58,8 @@ class MemoryTool(Tool):
             if not key or not value:
                 return "Error: 'save' requires both 'key' and 'value'."
             tags = args.get("tags")
-            await _store.save_memory(key, value, tags=tags, user_id=user_id, marked=context.marked)
+            await _store.save_memory(key, value, tags=tags, user_id=user_id, marked=context.marked,
+                                    local=context.tainted)
             return f"Memory saved: {key}"
 
         elif action == "search":

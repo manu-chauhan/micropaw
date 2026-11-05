@@ -19,6 +19,7 @@ from micropaw.memory.embeddings import (
     cosine_similarity,
     deserialize_embedding,
     deserialize_embedding_blob,
+    is_local_embedder,
     serialize_embedding,
     serialize_embedding_blob,
 )
@@ -81,6 +82,7 @@ CREATE TABLE IF NOT EXISTS contacts (
     phone TEXT DEFAULT '',
     company TEXT DEFAULT '',
     notes TEXT DEFAULT '',
+    local_only INTEGER DEFAULT 0,
     created_at REAL DEFAULT (unixepoch('now')),
     updated_at REAL DEFAULT (unixepoch('now'))
 );
@@ -151,7 +153,8 @@ class MemoryStore:
     async def _migrate(self) -> None:
         """Add columns that older databases don't have."""
         for table, new in (("conversations", ("marked",)), ("memories", ("marked", "local_only")),
-                           ("messages", ("local_only",)), ("document_chunks", ("local_only",))):
+                           ("messages", ("local_only",)), ("document_chunks", ("local_only",)),
+                           ("contacts", ("local_only",))):
             async with self.db.execute(f"PRAGMA table_info({table})") as cur:
                 columns = {row[1] for row in await cur.fetchall()}
             for column in new:
@@ -353,9 +356,12 @@ class MemoryStore:
                 await self.db.commit()
                 logger.info("Synced %d existing chunks to vec index", count)
 
-            # Re-embed chunks cleared by dimension change
+            # Re-embed chunks cleared by dimension change. Text saved in local mode never goes to an embedder
+            # that is not local: those chunks stay with keyword search only.
+            local = await asyncio.to_thread(is_local_embedder, self.embedder)
             async with self.db.execute(
                 "SELECT id, content FROM document_chunks WHERE embedding IS NULL"
+                + ("" if local else " AND local_only = 0")
             ) as cursor:
                 null_rows = await cursor.fetchall()
 
@@ -438,15 +444,35 @@ class MemoryStore:
         )
         return (conversation_id, message.role, message.content, tool_calls_json, message.tool_call_id, local)
 
-    async def save_message(self, conversation_id: str, message: Message) -> None:
-        await self.save_messages(conversation_id, [message])
+    async def save_message(self, conversation_id: str, message: Message, local: bool = False) -> None:
+        await self.save_messages(conversation_id, [message], local)
 
-    async def save_messages(self, conversation_id: str, messages: list[Message]) -> None:
-        """Save a turn's messages in one transaction (one commit)."""
+    async def has_local_data(self, conversation_id: str, user_id: str) -> bool:
+        """True when anything saved in local or airgapped mode could reach a model in this conversation:
+        its messages, the user's memories, document pieces and contacts, a summary, a scheduled job."""
+        for sql, args in (
+            ("SELECT 1 FROM messages WHERE conversation_id = ? AND local_only = 1 LIMIT 1", (conversation_id,)),
+            ("SELECT 1 FROM memories WHERE user_id = ? AND local_only = 1 LIMIT 1", (user_id,)),
+            ("SELECT 1 FROM document_chunks WHERE user_id = ? AND local_only = 1 LIMIT 1", (user_id,)),
+            ("SELECT 1 FROM contacts WHERE local_only = 1 LIMIT 1", ()),
+            ("SELECT 1 FROM kv_meta WHERE key = ? LIMIT 1", (f"summary_local:{conversation_id}",)),
+            ("SELECT 1 FROM cron_jobs WHERE local_only = 1 LIMIT 1", ()),
+        ):
+            try:
+                async with self.db.execute(sql, args) as cursor:
+                    if await cursor.fetchone():
+                        return True
+            except aiosqlite.OperationalError:
+                pass  # the scheduler has not made its table in this database
+        return False
+
+    async def save_messages(self, conversation_id: str, messages: list[Message], local: bool = False) -> None:
+        """Save a turn's messages in one transaction (one commit). local=True flags them local_only
+        whatever the mode: the turn's model saw local data, so its words may repeat it."""
         if not messages:
             await self.db.commit()  # still ends the turn's open transaction
             return
-        local = _local_now()
+        local = int(local) or _local_now()
         await self.db.executemany(
             "INSERT INTO messages (conversation_id, role, content, tool_calls, tool_call_id, local_only) "
             "VALUES (?, ?, ?, ?, ?, ?)",
@@ -543,6 +569,10 @@ class MemoryStore:
         await self._set_meta(key, summary)
         await self.db.commit()
 
+    async def _has_table(self, name: str) -> bool:
+        async with self.db.execute("SELECT 1 FROM sqlite_master WHERE name = ?", (name,)) as cursor:
+            return await cursor.fetchone() is not None
+
     async def checkpoint(self) -> None:
         """Fold the write-ahead log into the database and empty it, so deleted text is not left in -wal."""
         await self.db.commit()
@@ -590,13 +620,14 @@ class MemoryStore:
             except aiosqlite.Error:
                 pass  # the scheduler has not made its tables yet
         await self.db.commit()
-        if self.has_fts:
-            try:
-                # merge the index, so old words do not stay in blocks of their own
-                await self.db.execute("INSERT INTO messages_fts(messages_fts) VALUES('optimize')")
-                await self.db.commit()
-            except aiosqlite.Error as e:
-                logger.debug("Search index merge skipped: %s", e)
+        for index, present in (("messages_fts", self.has_fts), ("chunks_fts", await self._has_table("chunks_fts"))):
+            if present:
+                try:
+                    # merge the index, so old words do not stay in blocks of their own
+                    await self.db.execute(f"INSERT INTO {index}({index}) VALUES('optimize')")
+                    await self.db.commit()
+                except aiosqlite.Error as e:
+                    logger.debug("Search index merge skipped: %s", e)
         await self.compact_storage()
         return counts
 
@@ -614,13 +645,15 @@ class MemoryStore:
 
     async def save_memory(
         self, key: str, value: str, tags: list[str] | None = None, user_id: str = "_global", marked: bool = False,
+        local: bool = False,
     ) -> None:
-        """Save a fact. marked=True when it was written by a conversation that had read outside content."""
+        """Save a fact. marked=True when it was written by a conversation that had read outside content.
+        local=True keeps it local_only whatever the mode (the turn's model saw local data)."""
         tags_str = ",".join(tags) if tags else ""
         embedding = await self.embedder.embed(f"{key}: {value}")
         embedding_json = serialize_embedding(embedding)
 
-        local = _local_now()
+        local = int(local) or _local_now()
         await self.db.execute(
             "INSERT INTO memories (key, value, tags, embedding, user_id, marked, local_only) "
             "VALUES (?, ?, ?, ?, ?, ?, ?) "
@@ -708,7 +741,7 @@ class MemoryStore:
     # --- Document chunks (RAG) ---
 
     async def ingest_document(
-        self, source: str, content: str, user_id: str = "_global", max_chunks: int = 0,
+        self, source: str, content: str, user_id: str = "_global", max_chunks: int = 0, local: bool = False,
     ) -> int:
         """Chunk, embed, and store a document. Dual-writes to vec_chunks when available.
 
@@ -726,7 +759,7 @@ class MemoryStore:
         async with self._embed_slot:
             blobs = [serialize_embedding_blob(await self.embedder.embed(text)) for text in chunks]
 
-        local = _local_now()
+        local = int(local) or _local_now()
         async with self._ingest_lock:  # two ingests of one source must not interleave
             try:
                 await self._delete_chunks("source = ? AND user_id = ?", (source, user_id))
@@ -868,26 +901,28 @@ class MemoryStore:
 
     async def add_contact(self, name: str, email: str = "", phone: str = "", company: str = "", notes: str = "") -> int:
         cursor = await self.db.execute(
-            "INSERT INTO contacts (name, email, phone, company, notes) VALUES (?, ?, ?, ?, ?)",
-            (name, email, phone, company, notes),
+            "INSERT INTO contacts (name, email, phone, company, notes, local_only) VALUES (?, ?, ?, ?, ?, ?)",
+            (name, email, phone, company, notes, _local_now()),
         )
         await self.db.commit()
         return cursor.lastrowid
 
-    async def search_contacts(self, query: str) -> list[dict]:
+    async def search_contacts(self, query: str, include_local: bool = True) -> list[dict]:
         q = f"%{query}%"
         async with self.db.execute(
             "SELECT id, name, email, phone, company, notes FROM contacts "
-            "WHERE name LIKE ? COLLATE NOCASE OR email LIKE ? COLLATE NOCASE OR company LIKE ? COLLATE NOCASE "
+            "WHERE (name LIKE ? COLLATE NOCASE OR email LIKE ? COLLATE NOCASE OR company LIKE ? COLLATE NOCASE)"
+            f"{'' if include_local else ' AND local_only = 0'} "
             "ORDER BY name COLLATE NOCASE LIMIT 50",
             (q, q, q),
         ) as cursor:
             rows = await cursor.fetchall()
         return [self._contact_row(r) for r in rows]
 
-    async def get_all_contacts(self, limit: int = 50) -> list[dict]:
+    async def get_all_contacts(self, limit: int = 50, include_local: bool = True) -> list[dict]:
         async with self.db.execute(
-            "SELECT id, name, email, phone, company, notes FROM contacts ORDER BY name COLLATE NOCASE LIMIT ?",
+            "SELECT id, name, email, phone, company, notes FROM contacts"
+            f"{'' if include_local else ' WHERE local_only = 0'} ORDER BY name COLLATE NOCASE LIMIT ?",
             (limit,),
         ) as cursor:
             rows = await cursor.fetchall()

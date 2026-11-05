@@ -111,3 +111,16 @@ async def test_redirects_stop_after_five_and_the_body_is_capped():
 def test_html_to_text_drops_scripts_and_decodes_entities():
     text = webfetch.html_to_text("<p>a &amp; b</p><script>x()</script><style>p{}</style><p>c</p>")
     assert "a & b" in text and "c" in text and "x()" not in text and "<" not in text
+
+
+def test_the_query_is_kept_as_written_except_for_tracking_keys():
+    assert webfetch.clean_url("https://e.com/a/b/c?q=hello%20world&flag&x[]=1;y=2&utm_x=1#frag") \
+        == "https://e.com/a/b/c?q=hello%20world&flag&x[]=1;y=2"
+    assert webfetch.clean_url("https://e.com/a?utm_source=1") == "https://e.com/a"
+
+
+def test_long_query_keys_and_host_labels_are_pointed_out_too():
+    key = "my_private_diagnosis_is_a_long_secret_text_here_ok"
+    assert webfetch.odd_segments(f"https://e.com/a?{key}=1") == [key[:40] + "..."]
+    label = "a" * 45
+    assert webfetch.odd_segments(f"https://{label}.example.com/") == [label[:40] + "..."]

@@ -157,11 +157,8 @@ async def _search_searxng(query: str, max_results: int, base_url: str | None = N
     urls = [base_url.rstrip("/")] if base_url else random.sample(_SEARXNG_INSTANCES, _MAX_SEARXNG_TRIES)
     for url in urls:
         try:
-            if base_url:
-                client = net.client(url, timeout=_SEARXNG_TIMEOUT, **({"proxy": proxy} if proxy else {}))
-            else:
-                client = httpx.AsyncClient(timeout=_SEARXNG_TIMEOUT)
-            async with client:
+            via = {"proxy": proxy} if base_url and proxy else {}
+            async with net.client(url, timeout=_SEARXNG_TIMEOUT, **via) as client:
                 resp = await client.get(f"{url}/search", params={"q": query, "format": "json", "language": "en"},
                                         headers={"Accept": "application/json"})
                 resp.raise_for_status()
@@ -182,7 +179,7 @@ async def _search_searxng(query: str, max_results: int, base_url: str | None = N
 async def _search_brave(query: str, max_results: int, api_key: str) -> str | None:
     """Search via Brave Search API. Returns text, or None when it is rate limited or cannot be reached."""
     try:
-        async with httpx.AsyncClient(timeout=_BRAVE_TIMEOUT) as client:
+        async with net.client("https://api.search.brave.com", timeout=_BRAVE_TIMEOUT) as client:
             resp = await client.get(
                 "https://api.search.brave.com/res/v1/web/search",
                 params={"q": query, "count": max_results},
@@ -214,7 +211,7 @@ async def _search_duckduckgo(query: str, max_results: int) -> str:
     from urllib.parse import parse_qs, unquote
 
     try:
-        async with httpx.AsyncClient(timeout=_DDG_TIMEOUT, follow_redirects=True) as client:
+        async with net.client("https://lite.duckduckgo.com", timeout=_DDG_TIMEOUT, follow_redirects=True) as client:
             resp = await client.get("https://lite.duckduckgo.com/lite/", params={"q": query},
                                     headers={"User-Agent": "Mozilla/5.0"})
             resp.raise_for_status()
@@ -333,7 +330,7 @@ async def _search_docs(query: str, max_results: int, context: ToolContext) -> li
         return []
     from micropaw import docsearch
     users = tuple(dict.fromkeys((context.memory_user, "_global")))
-    hits = await docsearch.search(_store, query, max_results, users)
+    hits = await docsearch.search(_store, query, max_results, users, context.local_data)
     return [f"- **{h['source']}**  [your documents]\n  {_strip(h['snippet'])}" for h in hits]
 
 
@@ -348,7 +345,8 @@ async def _search_offline(query: str, max_results: int, cfg: Any, backends: list
         sources += ks
     if "docs" in backends and _store is not None:
         from micropaw import docsearch
-        if await docsearch.has_documents(_store, tuple(dict.fromkeys((context.memory_user, "_global")))):
+        if await docsearch.has_documents(_store, tuple(dict.fromkeys((context.memory_user, "_global"))),
+                                         context.local_data):
             blocks += await _search_docs(query, max_results, context)
             sources.append("your documents")
     if not sources:

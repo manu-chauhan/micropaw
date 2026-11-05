@@ -12,7 +12,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/micropaw?style=for-the-badge)](https://pypi.org/project/micropaw/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?style=for-the-badge)](https://python.org)
-[![Tests](https://img.shields.io/badge/tests-393%20passed-brightgreen?style=for-the-badge)]()
+[![Tests](https://img.shields.io/badge/tests-1840%20passed-brightgreen?style=for-the-badge)]()
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)](LICENSE)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/manuchauhan)
 
@@ -181,7 +181,7 @@ MicroPaw:                "Revenue grew 23% in Q4, driven by..."
 
 **MicroPaw sits in the sweet spot** — full-featured like OpenClaw (RAG, 6 channels, 17 tools, scheduling, email, calendar, multi-agent delegation) but lightweight like PicoClaw (~9,200 LOC, zero SDK dependencies). No telemetry, no bloat, no wrappers.
 
-> Started at **4,667 LOC** in the first commit. Grew to **~9,200 source + ~5,150 test LOC** while adding 6 channels, 17 tools, RAG, multi-agent delegation, scheduling, email, calendar — and 389 tests. Every feature earned its lines.
+> Started at **4,667 LOC** in the first commit. Grew to **~9,200 source + ~5,150 test LOC** while adding 6 channels, 17 tools, RAG, multi-agent delegation, scheduling, email, calendar, and 1840 tests. Every feature earned its lines.
 
 ---
 
@@ -429,10 +429,18 @@ Your messages go where you point MicroPaw: the model, search and chat services y
 ### The three modes
 
 - `airgapped`: MicroPaw talks only to this computer, and to your own network if `privacy.allow_lan` is on. Models, embeddings, speech and search must run there. Cloud models, chat apps that relay through a company's servers (Telegram, Discord, Slack, WhatsApp), Google mail and calendar, updates and model downloads are refused with a message that says why. Web search answers from offline sources (Kiwix archives and your own documents) and says so.
-- `local`: models, embeddings, speech-to-text and text-to-speech run on this computer or your network. Web search goes only through your own SearXNG (`search.searxng_url`), optionally through a SOCKS proxy such as Tor (`search.proxy`), and you see every query before it is sent, because a query can contain private text. Your Kiwix archives and documents are searched first when you have them. `web_browse` and `http_request` are off unless you name them in `privacy.allow` (`web_browse`, `web_fetch`). `web_browse` shows you each page address for approval and removes tracking parameters from it. `http_request` does not: a plain GET is not asked about and the address is not cleaned, so name `web_fetch` only if you accept that.
+- `local`: models, embeddings, speech-to-text and text-to-speech run on this computer or your network. Web search goes only through your own SearXNG (`search.searxng_url`), optionally through a SOCKS proxy such as Tor (`search.proxy`), and you see every query before it is sent, because a query can contain private text. Your Kiwix archives and documents are searched first when you have them. `web_browse` and `http_request` are off unless you name them in `privacy.allow` (`web_browse`, `web_fetch`). `web_browse` shows you each page address for approval and removes tracking parameters from it. `http_request` does the same: it asks for every address, shows the cleaned one and any long path or query part that could carry data, sends no cookies, referrer or caller headers, and checks every redirect. It makes GET requests only.
 - `normal` (the default): you can use cloud models. Even here, a search asks first once the chat has read outside content, and each reply says which provider answered.
 
 MICROPAW_PRIVACY in the environment can make the mode stricter than the config says, never looser. The mode is read once when MicroPaw starts.
+
+A setting that makes MicroPaw less private is held back at the next start. If `config.json` says `normal` after the last run was `local`, or adds a name to `privacy.allow` (such as `web_fetch`), MicroPaw keeps the old value and prints a note, because a file edit cannot be told apart from a change made by a tool. To loosen a setting on purpose, use one of these:
+
+- `paw privacy allow web_fetch` (or `web_browse`, `google`) records that choice. It asks first, and `--yes` skips the question.
+- `paw setup` asks about web page fetches in local mode, and asks before it keeps any held setting.
+- Start once with `MICROPAW_CONFIRM_PRIVACY` set to the mode you want. In bash or zsh: `MICROPAW_CONFIRM_PRIVACY=local paw chat`. In PowerShell: `$env:MICROPAW_CONFIRM_PRIVACY='local'; paw chat`. In cmd: `set MICROPAW_CONFIRM_PRIVACY=local` and then `paw chat`.
+
+What you save in local or air-gapped mode (messages, memories, document pieces, contacts, scheduled jobs, files, long tool outputs) stays hidden from cloud models after you move to `normal`. A local model in `normal` mode can still read it, and what it saves from that turn stays hidden too. `paw privacy` says how many items are hidden. `paw privacy share-history` lets cloud models see them (it asks first).
 
 ### What is checked, and what is not
 
@@ -649,6 +657,8 @@ MicroPaw > [delegate] "Research quantum computing breakthroughs"
 | `paw status` | System status overview |
 | `paw doctor` | Diagnostics: Python, deps, disk, keys, every model server you use, privacy checks (`--search` runs one test search) |
 | `paw privacy` | Where your data goes: the mode, each model, search, channel and server, file permissions |
+| `paw privacy allow <web_fetch\|web_browse\|google>` | Turn on a web feature in local mode and remember it as your choice (asks first, `--yes` skips the question) |
+| `paw privacy share-history` | Let cloud models see what was saved in local or air-gapped mode (asks first, `--yes` skips the question) |
 | `paw models add <name> <address>` | Test a model server on another computer and save it (`--key-env`, `--use main\|fast\|vision\|fallback`) |
 | `paw models remove <name>` | Forget a server added with `paw models add` |
 | `paw models scan` | Find model servers: this computer, your config, `--host`, and your network with `--lan` or `--range` |
@@ -849,7 +859,7 @@ Full decision log: [`DECISIONS.md`](DECISIONS.md)
 
 ```bash
 pip install ".[dev]"
-pytest                 # 389 tests
+pytest                 # 1840 tests
 ruff check src/
 mypy src/
 ```

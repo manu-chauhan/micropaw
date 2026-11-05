@@ -77,7 +77,7 @@ class ContactsTool(Tool):
             query = args.get("query", "")
             if not query:
                 return "Error: 'search' requires 'query'."
-            results = await _store.search_contacts(query)
+            results = await _store.search_contacts(query, include_local=context.local_data)
             if not results:
                 return f"No contacts found for: {query}"
             lines = [f"Found {len(results)} contact(s):"]
@@ -86,7 +86,7 @@ class ContactsTool(Tool):
             return "\n".join(lines)
 
         elif action == "list":
-            contacts = await _store.get_all_contacts()
+            contacts = await _store.get_all_contacts(include_local=context.local_data)
             if not contacts:
                 return "No contacts stored yet."
             lines = [f"All contacts ({len(contacts)}):"]

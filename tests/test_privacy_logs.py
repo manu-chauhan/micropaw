@@ -306,7 +306,7 @@ async def test_agent_keeps_auto_ingest_tasks_and_cancels_them(monkeypatch):
     agent = _agent(_Say([]))
     gate = asyncio.Event()
 
-    async def slow(source, content, user_id):
+    async def slow(source, content, user_id, local=False):
         await gate.wait()
 
     monkeypatch.setattr(agent, "_auto_ingest", slow)
@@ -369,3 +369,10 @@ def test_providers_share_the_cached_encoding():
 
 
 _ = config
+
+
+def test_retention_on_a_new_install_does_not_warn_about_missing_rotated_logs(tmp_path, monkeypatch, caplog):
+    from micropaw.utils import audit
+    monkeypatch.setattr(audit, "AUDIT_FILE", tmp_path / "audit.jsonl")
+    assert audit.drop_older_than(30) == 0
+    assert not caplog.records

@@ -81,8 +81,8 @@ class ConversationManager:
     async def save_message(self, conversation_id: str, message: Message) -> None:
         await self.store.save_message(conversation_id, message)
 
-    async def save_messages(self, conversation_id: str, messages: list[Message]) -> None:
-        await self.store.save_messages(conversation_id, messages)
+    async def save_messages(self, conversation_id: str, messages: list[Message], local: bool = False) -> None:
+        await self.store.save_messages(conversation_id, messages, local)
 
     def new_channel_session(self, platform: str, new_id: str) -> None:
         """Branch this channel into a fresh conversation (/new)."""

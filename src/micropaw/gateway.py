@@ -612,7 +612,9 @@ class Gateway:
         if text.lower() in ("/privacy", "/status"):
             from micropaw import privacy_report
             if text.lower() == "/privacy":
-                return privacy_report.render(self.config)
+                from micropaw import storage
+                return privacy_report.render(self.config, platform, await asyncio.to_thread(
+                    storage.local_row_count, DB_FILE))
             return (f"{privacy_report.status_line(self.config)}\n"
                     f"This chat talks to: {self._describe(self._route(platform, user_id, channel_id))}")
         if m := _AGENT_CMD.match(text):

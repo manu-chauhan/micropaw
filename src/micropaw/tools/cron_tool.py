@@ -126,7 +126,7 @@ class CronTool(Tool):
                     f"The user has been asked to turn it on with /cron enable {job_id}.")
 
         elif action == "list":
-            jobs = await _scheduler.list_jobs()
+            jobs = await _scheduler.list_jobs(include_local=context.local_data)
             if not jobs:
                 return "No scheduled jobs."
             lines = [f"Scheduled jobs ({len(jobs)}):"]

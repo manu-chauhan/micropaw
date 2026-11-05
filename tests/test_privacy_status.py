@@ -192,3 +192,227 @@ def test_the_upgrade_notice_shows_once_and_only_without_a_privacy_block(monkeypa
     (tmp_path / "config.json").write_text(json.dumps({"privacy": {"mode": "local"}}))
     cli._privacy_upgrade_notice()
     assert capsys.readouterr().out == ""
+
+
+def test_share_history_asks_says_what_it_does_and_prints_the_counts(monkeypatch, tmp_path):
+    import sqlite3
+
+    import micropaw.cli as cli
+    db = tmp_path / "data.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE messages (id INTEGER, local_only INTEGER)")
+    con.execute("CREATE TABLE memories (id INTEGER, local_only INTEGER)")
+    con.execute("CREATE TABLE document_chunks (id INTEGER, local_only INTEGER)")
+    con.execute("CREATE TABLE kv_meta (key TEXT PRIMARY KEY, value TEXT)")
+    con.executemany("INSERT INTO messages VALUES (?, 1)", [(1,), (2,)])
+    con.execute("INSERT INTO memories VALUES (1, 1)")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(cli, "DB_FILE", db)
+
+    def local_rows():
+        c = sqlite3.connect(db)
+        try:
+            return c.execute("SELECT COUNT(*) FROM messages WHERE local_only = 1").fetchone()[0]
+        finally:
+            c.close()
+
+    declined = CliRunner().invoke(main, ["privacy", "share-history"], input="n\n")
+    assert declined.exit_code == 0 and "become sendable to cloud models" in declined.output
+    assert "Nothing changed" in declined.output and local_rows() == 2
+    done = CliRunner().invoke(main, ["privacy", "share-history", "--yes"])
+    assert done.exit_code == 0 and "2 messages, 1 memories, 0 document pieces, 0 summaries" in done.output
+    assert local_rows() == 0
+
+
+def test_share_history_with_no_database_changes_nothing(monkeypatch, tmp_path):
+    import micropaw.cli as cli
+    monkeypatch.setattr(cli, "DB_FILE", tmp_path / "none.db")
+    r = CliRunner().invoke(main, ["privacy", "share-history", "--yes"])
+    assert r.exit_code == 0 and "no saved history" in r.output and not (tmp_path / "none.db").exists()
+
+
+def _local_install(monkeypatch, tmp_path, allow=()):
+    import json
+
+    from micropaw import config as config_mod
+    from micropaw import privacy
+    from micropaw.config import Config, PrivacyConfig
+    monkeypatch.setattr(config_mod, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(config_mod, "CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.delenv("MICROPAW_CONFIRM_PRIVACY", raising=False)
+    privacy._reset_for_tests()
+    privacy.freeze("local")
+    privacy.confirm_mode("local", Config(privacy=PrivacyConfig(mode="local")))  # the last run was plain local
+    (tmp_path / "config.json").write_text(json.dumps({"privacy": {"mode": "local", "allow": list(allow)}}))
+    return privacy
+
+
+def test_a_hand_edit_of_allow_is_held_and_paw_privacy_allow_records_it(monkeypatch, tmp_path):
+    import json
+
+    from micropaw.config import load_config
+    privacy = _local_install(monkeypatch, tmp_path, allow=["web_fetch"])
+    note = privacy.hold_loosened(load_config(), "local")
+    assert privacy.held_settings() == ["allow"] and "paw privacy allow" in note
+    assert "$env:MICROPAW_CONFIRM_PRIVACY='local'" in note and "set MICROPAW_CONFIRM_PRIVACY=local" in note
+    assert load_config().privacy.allow == []  # held in later loads too
+    r = CliRunner().invoke(main, ["privacy", "allow", "web_fetch", "--yes"])
+    assert r.exit_code == 0, r.output
+    assert json.loads((tmp_path / "config.json").read_text())["privacy"]["allow"] == ["web_fetch"]
+    privacy._reset_for_tests()
+    privacy.freeze("local")
+    assert privacy.hold_loosened(load_config(), "local") == "" and load_config().privacy.allow == ["web_fetch"]
+
+
+def test_paw_privacy_allow_asks_first_and_air_gapped_has_nothing_to_allow(monkeypatch, tmp_path):
+    import json
+    privacy = _local_install(monkeypatch, tmp_path)
+    r = CliRunner().invoke(main, ["privacy", "allow", "web_fetch"], input="n\n")
+    assert "Nothing changed" in r.output
+    assert json.loads((tmp_path / "config.json").read_text())["privacy"]["allow"] == []
+    privacy._reset_for_tests()
+    privacy.freeze("airgapped")
+    r = CliRunner().invoke(main, ["privacy", "allow", "web_fetch", "--yes"])
+    assert r.exit_code != 0 and "Air-gapped" in r.output
+
+
+class _Ask:
+    def __init__(self, value):
+        self.value = value
+
+    def ask(self):
+        return self.value
+
+
+class _Q:
+    """Questionary stand-in: select returns its default, confirm returns `yes`."""
+    class Choice:
+        def __init__(self, title, value=None):
+            self.title, self.value = title, value
+
+    def __init__(self, yes=True):
+        self.yes, self.asked = yes, []
+
+    def select(self, prompt, choices=None, default=None):
+        self.asked.append((prompt, default))
+        return _Ask(default)
+
+    def confirm(self, prompt, default=False):
+        self.asked.append((prompt, default))
+        return _Ask(self.yes)
+
+    def text(self, prompt, default=""):
+        self.asked.append((prompt, default))
+        return _Ask(default)
+
+
+def test_wizard_asks_about_web_fetch_in_local_mode_only():
+    from micropaw import setup_wizard as wiz
+    from micropaw.config import Config
+    c = Config()
+    wiz._ask_web_fetch(_Q(yes=False), c, "local")
+    assert c.privacy.allow == []
+    wiz._ask_web_fetch(_Q(), c, "airgapped")
+    assert c.privacy.allow == []
+    wiz._ask_web_fetch(_Q(), c, "local")
+    assert c.privacy.allow == ["web_fetch"]
+    q = _Q()
+    wiz._ask_web_fetch(q, c, "local")  # already named: no question
+    assert q.asked == []
+
+
+def test_wizard_keeps_the_search_an_existing_install_has():
+    from micropaw import setup_wizard as wiz
+    from micropaw.config import Config
+    c = Config()
+    c.search.provider = "searxng"
+    c.search.searxng_url = "http://localhost:8888"
+    q = _Q()
+    wiz._ask_search(q, c)
+    assert c.search.provider == "searxng" and c.search.searxng_url == "http://localhost:8888"
+    c.search.provider = "brave"
+    wiz._ask_search(_Q(), c)
+    assert c.search.provider == "auto"
+    c = Config()  # the config default (auto, no key) is not a search the owner set up
+    wiz._ask_search(_Q(), c)
+    assert c.search.provider == "off"
+
+
+@pytest.mark.parametrize("keep,expected", [(True, ["web_fetch"]), (False, [])])
+def test_wizard_asks_before_keeping_or_dropping_held_privacy_settings(monkeypatch, tmp_path, keep, expected):
+    from micropaw import setup_wizard as wiz
+    from micropaw.config import load_config
+    privacy = _local_install(monkeypatch, tmp_path, allow=["web_fetch"])
+    privacy.hold_loosened(load_config(), "local")
+    q = _Q(yes=keep)
+    assert wiz._load_existing(q).privacy.allow == expected
+    assert "looser than the last run (allow)" in q.asked[0][0]
+
+
+def test_privacy_text_on_a_vendor_channel_hides_the_address_of_a_server_on_your_network(mode):
+    mode("normal")
+    c = cfg(providers={"desktop": {"base_url": "http://192.168.1.50:11434", "kind": "ollama"}},
+            models={"fast": "desktop:m"}, voice={"stt": "local:whisper"})
+    assert "192.168.1.50:11434 (your network)" in privacy_report.render(c)  # the terminal shows it
+    for platform in ("telegram", "discord", "slack", "whatsapp"):
+        text = privacy_report.render(c, platform)
+        assert "192.168.1.50" not in text
+        assert "- fast model (main agent): desktop:m (your network)" in text
+    assert "api.anthropic.com (the internet)" in privacy_report.render(c, "telegram")  # public hosts stay
+
+
+async def test_the_privacy_command_on_a_channel_hides_lan_addresses(mode):
+    from unittest.mock import MagicMock
+
+    from micropaw.gateway import Gateway
+    mode("normal")
+    c = cfg(providers={"desktop": {"base_url": "http://192.168.1.50:11434", "kind": "ollama"}},
+            models={"fast": "desktop:m"})
+    gw = Gateway(c, MagicMock(), MagicMock(), [])
+    assert "192.168.1.50" not in await gw._owner_command("/privacy", "telegram", "u")
+    assert "192.168.1.50" in await gw._owner_command("/privacy", "terminal", "u")
+
+
+def test_normal_mode_says_how_many_saved_items_cloud_models_cannot_see(mode, tmp_path):
+    import sqlite3
+
+    from micropaw import storage
+    db = tmp_path / "data.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE messages (id INTEGER, local_only INTEGER)")
+    con.executemany("INSERT INTO messages VALUES (?, ?)", [(1, 1), (2, 1), (3, 0)])
+    con.execute("CREATE TABLE memories (id INTEGER)")  # an older table with no flag counts as 0
+    con.commit()
+    con.close()
+    n = storage.local_row_count(db)
+    assert n == 2
+    assert storage.local_row_count(tmp_path / "none.db") == 0
+    (tmp_path / "empty.db").write_bytes(b"")
+    assert storage.local_row_count(tmp_path / "empty.db") == 0
+    mode("normal")
+    text = privacy_report.render(cfg(), hidden=n)
+    assert "2 saved items from local or air-gapped mode are hidden from cloud models" in text
+    assert "paw privacy share-history" in text
+    assert "hidden from cloud models" not in privacy_report.render(cfg())
+    mode("local")
+    assert "hidden from cloud models" not in privacy_report.render(cfg(), hidden=n)
+    assert privacy_report.hidden_note(1).startswith("1 saved item from local or air-gapped mode is hidden")
+
+
+def test_paw_privacy_command_prints_the_hidden_note_in_normal_mode(mode, monkeypatch, tmp_path):
+    import sqlite3
+
+    import micropaw.cli as cli
+    import micropaw.config as config_mod
+    db = tmp_path / "data.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE messages (id INTEGER, local_only INTEGER)")
+    con.execute("INSERT INTO messages VALUES (1, 1)")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(cli, "DB_FILE", db)
+    monkeypatch.setattr(config_mod, "CONFIG_FILE", tmp_path / "config.json")
+    mode("normal")
+    r = CliRunner().invoke(main, ["privacy"])
+    assert r.exit_code == 0 and "1 saved item from local or air-gapped mode is hidden from cloud models" in r.output

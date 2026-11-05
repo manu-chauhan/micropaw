@@ -5,12 +5,13 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import os
+import socket
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import httpx
 
-from micropaw import net, privacy
+from micropaw import egress, net, privacy, webfetch
 from micropaw.security import _is_private_ip, validate_url
 from micropaw.tools.base import Tool, ToolContext
 
@@ -39,6 +40,43 @@ def _check_peer(response: httpx.Response, url: str) -> None:
         raise _BlockedError(f"{urlparse(url).hostname} connected to a private address ({peer[0]})")
 
 
+class _PinnedTransport(httpx.AsyncBaseTransport):
+    """Local mode: resolve the name here, refuse any non-public answer, and connect to the address checked.
+    The name still goes in the Host header and in TLS, so a DNS answer that changes later cannot reach
+    this machine or the network (the privacy guard always allows those)."""
+
+    def __init__(self, inner: httpx.AsyncBaseTransport) -> None:
+        self.inner = inner
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        if egress.parse_ip(host) is None:
+            port = request.url.port or (443 if request.url.scheme == "https" else 80)
+            try:
+                infos = await asyncio.to_thread(socket.getaddrinfo, host, port, type=socket.SOCK_STREAM)
+            except OSError as e:
+                raise httpx.ConnectError(f"Cannot look up {host}.") from e
+            addrs = list(dict.fromkeys(i[4][0] for i in infos))
+            private = [a for a in addrs if _is_private_ip(egress.parse_ip(a))]
+            if private or not addrs:
+                why = f"{host} resolved to a private address ({private[0]})" if private else f"Cannot look up {host}."
+                raise httpx.ConnectError(why) from privacy.EgressBlocked(why)
+            privacy.guard().permit("", 120.0, addrs[:1])
+            request.url = request.url.copy_with(host=addrs[0])
+            request.extensions = {**request.extensions, "sni_hostname": host}
+        elif _is_private_ip(egress.parse_ip(host)):
+            why = f"{host} is a private address"
+            raise httpx.ConnectError(why) from privacy.EgressBlocked(why)
+        return await self.inner.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        await self.inner.aclose()
+
+
+def _inner_transport() -> httpx.AsyncBaseTransport:
+    return httpx.AsyncHTTPTransport(verify=net.ssl_context())
+
+
 async def _send(client: httpx.AsyncClient, method: str, url: str, headers: dict, body: Any) -> httpx.Response:
     response = await client.send(client.build_request(method, url, headers=headers, content=body), stream=True)
     try:
@@ -57,6 +95,14 @@ async def _read_capped(response: httpx.Response) -> tuple[bytes, bool]:
         if len(data) > MAX_DOWNLOAD:
             return bytes(data[:MAX_DOWNLOAD]), True
     return bytes(data), False
+
+
+def _format(response: httpx.Response, url: str, data: bytes, truncated: bool) -> str:
+    text = data.decode(response.encoding or "utf-8", errors="replace")
+    if len(text) > MAX_BODY or truncated:
+        text = text[:MAX_BODY] + "\n\n... (truncated)"
+    return (f"HTTP {response.status_code} {response.reason_phrase}\nURL: {url}\n"
+            f"Content-Type: {response.headers.get('content-type', '')}\n\n{text}")
 
 
 class HttpRequestTool(Tool):
@@ -82,7 +128,9 @@ class HttpRequestTool(Tool):
         """Anything but a plain GET changes something; after outside content, even a GET can carry data out."""
         method = args.get("method", "GET").upper()
         if privacy.local_only() and not privacy.airgapped():
-            return f"{method} {args.get('url', '')}"  # local mode: every URL is shown and asked
+            url = webfetch.clean_url(str(args.get("url", "")))  # local mode: every URL is shown and asked
+            odd = webfetch.odd_segments(url)
+            return f"{method} {url}" + (f"\nLong parts that could carry data: {', '.join(odd)}" if odd else "")
         if method == "GET" and not context.marked:
             return None
         body = str(args.get("body") or "")
@@ -100,9 +148,8 @@ class HttpRequestTool(Tool):
             return f"Error: {refusal}"
         if privacy.local_only() and method != "GET":
             return "Error: Local mode allows web fetches with GET only."
-        if privacy.local_only() and (host := urlparse(url).hostname):
-            if why := await asyncio.to_thread(privacy.permit, host):  # the owner approved this URL just now
-                return f"Error: {why}"
+        if privacy.local_only():
+            return await self._fetch_local(url, bool(headers))
 
         if error := await validate_url(url):
             return f"Error: {error}"
@@ -141,20 +188,25 @@ class HttpRequestTool(Tool):
                 data, truncated_download = await _read_capped(response)
                 await response.aclose()
 
-            result = f"HTTP {response.status_code} {response.reason_phrase}\n"
-            result += f"URL: {url}\n"
-
-            content_type = response.headers.get("content-type", "")
-            result += f"Content-Type: {content_type}\n\n"
-
-            text = data.decode(response.encoding or "utf-8", errors="replace")
-            if len(text) > MAX_BODY or truncated_download:
-                text = text[:MAX_BODY] + "\n\n... (truncated)"
-            result += text
-
-            return result
+            return _format(response, url, data, truncated_download)
 
         except _BlockedError as e:
             return f"Error: {e}"
         except Exception as e:
             return f"HTTP request error: {e}"
+
+    async def _fetch_local(self, url: str, headers_given: bool = False) -> str:
+        """Local mode: the cleaned address the owner approved, no cookies, no referrer, every hop checked.
+        A redirect to a host that was not approved is refused by the privacy guard."""
+        url = webfetch.clean_url(url)
+        if host := urlparse(url).hostname:
+            if why := await asyncio.to_thread(privacy.permit, host):  # the owner approved this URL just now
+                return f"Error: {why}"
+        try:
+            final, response, data = await webfetch.fetch_clean(
+                url, check=validate_url, max_bytes=MAX_DOWNLOAD + 1, transport=_PinnedTransport(_inner_transport()))
+        except webfetch.FetchError as e:
+            blocked = privacy.blocked(e)
+            return f"Error: {blocked or e}"
+        note = "Note: headers are ignored in local mode.\n" if headers_given else ""
+        return note + _format(response, final, data, len(data) > MAX_DOWNLOAD)

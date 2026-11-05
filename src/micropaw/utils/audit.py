@@ -75,6 +75,8 @@ def drop_older_than(days: int) -> int:
     removed = 0
     for i in range(1, _KEEP + 1):
         path = AUDIT_FILE.with_name(f"{AUDIT_FILE.name}.{i}")
+        if not path.exists():
+            continue  # a new install has no rotated files
         try:
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
             keep = [ln for ln in lines if (st := _stamp(ln)) is None or st >= cutoff]

@@ -15,12 +15,9 @@ from micropaw.config import PrivacyConfig
 SRC = Path(__file__).parent.parent / "src" / "micropaw"
 BANNED_HTTPX = {"AsyncClient", "Client", "get", "post", "put", "delete", "head", "patch", "request", "stream"}
 
-# Modules that still build their own clients. Each stream moves its own onto net.client; this list only shrinks.
-# Owned by the other round 3 streams, so they are listed here until that work is merged:
-PENDING = {
-    "channels/whatsapp.py", "channels/media.py", "memory/embeddings.py",
-    "tools/web_search.py", "tools/web_browse.py", "connector.py",
-}
+# Modules allowed to build their own clients. Empty: everything goes through net.client. The scan below stays
+# so that a new module cannot go around it.
+PENDING: set[str] = set()
 
 
 def direct_calls(tree: ast.AST) -> list[tuple[int, str]]:
@@ -111,3 +108,56 @@ def test_sync_client_has_the_same_rules():
         with pytest.raises(privacy.EgressBlocked):
             c.get("https://example.com")
         assert c.get("http://127.0.0.1:1").text == "through"
+
+
+# --- the modules that used to build their own client now stop at the guard -------------------------------
+
+def test_the_connector_checks_stop_at_the_guard_in_airgapped_mode():
+    from micropaw import connector
+    set_mode("airgapped")
+    ok_, detail = connector.validate_telegram_token("123:abc")
+    assert not ok_ and detail == "air-gapped mode blocked a connection to api.telegram.org"
+    assert connector.validate_ollama("http://127.0.0.1:1")[1] != detail  # a local server is still tried
+
+
+def test_a_whatsapp_send_stops_at_the_guard_in_airgapped_mode(caplog):
+    from micropaw.channels.whatsapp import WhatsAppChannel
+    set_mode("airgapped")
+    asyncio.run(WhatsAppChannel("t", "1")._send("to", "hi"))
+    assert "air-gapped mode blocked a connection to graph.facebook.com" in caplog.text
+
+
+def test_an_embedding_server_outside_the_policy_is_skipped_not_raised():
+    from micropaw.memory.embeddings import OpenAIEmbedding
+    set_mode("local")
+    assert asyncio.run(OpenAIEmbedding("k", base_url="https://api.openai.com").embed("text")) == []
+
+
+def test_public_searxng_instances_and_the_other_providers_stop_at_the_guard(caplog):
+    import logging
+
+    from micropaw.tools import web_search
+    caplog.set_level(logging.DEBUG)
+    set_mode("airgapped")
+    assert asyncio.run(web_search._search_searxng("q", 3)) is None
+    assert asyncio.run(web_search._search_brave("q", 3, "key")) is None
+    assert caplog.text.count("EgressBlocked") >= 2
+    found = asyncio.run(web_search._search_duckduckgo("q", 3))
+    assert "air-gapped mode blocked a connection to lite.duckduckgo.com" in found
+
+
+def test_a_searxng_proxy_is_passed_to_the_client(monkeypatch):
+    from micropaw.tools import web_search
+    seen = {}
+
+    def fake(url="", **kw):
+        seen.update(kw)
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(web_search.net, "client", fake)
+    set_mode("normal")
+    assert asyncio.run(web_search._search_searxng("q", 3, "http://localhost:8888", "socks5h://127.0.0.1:9050")) is None
+    assert seen["proxy"] == "socks5h://127.0.0.1:9050"
+    seen.clear()
+    asyncio.run(web_search._search_searxng("q", 3))
+    assert "proxy" not in seen

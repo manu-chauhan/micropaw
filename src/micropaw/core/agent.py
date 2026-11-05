@@ -429,6 +429,9 @@ class Agent:
         tool_defs = self.registry.to_tool_defs()
         ctx = self._build_tool_context(conv_id, user_id, platform, channel_id)
         ctx.marked = was_marked
+        # A local model in a mode that now allows cloud models: if local data exists it may have seen it
+        ctx.tainted = (is_local_provider(self.provider) and not privacy.local_only()
+                       and await self.store.has_local_data(conv_id, self._memory_user))
 
         response: AIResponse | None = None
         note = ""  # which fallback answered: shown, not saved
@@ -470,7 +473,7 @@ class Agent:
             for k in usage:
                 self.session_usage[k] += usage[k]
             try:
-                await self.conversations.save_messages(conv_id, pending)
+                await self.conversations.save_messages(conv_id, pending, ctx.tainted)
             except Exception as e:
                 logger.error("Could not save the turn for %s: %s", conv_id, e)
             if ctx.marked and not was_marked:
@@ -577,7 +580,8 @@ class Agent:
                 and not content_text.startswith("Error")
             ):
                 source = tc.arguments.get("path") or tc.arguments.get("url") or "unknown"
-                task = asyncio.create_task(self._auto_ingest(source, content_text, self._memory_user))
+                task = asyncio.create_task(
+                    self._auto_ingest(source, content_text, self._memory_user, tool_context.tainted))
                 self._bg.add(task)
                 task.add_done_callback(self._bg.discard)
 
@@ -587,23 +591,23 @@ class Agent:
             new.append(tool_msg)
 
         if pending is None:
-            await self.conversations.save_messages(conv_id, new)
+            await self.conversations.save_messages(conv_id, new, tool_context.tainted)
             return messages
         pending.extend(new)
         if not all(_read_only(tc) for tc in response.tool_calls):
             # A side effect has run: keep it in history even if the process dies before the turn ends
             try:
-                await self.conversations.save_messages(conv_id, list(pending))
+                await self.conversations.save_messages(conv_id, list(pending), tool_context.tainted)
                 pending.clear()
             except Exception as e:
                 logger.error("Could not save the turn so far for %s: %s", conv_id, e)
         return messages
 
-    async def _auto_ingest(self, source: str, content: str, user_id: str) -> None:
+    async def _auto_ingest(self, source: str, content: str, user_id: str, local: bool = False) -> None:
         """Background document ingestion for RAG."""
         try:
             count = await self.store.ingest_document(
-                source, content, user_id, max_chunks=self.config.storage.auto_ingest_max_chunks)
+                source, content, user_id, max_chunks=self.config.storage.auto_ingest_max_chunks, local=local)
             logger.info("RAG: auto-ingested %d chunks", count)
         except Exception as e:
             logger.error("RAG: auto-ingest failed: %s", e)

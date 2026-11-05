@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import logging
 from pathlib import Path
 
@@ -33,6 +34,10 @@ async def ensure_index(db) -> bool:
     except Exception as e:  # no FTS5 in this SQLite build
         logger.debug("chunks_fts not available: %s", e)
         return False
+    try:  # FTS5 keeps the words of deleted rows in its index until a merge, unless told to wipe them
+        await db.execute("INSERT INTO chunks_fts(chunks_fts, rank) VALUES('secure-delete', 1)")
+    except Exception as e:  # SQLite older than 3.42: retention and forget merge or drop the index instead
+        logger.debug("FTS5 secure-delete is not available: %s", e)
     for name, when, body in _TRIGGERS:
         await db.execute(f"CREATE TRIGGER IF NOT EXISTS chunks_fts_{name} {when} BEGIN {body} END")
     await db.execute("INSERT INTO chunks_fts(chunks_fts) VALUES ('rebuild')")  # index what is already there
@@ -40,11 +45,13 @@ async def ensure_index(db) -> bool:
     return True
 
 
-async def search(store, query: str, limit: int = 5, users: tuple[str, ...] = ("_global",)) -> list[dict]:
-    """[{source, snippet}] best first. Falls back to the store's own search when FTS5 is missing."""
+async def search(store, query: str, limit: int = 5, users: tuple[str, ...] = ("_global",),
+                 include_local: bool = True) -> list[dict]:
+    """[{source, snippet}] best first. Falls back to the store's own search when FTS5 is missing.
+    include_local=False leaves out what was indexed in local or air-gapped mode."""
     if not await ensure_index(store.db):
         return [{"source": r["source"], "snippet": r["content"][:300]}
-                for u in users for r in await store.search_documents(query, limit, u)][:limit]
+                for u in users for r in await store.search_documents(query, limit, u, include_local)][:limit]
     fts = store.fts_query(query)
     if not fts:
         return []
@@ -52,15 +59,18 @@ async def search(store, query: str, limit: int = 5, users: tuple[str, ...] = ("_
     async with store.db.execute(
         "SELECT c.source, snippet(chunks_fts, 0, '[', ']', '...', 32) FROM chunks_fts "
         "JOIN document_chunks c ON c.id = chunks_fts.rowid "
-        f"WHERE chunks_fts MATCH ? AND c.user_id IN ({marks}) ORDER BY rank LIMIT ?",
+        f"WHERE chunks_fts MATCH ? AND c.user_id IN ({marks}){'' if include_local else ' AND c.local_only = 0'} "
+        "ORDER BY rank LIMIT ?",
         (fts, *users, limit),
     ) as cur:
         return [{"source": s, "snippet": text} for s, text in await cur.fetchall()]
 
 
-async def has_documents(store, users: tuple[str, ...] = ("_global",)) -> bool:
+async def has_documents(store, users: tuple[str, ...] = ("_global",), include_local: bool = True) -> bool:
     marks = ",".join("?" * len(users))
-    async with store.db.execute(f"SELECT 1 FROM document_chunks WHERE user_id IN ({marks}) LIMIT 1", users) as cur:
+    only = "" if include_local else " AND local_only = 0"
+    sql = f"SELECT 1 FROM document_chunks WHERE user_id IN ({marks}){only} LIMIT 1"
+    async with store.db.execute(sql, users) as cur:
         return await cur.fetchone() is not None
 
 
@@ -71,8 +81,16 @@ def read_file(path: Path) -> str:
             from pypdf import PdfReader
         except ImportError:
             raise ValueError("PDF files need the pdf extra: paw extras add pdf") from None
-        return "\n".join(page.extract_text() or "" for page in PdfReader(str(path)).pages)
-    return path.read_text(encoding="utf-8", errors="replace")
+        try:
+            return "\n".join(page.extract_text() or "" for page in PdfReader(str(path)).pages)
+        except Exception:  # pypdf has its own errors for broken, encrypted and odd files
+            raise ValueError("could not read this PDF") from None
+    data = path.read_bytes()
+    boms = (codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)  # Notepad's "Unicode" text
+    text = data.decode("utf-16" if data.startswith(boms) else "utf-8-sig", errors="replace")
+    if "\x00" in text:
+        raise ValueError("this is not a text file this tool can read")
+    return text
 
 
 def find_files(folder: Path) -> list[Path]:
