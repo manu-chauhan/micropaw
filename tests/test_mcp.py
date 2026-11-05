@@ -258,3 +258,151 @@ async def test_background_start_calls_back_as_each_server_is_ready(fake_http):
     finally:
         for s in ready:
             await s.close()
+
+
+# ---------------------------------------------------------------------------
+# Security rules: https, peer check, redirects, size caps, pinned tool list
+# ---------------------------------------------------------------------------
+
+import httpx  # noqa: E402
+
+from micropaw import mcp as mcp_module  # noqa: E402
+from micropaw.config import load_config, save_mcp_server  # noqa: E402
+from micropaw.mcp import start_server, tools_digest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _config_to_tmp(tmp_path, monkeypatch):
+    import micropaw.config as config
+    monkeypatch.setattr(config, "CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setattr(config, "CONFIG_DIR", tmp_path)
+
+
+def _remote(handler, url="https://mcp.example.com/mcp", **kw):
+    server = HTTPMCPServer("r", MCPServerConfig(url=url, **kw))
+    server._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    server._local = False
+    return server
+
+
+@pytest.mark.asyncio
+async def test_remote_server_must_use_https():
+    with pytest.raises(MCPError, match="https"):
+        await HTTPMCPServer("r", MCPServerConfig(url="http://mcp.example.com/mcp"))._launch()
+    for link_local in ("http://169.254.1.1/mcp", "https://169.254.1.1/mcp"):
+        with pytest.raises(MCPError):
+            await HTTPMCPServer("r", MCPServerConfig(url=link_local))._launch()
+    await HTTPMCPServer("r", MCPServerConfig(url="http://[::1]:9/mcp"))._launch()  # loopback is local
+
+
+@pytest.mark.asyncio
+async def test_peer_address_is_checked_for_remote_servers_only(monkeypatch):
+    seen = []
+
+    def blocked(resp, url):
+        seen.append(url)
+        raise mcp_module._BlockedError("connected to a private address (10.0.0.1)")
+
+    monkeypatch.setattr(mcp_module, "_check_peer", blocked)
+    ok = lambda request: httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {}})  # noqa: E731
+    with pytest.raises(MCPError, match="private address"):
+        await _remote(ok).request("tools/list", {})
+    local = _remote(ok)
+    local._local = True
+    assert await local.request("tools/list", {}) == {}
+    assert seen == ["https://mcp.example.com/mcp"]
+
+
+@pytest.mark.asyncio
+async def test_redirects_are_refused_and_headers_stay_home():
+    hits = []
+
+    def handler(request):
+        hits.append((str(request.url), request.headers.get("authorization")))
+        return httpx.Response(307, headers={"Location": "https://evil.example.org/steal"})
+
+    server = _remote(handler, headers={"Authorization": "x"})
+    server._headers = {"Authorization": "secret"}
+    server._client = httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=False)
+    with pytest.raises(MCPError, match="307"):
+        await server.request("tools/list", {})
+    assert hits == [("https://mcp.example.com/mcp", "secret")]
+
+
+@pytest.mark.asyncio
+async def test_reply_and_event_size_caps(monkeypatch):
+    monkeypatch.setattr(mcp_module, "_MAX_BODY", 1000)
+    big = httpx.Response(200, content=b"x" * 2000, headers={"content-type": "application/json"})
+    with pytest.raises(MCPError, match="too large"):
+        await _remote(lambda r: big).request("m", {})
+    monkeypatch.setattr(mcp_module, "_MAX_BODY", 5_000_000)
+    monkeypatch.setattr(mcp_module, "_MAX_EVENT", 100)
+    sse = httpx.Response(200, content=b"data: " + b"y" * 300 + b"\n\n", headers={"content-type": "text/event-stream"})
+    with pytest.raises(MCPError, match="too large"):
+        await _remote(lambda r: sse).request("m", {})
+
+
+@pytest.mark.asyncio
+async def test_tool_count_and_description_caps(tmp_path):
+    script = tmp_path / "many.py"
+    script.write_text(textwrap.dedent('''
+        import json, sys
+        tools = [{"name": f"t{i}", "description": "d" * 5000} for i in range(300)]
+        for line in sys.stdin:
+            m = json.loads(line)
+            if m.get("method") == "tools/list":
+                print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": {"tools": tools}}), flush=True)
+            elif "id" in m:
+                print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": {}}), flush=True)
+    '''))
+    servers, tools = await start_servers({"m": MCPServerConfig(command=sys.executable, args=["-I", str(script)])})
+    try:
+        assert len(tools) == 128 and len(tools[0].description) < 1100
+    finally:
+        for s in servers:
+            await s.close()
+
+
+@pytest.mark.asyncio
+async def test_tool_list_is_pinned_then_a_change_blocks_the_server(tmp_path):
+    import json as _json
+
+    import micropaw.config as config
+    script = tmp_path / "s.py"
+    template = textwrap.dedent('''
+        import json, sys
+        for line in sys.stdin:
+            m = json.loads(line)
+            if m.get("method") == "tools/list":
+                r = {"tools": [{"name": "echo", "description": "DESC"}]}
+            elif "id" in m:
+                r = {}
+            else:
+                continue
+            print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r}), flush=True)
+    ''')
+    script.write_text(template.replace("DESC", "one"))
+    save_mcp_server("s", {"command": sys.executable, "args": ["-I", str(script)]})
+    cfg = load_config().mcp_servers["s"]
+    servers, tools = await start_servers({"s": cfg})  # first start pins
+    for s in servers:
+        await s.close()
+    pinned = _json.loads(config.CONFIG_FILE.read_text())["mcp_servers"]["s"]["tools_hash"]
+    assert len(tools) == 1 and pinned == tools_digest([{"name": "echo", "description": "one"}])
+    servers, tools = await start_servers({"s": load_config().mcp_servers["s"]})  # same list still starts
+    assert len(tools) == 1
+    for s in servers:
+        await s.close()
+    script.write_text(template.replace("DESC", "two"))  # the server changed its tools
+    servers, tools = await start_servers({"s": load_config().mcp_servers["s"]})
+    assert servers == [] and tools == []
+    with pytest.raises(MCPError, match="paw mcp trust s"):
+        await start_server("s", load_config().mcp_servers["s"])
+
+
+def test_pin_only_touches_existing_entries(tmp_path):
+    import micropaw.config as config
+    assert config.pin_mcp_tools("nope", "h") is False
+    save_mcp_server("a", {"command": "x"})
+    assert config.pin_mcp_tools("nope", "h") is False and config.pin_mcp_tools("a", "h") is True
+    assert load_config().mcp_servers["a"].tools_hash == "h"

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import hashlib
 import json
 import logging
 import os
@@ -21,9 +22,10 @@ from typing import Any
 
 import httpx
 
-from micropaw.config import MCPServerConfig
+from micropaw.config import MCPServerConfig, pin_mcp_tools
 from micropaw.providers.base import MediaItem
 from micropaw.tools.base import Tool, ToolContext, ToolResult
+from micropaw.tools.http_request import _BlockedError, _check_peer
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,8 @@ _PROTOCOL = "2025-06-18"
 _START_TIMEOUT = 60.0
 _BACKGROUND_START_TIMEOUT = 180.0  # first runs of npx -y or uvx download the package
 _MAX_OUTPUT = 50_000
+_MAX_TOOLS = 128           # per server
+_MAX_DESCRIPTION = 1000    # characters, per tool
 
 
 class MCPError(Exception):
@@ -82,8 +86,8 @@ class MCPServer:
             page = await self.request("tools/list", {"cursor": cursor} if cursor else {}, timeout=timeout)
             tools.extend(page.get("tools", []))
             cursor = page.get("nextCursor")
-            if not cursor:
-                return tools
+            if not cursor or len(tools) >= _MAX_TOOLS:
+                return tools[:_MAX_TOOLS]
 
     async def _send(self, message: dict) -> None:
         assert self._proc and self._proc.stdin
@@ -143,7 +147,8 @@ class MCPServer:
 
 _ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
-_MAX_BODY = 16 * 1024 * 1024
+_MAX_BODY = 5 * 1024 * 1024    # one HTTP reply
+_MAX_EVENT = 1024 * 1024       # one server-sent event
 
 
 def _expand_env(value: str) -> str:
@@ -156,17 +161,25 @@ def _expand_env(value: str) -> str:
 
 
 async def _sse_data(resp: httpx.Response) -> AsyncIterator[str]:
-    """The data of each server-sent event in the response."""
-    lines: list[str] = []
-    async for line in resp.aiter_lines():
-        if line:
-            if line.startswith("data:"):
-                lines.append(line[5:].removeprefix(" "))
-        elif lines:
-            yield "\n".join(lines)
-            lines = []
-    if lines:
-        yield "\n".join(lines)
+    """The data of each server-sent event in the reply, with size limits."""
+    buf, total, data, size = b"", 0, [], 0
+    async for chunk in resp.aiter_bytes():
+        total += len(chunk)
+        buf += chunk.replace(b"\r\n", b"\n")
+        if total > _MAX_BODY or len(buf) > _MAX_EVENT:
+            raise MCPError("reply too large")
+        *lines, buf = buf.split(b"\n")
+        for raw in lines:
+            if raw.startswith(b"data:"):
+                data.append(raw[5:].removeprefix(b" ").decode("utf-8", errors="replace"))
+                size += len(raw)
+                if size > _MAX_EVENT:
+                    raise MCPError("event too large")
+            elif not raw and data:
+                yield "\n".join(data)
+                data, size = [], 0
+    if data:
+        yield "\n".join(data)
 
 
 class HTTPMCPServer(MCPServer):
@@ -177,13 +190,18 @@ class HTTPMCPServer(MCPServer):
         self._client: httpx.AsyncClient | None = None
         self._session = ""
         self._headers: dict[str, str] = {}
+        self._local = True
 
     async def _launch(self) -> None:
         from urllib.parse import urlparse
 
         from micropaw.security import validate_url
 
-        if (urlparse(self.config.url).hostname or "").lower() not in _LOCAL_HOSTS:
+        url = urlparse(self.config.url)
+        self._local = (url.hostname or "").lower() in _LOCAL_HOSTS
+        if not self._local:
+            if url.scheme != "https":
+                raise MCPError("a server that is not on this computer must use https")
             if error := await validate_url(self.config.url):
                 raise MCPError(error)
         self._headers = {k: _expand_env(v) for k, v in self.config.headers.items()}
@@ -192,7 +210,10 @@ class HTTPMCPServer(MCPServer):
         )
 
     async def _send(self, message: dict) -> None:
-        await self._post(message, None)
+        try:
+            await self._post(message, None)
+        except httpx.HTTPError as e:
+            raise MCPError(f"send failed: {type(e).__name__}") from None
 
     async def request(self, method: str, params: dict, timeout: float | None = None) -> Any:
         if not self._client:
@@ -213,8 +234,13 @@ class HTTPMCPServer(MCPServer):
         if self._session:
             headers["Mcp-Session-Id"] = self._session
         async with self._client.stream("POST", self.config.url, json=message, headers=headers) as resp:
+            if not self._local:
+                try:  # the address really connected to, not only the name that was checked
+                    _check_peer(resp, self.config.url)
+                except _BlockedError as e:
+                    raise MCPError(str(e)) from None
             self._session = resp.headers.get("mcp-session-id", self._session)
-            if resp.status_code >= 400:
+            if resp.status_code >= 300:  # redirects are never followed: headers must not leave the origin
                 raise MCPError(f"HTTP {resp.status_code}")
             if request_id is None or resp.status_code == 202:
                 return {}
@@ -270,7 +296,7 @@ class MCPTool(Tool):
         self.server = server
         self.remote_name = spec["name"]
         self.name = _tool_name(server.name, self.remote_name)
-        self.description = f"[{server.name}] {spec.get('description', '')}".strip()
+        self.description = f"[{server.name}] {str(spec.get('description', ''))[:_MAX_DESCRIPTION]}".strip()
         self.parameters = spec.get("inputSchema") or {"type": "object", "properties": {}}
 
     def needs_approval(self, args: dict[str, Any], context: ToolContext) -> str | None:
@@ -303,16 +329,38 @@ class MCPTool(Tool):
         return ToolResult(text=text, media=media) if media else text
 
 
-async def _start_one(name: str, cfg: MCPServerConfig, timeout: float) -> tuple[MCPServer, list[MCPTool]] | None:
+def tools_digest(specs: list[dict]) -> str:
+    """sha256 of the tool list (names, descriptions, schemas), to notice a server that changed."""
+    return hashlib.sha256(json.dumps(specs, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+async def start_server(
+    name: str, cfg: MCPServerConfig, timeout: float = _START_TIMEOUT, pin: bool = True,
+) -> tuple[MCPServer, list[MCPTool]]:
+    """Start one server and check its tool list against the pinned hash. Raises MCPError (or OSError)."""
     server = HTTPMCPServer(name, cfg) if cfg.url else MCPServer(name, cfg)
     try:
-        specs = await server.start(timeout)
+        specs = [s for s in await server.start(timeout) if s.get("name")]
+        digest = tools_digest(specs)
+        if cfg.tools_hash and cfg.tools_hash != digest:
+            raise MCPError(f"its tool list changed since you approved it; check it, then run: paw mcp trust {name}")
+        if not cfg.tools_hash and pin:
+            cfg.tools_hash = digest
+            with contextlib.suppress(OSError, ValueError):
+                pin_mcp_tools(name, digest)
     except (OSError, MCPError, httpx.HTTPError) as e:
-        logger.warning("MCP server '%s' did not start: %s", name, e)
         await server.close()
-        return None
+        raise (e if isinstance(e, (OSError, MCPError)) else MCPError(type(e).__name__)) from None
     logger.info("MCP server '%s': %d tools", name, len(specs))
-    return server, [MCPTool(server, spec) for spec in specs if spec.get("name")]
+    return server, [MCPTool(server, spec) for spec in specs]
+
+
+async def _start_one(name: str, cfg: MCPServerConfig, timeout: float) -> tuple[MCPServer, list[MCPTool]] | None:
+    try:
+        return await start_server(name, cfg, timeout)
+    except (OSError, MCPError) as e:
+        logger.warning("MCP server '%s' did not start: %s", name, e)
+        return None
 
 
 async def start_servers(
