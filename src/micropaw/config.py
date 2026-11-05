@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
@@ -473,6 +474,22 @@ def _write_bytes(path: Path, data: bytes) -> None:
 
 def _write_private(data: dict) -> None:
     _write_bytes(CONFIG_FILE, json.dumps(data, indent=2).encode())
+
+
+def update_config_file(change: Callable[[dict], None], validate: Callable[[Config], None] | None = None) -> dict:
+    """Edit config.json on disk (never the environment's keys), check the result, then write it 0600.
+
+    Raises ValueError, writing nothing, when the edited config is not valid.
+    """
+    raw: dict = json.loads(CONFIG_FILE.read_text()) if CONFIG_FILE.exists() else {}
+    if CONFIG_FILE.exists() and raw.get("schema_version", 0) < SCHEMA_VERSION:
+        raw = _migrate_file(raw)
+    change(raw)
+    config = Config(**{k: v for k, v in raw.items() if k != "config_version"})
+    if validate:
+        validate(config)
+    _write_private(raw)
+    return raw
 
 
 def set_allowed_user(platform: str, user_id: str, remove: bool = False) -> list[str]:

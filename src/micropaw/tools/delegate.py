@@ -58,8 +58,18 @@ class DelegateTool(Tool):
         "required": ["task"],
     }
 
+    def __init__(self, provider: AIProvider | None = None, registry: ToolRegistry | None = None) -> None:
+        self._provider = provider  # set per agent (its fast model and its tools); None = the shared ones below
+        self._registry = registry
+
+    def bound(self, provider: AIProvider, registry: ToolRegistry) -> DelegateTool:
+        """A copy that uses this agent's fast model and its tool view."""
+        return DelegateTool(provider, registry)
+
     async def execute(self, args: dict[str, Any], context: ToolContext) -> str:
-        if _provider is None:
+        provider = self._provider or _provider
+        registry = self._registry or _registry
+        if provider is None:
             return "Error: Delegate tool not initialized."
 
         task = args["task"]
@@ -71,12 +81,12 @@ class DelegateTool(Tool):
             # Runs after this turn ends: nobody is there to approve, and it gets its own
             # browser session so the main turn closing its page doesn't break it.
             bg_context = dataclasses.replace(context, approve=None, conversation_id=f"{context.conversation_id}:bg")
-            agent = SubAgent(_provider, registry=_registry, tool_context=bg_context, max_iterations=_max_iterations)
+            agent = SubAgent(provider, registry=registry, tool_context=bg_context, max_iterations=_max_iterations)
             asyncio.create_task(_run_background(agent, task, context.platform, context.chat_id))
             return f"Task delegated in background: {task[:80]}"
 
         # Inline: block until done. Shares the turn's context, so approvals and the mark carry over.
-        agent = SubAgent(_provider, registry=_registry, tool_context=context, max_iterations=_max_iterations)
+        agent = SubAgent(provider, registry=registry, tool_context=context, max_iterations=_max_iterations)
         return await agent.run(task)
 
 
