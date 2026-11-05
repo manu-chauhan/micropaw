@@ -44,7 +44,7 @@ Shell, install and service:
 
 Fixes: scheduler jobs run on the agent that created them; the Gmail ids a job handled are remembered per job; Ollama numeric `keep_alive` and stream errors; saved turns after side effects; owner-only config and log folders; env secrets that the config names are hidden from child processes.
 
-Tests: TESTCOUNT passed.
+Tests: 1308 passed.
 
 ---
 
