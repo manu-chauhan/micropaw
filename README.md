@@ -410,7 +410,7 @@ What `paw models add` saves (you can also write it by hand in `~/.micropaw/confi
 
 `kind: "ollama"` uses Ollama's own API, so the context size and keep-alive are sent. For a remote Ollama, set `num_ctx` to what the server machine can hold; otherwise MicroPaw uses 8192 or the model's maximum if lower. If the desktop is asleep, MicroPaw says which machine did not answer and moves to the next model in the list.
 
-**Finding servers.** `paw models scan` checks this computer and every server in your config. `paw models scan --host 192.168.1.50` checks one machine. `paw models scan --lan` checks your own network (the /24 this computer is on) on the usual model ports only, after asking you first. Use `--range 192.168.1.0/24` for another range. Only scan networks you own or may scan. Nothing is saved; the scan prints `paw models add` lines for you to copy.
+**Finding servers.** `paw models scan` checks this computer and every server in your config. In `local` and `airgapped` mode it skips any configured server that is not on this computer or your network, sends it no key, and refuses a `--host` outside your network. A network scan covers at most 512 addresses and says so if the 25 second limit stops it early. `paw models scan --host 192.168.1.50` checks one machine. `paw models scan --lan` checks your own network (the /24 this computer is on) on the usual model ports only, after asking you first. Use `--range 192.168.1.0/24` for another range. Only scan networks you own or may scan. Nothing is saved; the scan prints `paw models add` lines for you to copy.
 
 **Memory search and speech on another machine.** Point `voice.stt` and `voice.tts` at a server you added, for example `"stt": "desktop:whisper-large-v3"`. For memory search, set `embedding.provider` to `ollama` and `embedding.base_url` to the server.
 
@@ -429,7 +429,7 @@ Your messages go where you point MicroPaw: the model, search and chat services y
 ### The three modes
 
 - `airgapped`: MicroPaw talks only to this computer, and to your own network if `privacy.allow_lan` is on. Models, embeddings, speech and search must run there. Cloud models, chat apps that relay through a company's servers (Telegram, Discord, Slack, WhatsApp), Google mail and calendar, updates and model downloads are refused with a message that says why. Web search answers from offline sources (Kiwix archives and your own documents) and says so.
-- `local`: models, embeddings, speech-to-text and text-to-speech run on this computer or your network. Web search goes only through your own SearXNG (`search.searxng_url`), optionally through a SOCKS proxy such as Tor (`search.proxy`), and you see every query before it is sent, because a query can contain private text. Web pages are fetched only after you approve each one, without cookies, referrers or tracking parameters. `web_browse` and `http_request` are off unless you name them in `privacy.allow` (`web_browse`, `web_fetch`).
+- `local`: models, embeddings, speech-to-text and text-to-speech run on this computer or your network. Web search goes only through your own SearXNG (`search.searxng_url`), optionally through a SOCKS proxy such as Tor (`search.proxy`), and you see every query before it is sent, because a query can contain private text. Your Kiwix archives and documents are searched first when you have them. `web_browse` and `http_request` are off unless you name them in `privacy.allow` (`web_browse`, `web_fetch`). `web_browse` shows you each page address for approval and removes tracking parameters from it. `http_request` does not: a plain GET is not asked about and the address is not cleaned, so name `web_fetch` only if you accept that.
 - `normal` (the default): you can use cloud models. Even here, a search asks first once the chat has read outside content, and each reply says which provider answered.
 
 MICROPAW_PRIVACY in the environment can make the mode stricter than the config says, never looser. The mode is read once when MicroPaw starts.
@@ -444,7 +444,7 @@ Chat apps are different in kind: with Telegram, Discord, Slack or WhatsApp, ever
 
 ### Offline search with Kiwix and your own documents
 
-`web_search` can answer with no internet. `search.provider` takes `offline` (Kiwix and your documents), `kiwix`, `docs`, `searxng` (your own server), `auto`, `brave`, `duckduckgo` or `off`. In air-gapped mode `auto` means offline and the online providers are refused.
+`web_search` can answer with no internet. `search.provider` takes `offline` (Kiwix and your documents), `kiwix`, `docs`, `searxng` (your own server), `auto`, `brave`, `duckduckgo` or `off`. In air-gapped mode `auto` means offline and the online providers are refused. With `auto` or `searxng` and a `search.kiwix_url`, Kiwix is searched first in every other mode too. Whatever the search finds, offline results included, is sent to the model that answers, so a cloud model sees it.
 
 kiwix-serve serves ZIM archives and has a full-text search endpoint (`/search` with `pattern`, `books.name` and `format=xml`). Run it on this computer or on your network, then set `search.kiwix_url` and `search.kiwix_books`. kiwix-tools is GPLv3 or later and is installed separately. Sizes from the Kiwix download index:
 
@@ -640,7 +640,7 @@ MicroPaw > [delegate] "Research quantum computing breakthroughs"
 
 | Command | Description |
 |---------|-------------|
-| `paw setup` | Interactive wizard — provider, API key, persona, permissions |
+| `paw setup` | Interactive wizard: privacy mode, provider, API key, persona, permissions (`--reset` starts again from default settings and keeps the old file as `config.json.bak`) |
 | `paw chat` | Terminal chat session |
 | `paw start` | Launch all enabled channels |
 | `paw connect <channel>` | Guided channel setup with live token validation |

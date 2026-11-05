@@ -69,3 +69,28 @@ def test_the_example_config_in_the_models_section_loads(text):
     config = Config(**cfg)
     assert config.providers["desktop"].base_url == "http://192.168.1.50:11434"
     assert config.agents["main"].model == "desktop:qwen3.6:27b"
+
+
+def test_every_paw_command_named_in_a_code_span_exists(text):
+    for name in set(re.findall(r"`paw ([a-z][a-z-]*)", text)):
+        assert name in main.commands, f"`paw {name}` is in the docs but not in the CLI"
+    setup_flags = {o for p in main.commands["setup"].params for o in getattr(p, "opts", [])}
+    for flag in re.findall(r"`paw setup[^`]*?(--[a-z-]+)", text):
+        assert flag in setup_flags
+
+
+@pytest.mark.xfail(reason="describes settings and safeguards built in other branches (streams A and B); this "
+                          "must pass once they are merged. If it XPASSes, delete the marker.", strict=False)
+def test_settings_and_safeguards_the_docs_name_from_other_branches_exist(text):
+    from micropaw.config import EmbeddingConfig
+    for name in set(re.findall(r"`embedding\.(\w+)`", text)):
+        assert name in EmbeddingConfig.model_fields, f"embedding.{name} is in the docs but not in EmbeddingConfig"
+    storage = getattr(__import__("micropaw.config", fromlist=["Config"]), "StorageConfig", None)
+    for name in set(re.findall(r"`storage\.(\w+)`", text)):
+        assert storage and name in storage.model_fields, f"storage.{name} is in the docs but not in the config"
+    src = "\n".join(p.read_text(encoding="utf-8") for p in (ROOT / "src").rglob("*.py"))
+    ci = (ROOT / ".github" / "workflows" / "ci.yml")
+    if "connection leaves loopback" in text or "enforced in the process" in text:
+        assert "addaudithook" in src and ci.exists() and "canary" in ci.read_text(encoding="utf-8").lower()
+    if "link previews off" in text.lower() or "turns link previews off" in text:
+        assert "disable_web_page_preview" in src or "link_preview" in src
