@@ -326,3 +326,18 @@ def test_the_browser_is_not_offered_in_airgapped_mode_and_asks_first_in_local_mo
     assert wiz._ask_browser(q, c, "local") is True and len(q.asked) == 1 and c.privacy.allow == ["web_browse"]
     q = Scripted({"Install web browsing": False})
     assert wiz._ask_browser(q, Config(), "normal") is False and len(q.asked) == 1
+
+
+# --- the owner's own choice at a terminal is not held back on the next start ---------------------------
+
+def test_a_mode_chosen_in_the_wizard_is_not_held_back_on_the_next_start(monkeypatch, tmp_path):
+    patch_env(monkeypatch, [])
+    (tmp_path / "privacy_last_mode").write_text("airgapped")
+    assert privacy.remembered("local")[0] == "airgapped"  # without the wizard, a looser config is held back
+    saved = []
+    monkeypatch.setattr(wiz, "config_exists", lambda: False)
+    monkeypatch.setattr(wiz, "save_config", lambda cfg: saved.append(cfg))
+    _install(monkeypatch, Scripted({"How private": "local"}))
+    wiz.run_setup()
+    assert (tmp_path / "privacy_last_mode").read_text() == "local" and (tmp_path / "privacy_last_settings").exists()
+    assert privacy.remembered("local") == ("local", "")

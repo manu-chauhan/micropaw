@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from rich.console import Console
 from rich.panel import Panel
 
+from micropaw import privacy
 from micropaw.config import (
     AgentConfig,
     Config,
@@ -628,6 +629,7 @@ def run_setup(reset: bool = False) -> None:
 
     # Save
     save_config(config)
+    privacy.confirm_mode(privacy_mode, config)  # the owner chose this at a terminal, so the next start keeps it
     console.print("\n[green]Config saved![/green]")
 
     # Offer channel connection
