@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from micropaw.config import (
     Config,
     _apply_env_overrides,
@@ -181,6 +183,7 @@ class TestSaveLoad:
                 c = load_config()
             assert c.provider == "claude"
 
+    @pytest.mark.skipif(os.name == "nt", reason="chmod permission bits do not exist on Windows")
     def test_warns_world_readable_config(self, tmp_path: Path):
         """Config file with group/other read bits should produce a warning."""
         config_file = tmp_path / "config.json"

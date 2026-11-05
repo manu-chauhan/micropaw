@@ -13,7 +13,8 @@ from pydantic import BaseModel, field_validator, model_validator
 
 load_dotenv()
 
-CONFIG_DIR = Path.home() / ".micropaw"
+CONFIG_DIR = Path(os.environ.get("MICROPAW_HOME") or Path.home() / ".micropaw")
+load_dotenv(CONFIG_DIR / ".env")  # keys for a service live here; values already in the environment win
 CONFIG_FILE = CONFIG_DIR / "config.json"
 DB_FILE = CONFIG_DIR / "data.db"
 

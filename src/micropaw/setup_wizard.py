@@ -122,11 +122,11 @@ def run_setup() -> None:
         console.print("[dim]Installing Playwright...[/dim]")
         import subprocess
         import sys as _sys
+
+        from micropaw.cli import add_extras
         try:
-            subprocess.run(
-                [_sys.executable, "-m", "pip", "install", "playwright"],
-                check=True, capture_output=True,
-            )
+            if not add_extras(["browser"]):
+                raise FileNotFoundError("could not add the browser extra")
             subprocess.run(
                 [_sys.executable, "-m", "playwright", "install", "chromium"],
                 check=True, capture_output=True,
@@ -134,7 +134,7 @@ def run_setup() -> None:
             console.print("[green]Playwright + Chromium installed. Web browsing is ready.[/green]")
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             console.print(f"[yellow]Browser install failed: {e}[/yellow]")
-            console.print("[dim]You can install later: pip install playwright && playwright install chromium[/dim]")
+            console.print("[dim]You can install later: paw extras add browser && playwright install chromium[/dim]")
 
     # Embeddings (for long-term memory with vector search)
     enable_embeddings = questionary.confirm(
@@ -176,7 +176,7 @@ def run_setup() -> None:
                     config.embedding.model = "nomic-ai/nomic-embed-text-v1.5"
                     if not _has_fe:
                         console.print("[yellow]Warning: fastembed not installed. "
-                                      "Install with: pip install 'micropaw\\[embeddings]'[/yellow]")
+                                      "Install with: paw extras add embeddings[/yellow]")
                         console.print("[dim]Vector search will be disabled until installed.[/dim]")
                 elif emb_choice == "openai":
                     config.embedding.model = "text-embedding-3-small"
