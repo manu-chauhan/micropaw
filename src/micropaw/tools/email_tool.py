@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 _GMAIL = "https://gmail.googleapis.com/gmail/v1"
 _MAX_BODY = 10_000
+_MAX_SEND_BODY = 4000  # the owner sees the whole body in the approval, so there is a limit
 _MAX_INBOX = 50
 
 
@@ -226,11 +227,15 @@ class EmailTool(Tool):
         if args.get("action") != "send":
             return None
         body = args.get("body", "")
-        more = f"\n... ({len(body) - 500:,} more characters)" if len(body) > 500 else ""
-        return f"Send an email\nTo: {args.get('to', '')}\nSubject: {args.get('subject', '')}\n\n{body[:500]}{more}"
+        if len(body) > _MAX_SEND_BODY:
+            return None  # execute() refuses
+        return f"Send an email\nTo: {args.get('to', '')}\nSubject: {args.get('subject', '')}\n\n{body}"
 
     async def execute(self, args: dict[str, Any], context: ToolContext) -> str:
         action = args["action"]
+        if action == "send" and len(args.get("body", "")) > _MAX_SEND_BODY:
+            return (f"Error: The email body is too long ({len(args['body']):,} characters, max {_MAX_SEND_BODY:,}). "
+                    "Not sent. Shorten it or send it in parts.")
 
         if action == "authorize":
             return await authorize()

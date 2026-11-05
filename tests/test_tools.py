@@ -1564,3 +1564,32 @@ class TestDelegateTool:
         )
         result = await tool.execute({"task": "test"}, context)
         assert "error" in result.lower()
+
+
+class TestApprovalShowsTheWholeMessage:
+    def test_channel_send_shows_everything_and_refuses_above_the_limit(self):
+        import asyncio
+
+        import micropaw.tools.channel_send as cs
+
+        tool = cs.ChannelSendTool()
+        ctx = ToolContext(conversation_id="c", user_id="u", platform="terminal")
+        text = "hello " * 600  # 3600 characters: more than the old 500 cut
+        assert text in tool.needs_approval({"channel": "telegram", "message": text}, ctx)
+        big = "x" * (cs._MAX_MSG_LENGTH + 1)
+        assert tool.needs_approval({"channel": "telegram", "message": big}, ctx) is None
+        assert asyncio.run(tool.execute({"channel": "telegram", "message": big}, ctx)).endswith("Not sent.")
+
+    def test_email_send_shows_everything_and_refuses_above_the_limit(self):
+        import asyncio
+
+        from micropaw.tools import email_tool
+
+        tool = email_tool.EmailTool()
+        ctx = ToolContext(conversation_id="c", user_id="u", platform="terminal")
+        body = "word " * 700
+        shown = tool.needs_approval({"action": "send", "to": "a@b.co", "subject": "s", "body": body}, ctx)
+        assert body in shown and "more characters" not in shown
+        big = {"action": "send", "to": "a@b.co", "subject": "s", "body": "x" * 4001}
+        assert tool.needs_approval(big, ctx) is None
+        assert asyncio.run(tool.execute(big, ctx)).endswith("Not sent. Shorten it or send it in parts.")
