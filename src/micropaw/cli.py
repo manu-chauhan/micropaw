@@ -31,6 +31,22 @@ from micropaw.utils.logger import quiet_console, setup_logging
 console = Console()
 
 
+def _privacy_upgrade_notice() -> None:
+    """Once, for a config saved before privacy.mode existed: say that it is there and what it does."""
+    import micropaw.config as config_mod
+    marker = config_mod.CONFIG_DIR / ".privacy_notice"
+    try:
+        if not config_mod.CONFIG_FILE.exists() or marker.exists():
+            return
+        if "privacy" not in json.loads(config_mod.CONFIG_FILE.read_text()):
+            console.print("[dim]New: privacy.mode in the config (normal, local or airgapped) keeps models, memory "
+                          "and search on this computer or your network. Today it is normal, as before. "
+                          "See 'paw privacy' and the Privacy section of the README.[/dim]")
+        marker.write_text("shown\n")
+    except (OSError, ValueError):
+        pass
+
+
 def _create_runtimes(config: Config) -> tuple[Registry, dict]:
     """The model registry and one runtime (profile, providers) per agent. Exits with a plain message on failure."""
     registry = Registry(config)
@@ -175,6 +191,7 @@ def setup():
 def chat():
     """Start a terminal-only chat session."""
     quiet_console()  # suppress INFO logs — details go to ~/.micropaw/logs/
+    _privacy_upgrade_notice()
     config = load_config()
     config.channels.terminal.enabled = True
     config.channels.telegram.enabled = False
@@ -231,6 +248,7 @@ def start(headless):
         from micropaw.setup_wizard import run_setup
         run_setup()
 
+    _privacy_upgrade_notice()
     config = load_config()
     registry = _create_registry(config)
     channels = _create_channels(config)

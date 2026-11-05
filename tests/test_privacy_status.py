@@ -164,3 +164,31 @@ def test_doctor_search_asks_shows_the_query_and_reports_the_first_line(mode, mon
     assert "Search results for 'x' (via your SearXNG" in r.output
     declined = CliRunner().invoke(main, ["doctor", "--search"], input="n\n")
     assert "Search results for" not in declined.output
+
+
+def test_connect_prints_the_vendor_notice_for_vendor_channels_only(monkeypatch, capsys):
+    import micropaw.connector as conn
+    monkeypatch.setitem(conn._CONNECT_FUNCS, "telegram", lambda config: True)
+    monkeypatch.setitem(conn._CONNECT_FUNCS, "webchat", lambda config: True)
+    assert conn.connect_channel("telegram", Config())
+    assert "passes through Telegram in readable form" in capsys.readouterr().out.replace("\n", " ")
+    assert conn.connect_channel("webchat", Config())
+    assert "readable form" not in capsys.readouterr().out
+
+
+def test_the_upgrade_notice_shows_once_and_only_without_a_privacy_block(monkeypatch, tmp_path, capsys):
+    import micropaw.cli as cli
+    import micropaw.config as config_mod
+    monkeypatch.setattr(config_mod, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(config_mod, "CONFIG_FILE", tmp_path / "config.json")
+    cli._privacy_upgrade_notice()  # no config yet: nothing, and no marker
+    assert capsys.readouterr().out == "" and not (tmp_path / ".privacy_notice").exists()
+    (tmp_path / "config.json").write_text(json.dumps({"provider": "claude"}))
+    cli._privacy_upgrade_notice()
+    assert "privacy.mode" in capsys.readouterr().out
+    cli._privacy_upgrade_notice()
+    assert capsys.readouterr().out == ""
+    (tmp_path / ".privacy_notice").unlink()
+    (tmp_path / "config.json").write_text(json.dumps({"privacy": {"mode": "local"}}))
+    cli._privacy_upgrade_notice()
+    assert capsys.readouterr().out == ""

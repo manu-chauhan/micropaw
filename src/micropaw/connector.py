@@ -12,6 +12,8 @@ from micropaw.config import Config, load_config, save_config
 
 console = Console()
 
+VENDOR_NAMES = {"telegram": "Telegram", "discord": "Discord", "slack": "Slack", "whatsapp": "WhatsApp (Meta)"}
+
 
 # ---------------------------------------------------------------------------
 # Validation helpers (also used by `micropaw test`)
@@ -566,4 +568,7 @@ def connect_channel(channel_name: str | None = None, config: Config | None = Non
         console.print(f"[red]Unknown channel: {channel_name}[/red]")
         return False
 
+    if channel_name in VENDOR_NAMES:
+        console.print(f"[yellow]Every message to and from this bot passes through {VENDOR_NAMES[channel_name]} "
+                      "in readable form. Do not use it for anything you want to keep off their servers.[/yellow]")
     return func(config)
