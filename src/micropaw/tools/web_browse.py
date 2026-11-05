@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
+import importlib.util
+import json
 import logging
+import mimetypes
+import os
 import re
+import threading
 from html import unescape
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 from xml.etree.ElementTree import fromstring
 
 import httpx
@@ -13,6 +22,7 @@ import httpx
 from micropaw.providers.base import MediaItem
 from micropaw.security import validate_url
 from micropaw.tools.base import Tool, ToolContext, ToolResult
+from micropaw.tools.path_security import in_workspace, validate_file_path
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +47,7 @@ async def _get_browser():
         try:
             from playwright.async_api import async_playwright
         except ImportError:
-            raise RuntimeError("Playwright not installed. Install with: pip install 'micropaw\\[browser]'")
+            raise RuntimeError("Playwright is not installed. Run: paw extras add browser")
         _playwright = await async_playwright().start()
         _browser = await _playwright.chromium.launch(headless=True)
     return _browser
@@ -79,6 +89,8 @@ async def _left_public_web(page: Any) -> str | None:
     """
     if page.url.split(":", 1)[0] not in ("http", "https", "file"):
         return None  # about:blank, chrome-error:// and the like
+    if any(page.url.startswith(f"http://127.0.0.1:{srv.server_address[1]}/") for srv in _previews.values()):
+        return None  # our own preview server; its page can only load from there
     if error := await validate_url(page.url):
         await page.goto("about:blank")
         return f"Error: page moved to a blocked address ({error})."
@@ -87,12 +99,73 @@ async def _left_public_web(page: Any) -> str | None:
 
 async def close_session(conv_id: str) -> None:
     """Close browser session for a conversation (called at end of agent turn)."""
+    if server := _previews.pop(conv_id, None):
+        await asyncio.to_thread(server.shutdown)
+        server.server_close()
     if conv_id in _sessions:
         ctx, _page = _sessions.pop(conv_id)
         try:
             await ctx.close()
         except Exception:
             pass
+
+
+# Preview servers, one per conversation: a local web server for one workspace folder, 127.0.0.1 only
+_previews: dict[str, ThreadingHTTPServer] = {}
+_PREVIEW_MAX_FILE = 20 * 1024 * 1024
+_PREVIEW_PAGES = (".html", ".htm")
+
+
+def _plain_file(base: Path, parts: list[str]) -> Path | None:
+    """base/parts when every step is a real folder or file: no symlinks, no '..', no drive letters."""
+    cur = base
+    for part in parts:
+        if part in ("", ".", "..") or ":" in part or "\\" in part:
+            return None
+        cur = cur / part
+        if cur.is_symlink():
+            return None
+    return cur if cur.is_file() else None
+
+
+def _preview_server(root: Path) -> ThreadingHTTPServer:
+    """Serves files under `root` on a random port, 127.0.0.1 only. Secret-looking files are refused."""
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args: Any) -> None:
+            pass
+
+        def do_GET(self) -> None:
+            rel = unquote(self.path.split("?", 1)[0].split("#", 1)[0])
+            path = _plain_file(root, [p for p in rel.split("/") if p])
+            if path is None or validate_file_path(str(path)) or path.stat().st_size > _PREVIEW_MAX_FILE:
+                self.send_error(404)
+                return
+            data = path.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    return server
+
+
+def preview_file(raw: str, workspace: str) -> Path | str:
+    """The workspace HTML file to preview, or the reason it is refused."""
+    if not raw or not workspace:
+        return "'preview' needs 'path', an HTML file in the workspace."
+    ws = Path(os.path.abspath(Path(workspace).expanduser()))
+    try:
+        rel = Path(os.path.abspath(ws / Path(raw).expanduser())).relative_to(ws)
+    except ValueError:
+        return "only .html files inside the workspace can be previewed."
+    file = _plain_file(ws, list(rel.parts))
+    if file is None or file.suffix.lower() not in _PREVIEW_PAGES or not in_workspace(file.resolve(), workspace):
+        return "only plain .html files inside the workspace can be previewed (no symlinks)."
+    return validate_file_path(str(file)) or file
 
 
 async def _extract_text(page: Any) -> str:
@@ -198,6 +271,8 @@ class WebBrowseTool(Tool):
         "Browse URLs, interact with pages, and take screenshots. "
         "Actions: 'browse' (load URL and extract content), 'click' (click an element), "
         "'type' (type into an input), 'scroll' (scroll the page), 'screenshot' (capture the page). "
+        "'preview' (open an HTML file from the workspace on a local page, then report console errors, "
+        "window.__state and a screenshot). "
         "Pages persist across actions within a conversation turn. "
         "YouTube URLs automatically extract the video transcript."
     )
@@ -207,7 +282,12 @@ class WebBrowseTool(Tool):
             "action": {
                 "type": "string",
                 "description": "What to do: browse a URL, interact with current page, or take a screenshot",
-                "enum": ["browse", "click", "type", "scroll", "screenshot"],
+                "enum": ["browse", "click", "type", "scroll", "screenshot", "preview"],
+            },
+            "path": {"type": "string", "description": "HTML file in the workspace (for 'preview')"},
+            "screenshot": {
+                "type": "boolean",
+                "description": "For 'preview': include a screenshot (default true; turn off if the model cannot see)",
             },
             "url": {"type": "string", "description": "The URL to browse (for 'browse' action)"},
             "extract": {
@@ -250,6 +330,8 @@ class WebBrowseTool(Tool):
                 return await self._action_scroll(args, conv_id)
             elif action == "screenshot":
                 return await self._action_screenshot(conv_id)
+            elif action == "preview":
+                return await self._action_preview(args, conv_id, context.workspace)
             else:
                 return f"Unknown action: {action}"
         except RuntimeError as e:
@@ -351,6 +433,45 @@ class WebBrowseTool(Tool):
 
         text = await _extract_text(page)
         return f"Scrolled {direction} on {page.url}:\n\n{text}"
+
+    async def _action_preview(self, args: dict[str, Any], conv_id: str, workspace: str) -> str | ToolResult:
+        """Open a workspace HTML file on a local server. The page may only load from that server."""
+        if importlib.util.find_spec("playwright") is None:
+            return "Error: the preview needs Playwright. Run: paw extras add browser"
+        path = preview_file(str(args.get("path") or ""), workspace)
+        if isinstance(path, str):
+            return f"Error: {path}"
+        await close_session(conv_id)  # a fresh page, never one that visited the open web
+        root = path.parent
+        server = _preview_server(root)
+        _previews[conv_id] = server
+        origin = f"http://127.0.0.1:{server.server_address[1]}"
+        browser = await _get_browser()
+        ctx = await browser.new_context()
+        _sessions[conv_id] = (ctx, await ctx.new_page())
+        page = _sessions[conv_id][1]
+
+        async def only_local(route: Any) -> None:
+            await (route.continue_() if route.request.url.startswith(origin + "/") else route.abort())
+
+        await ctx.route("**/*", only_local)
+        await ctx.add_init_script("delete window.WebSocket;")
+        errors: list[str] = []
+        page.on("console", lambda m: errors.append(f"console: {m.text}") if m.type == "error" else None)
+        page.on("pageerror", lambda e: errors.append(f"uncaught: {e}"))
+        await page.goto(f"{origin}/{path.name}", wait_until="load", timeout=15000)
+        await page.wait_for_timeout(1000)  # let the first frames run
+        try:
+            state = await page.evaluate("typeof window.__state === 'function' ? window.__state() : window.__state")
+        except Exception as e:
+            state = f"(window.__state failed: {e})"
+        shown = "not defined by the page" if state is None else json.dumps(state, default=str)[:2000]
+        problems = "\n".join(e[:300] for e in errors[:20]) or "none"
+        text = f"Preview of {path.name}\nConsole errors: {problems}\nwindow.__state: {shown}"
+        if args.get("screenshot", True) is False:
+            return text
+        shot = await page.screenshot(type="png", full_page=False)
+        return ToolResult(text=text, media=[MediaItem(type="image", data=shot, mime_type="image/png")])
 
     async def _action_screenshot(self, conv_id: str) -> str | ToolResult:
         if conv_id not in _sessions:
