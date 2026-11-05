@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from micropaw import net
 from micropaw.config import SCHEMA_VERSION, Config, server_url
 from micropaw.providers.registry import BUILTIN, LOCAL_SERVERS, PRESETS, LocalModel, LocalServer, Registry, parse_spec
 
@@ -100,7 +101,7 @@ async def probe_target(name: str, kind: str, url: str, key: str = "", details: b
     on this computer, 1.5 s for another one (Wi-Fi, a sleeping box)."""
     headers = {"Authorization": f"Bearer {key}"} if key else {}
     timeout = httpx.Timeout(3.0, connect=connect if connect is not None else 0.3 if is_loopback(url) else 1.5)
-    async with httpx.AsyncClient(timeout=timeout, headers=headers, trust_env=False) as client:  # never via a proxy
+    async with net.client(url, timeout=timeout, headers=headers) as client:  # LAN hosts skip HTTP proxies
         return await _list_models(client, name, kind, url.rstrip("/"), details)
 
 
@@ -481,7 +482,7 @@ async def _probe_endpoint(ep: Endpoint) -> tuple[str, str]:
     scope = where(ep.url)
     if ep.kind == "speech":
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=2.0), trust_env=False) as c:
+            async with net.client(ep.url, timeout=httpx.Timeout(3.0, connect=2.0)) as c:
                 await c.get(ep.url)
         except httpx.HTTPError:
             return "fail", f"{scope}, asleep or unreachable"

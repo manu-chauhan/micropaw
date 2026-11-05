@@ -370,19 +370,15 @@ async def _open_article(rid: str, context: ToolContext) -> str:
 class WebSearchTool(Tool):
     name = "web_search"
     marks = True
-    description = (
-        "Search for information and return results with titles, links and snippets. The first line of the "
-        "result says where it came from. Offline results carry an id: call again with action 'open' and that id "
-        "to read the whole article."
-    )
+    description = ("Search for information: titles, links and snippets. "
+                   "Offline results have an id; action 'open' with it reads the article.")
     parameters: dict[str, Any] = {
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "The search query"},
-            "max_results": {"type": "integer", "description": "Maximum results to return (default: 5)"},
-            "action": {"type": "string", "enum": ["search", "open"],
-                       "description": "'open' reads the offline result with the given id"},
-            "id": {"type": "string", "description": "Result id from an offline search (for 'open')"},
+            "query": {"type": "string"},
+            "max_results": {"type": "integer"},
+            "action": {"type": "string", "enum": ["search", "open"]},
+            "id": {"type": "string", "description": "Result id, for open"},
         },
         "required": [],
     }
