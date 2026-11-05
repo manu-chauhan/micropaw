@@ -17,18 +17,11 @@ from urllib.parse import urlparse
 import httpx
 
 from micropaw.config import SCHEMA_VERSION, Config, server_url
-from micropaw.providers import registry as registry_mod
-from micropaw.providers.registry import (
-    BUILTIN,
-    LOCAL_SERVERS,
-    PRESETS,
-    SCAN_EXTRA,
-    LocalServer,
-    Registry,
-    _loopback,
-    parse_spec,
-    probe_target,
-)
+from micropaw.providers.registry import BUILTIN, LOCAL_SERVERS, PRESETS, LocalModel, LocalServer, Registry, parse_spec
+
+# `paw models scan` also looks here: the llama.cpp README now says 9931, older builds use 8080. The preset
+# stays on 8080, so a server found here is added by address (`paw models add`), not used by preset name.
+SCAN_EXTRA: dict[str, tuple[str, str]] = {"llamacpp-9931": ("openai", "http://127.0.0.1:9931")}
 
 # (port, what it usually is, API kind). Only these ports are ever tried on another computer.
 KNOWN_PORTS: tuple[tuple[int, str, str], ...] = (
@@ -46,7 +39,77 @@ NO_KEY_WARNING = ("Anyone on your network can use this server. "
 
 
 def is_loopback(url: str) -> bool:
-    return _loopback(url)
+    host = (urlparse(url if "://" in url else f"http://{url}").hostname or "").lower()
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+@dataclass
+class Server(LocalServer):
+    problem: str = ""  # "" = answered with a model list; "key" = 401 or 403; "other" = answered, not a model server
+    ms: int = 0        # time to answer the list request
+
+
+async def _list_models(client: httpx.AsyncClient, name: str, kind: str, url: str, details: bool) -> Server | None:
+    """List the models on one server. None when nothing answered. `client` carries any key and the timeouts."""
+    import time
+
+    from micropaw.providers.ollama import fetch_show
+    start = time.monotonic()
+
+    def took() -> int:
+        return int((time.monotonic() - start) * 1000)
+
+    try:
+        if kind == "ollama":
+            resp = await client.get(f"{url}/api/tags")
+            resp.raise_for_status()
+            raw = resp.json().get("models") or []
+            infos = await asyncio.gather(*(fetch_show(client, url, m.get("name", "")) for m in raw)) \
+                if details else [None] * len(raw)
+            models = []
+            for m, info in zip(raw, infos):
+                caps = info.caps if info else None
+                models.append(LocalModel(
+                    m.get("name", ""), int(m.get("size") or 0),
+                    tools=info.tools if info else True,
+                    vision=info.vision if info else False,
+                    embedding=("embedding" in caps) if caps else "embed" in m.get("name", ""),
+                ))
+        else:
+            resp = await client.get(f"{url}/v1/models")
+            resp.raise_for_status()
+            models = [LocalModel(m["id"], embedding="embed" in m["id"]) for m in resp.json().get("data") or []
+                      if m.get("id")]
+    except httpx.HTTPStatusError as e:
+        return Server(name, url, [], "key" if e.response.status_code in (401, 403) else "other", took())
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return Server(name, url, [], "other", took())
+    except httpx.HTTPError:
+        return None
+    return Server(name, url, models, "", took())
+
+
+async def probe_target(name: str, kind: str, url: str, key: str = "", details: bool = True,
+                       connect: float | None = None) -> Server | None:
+    """One server, with its own client so a key only ever goes to that server. Connect timeout: 0.3 s
+    on this computer, 1.5 s for another one (Wi-Fi, a sleeping box)."""
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    timeout = httpx.Timeout(3.0, connect=connect if connect is not None else 0.3 if is_loopback(url) else 1.5)
+    async with httpx.AsyncClient(timeout=timeout, headers=headers, trust_env=False) as client:  # never via a proxy
+        return await _list_models(client, name, kind, url.rstrip("/"), details)
+
+
+async def scan_many(targets: dict[str, tuple[str, ...]]) -> list[Server]:
+    """Probe targets {name: (kind, url[, key])} in parallel. Returns the ones that answered, including ones that
+    want a key. A key goes to its own server only."""
+    found = await asyncio.gather(*(probe_target(n, t[0], t[1], t[2] if len(t) > 2 else "")
+                                   for n, t in targets.items()))
+    return [s for s in found if s and s.problem != "other"]
 
 
 def _hostport(url: str) -> tuple[str, int]:
@@ -98,9 +161,9 @@ def stored_url(url: str, kind: str) -> str:
 # One host, one address
 # ---------------------------------------------------------------------------
 
-async def probe_host(host: str, key: str = "", details: bool = True) -> list[LocalServer]:
+async def probe_host(host: str, key: str = "", details: bool = True) -> list[Server]:
     """Try every known model port on one host at once (1.5 s to connect). Returns the ones that answered."""
-    async def one(port: int, label: str, kind: str) -> LocalServer | None:
+    async def one(port: int, label: str, kind: str) -> Server | None:
         url = f"http://{_netloc(host, port)}"
         found = await probe_target(label, kind, url, key, details)
         return found if found and found.problem != "other" else None
@@ -108,7 +171,7 @@ async def probe_host(host: str, key: str = "", details: bool = True) -> list[Loc
     return [s for s in await asyncio.gather(*(one(*k) for k in KNOWN_PORTS)) if s]
 
 
-async def detect(url: str, kind: str, key: str = "", details: bool = True) -> tuple[str, LocalServer | None]:
+async def detect(url: str, kind: str, key: str = "", details: bool = True) -> tuple[str, Server | None]:
     """(kind, server) for one address. kind "auto" tries Ollama's list first, then the OpenAI-style one."""
     order = ("ollama", "openai") if kind == "auto" else (kind,)
     for k in order:
@@ -243,16 +306,16 @@ def scan_targets(config: Config, hosts: tuple[str, ...] = ()) -> list[Target]:
     return list(targets.values())
 
 
-async def run_scan(targets: list[Target]) -> tuple[list[tuple[Target, LocalServer]], list[Target]]:
+async def run_scan(targets: list[Target]) -> tuple[list[tuple[Target, Server]], list[Target]]:
     """(answered, configured targets that did not answer)."""
     by_name = {t.name: t for t in targets}
-    found = await registry_mod.scan_local({t.name: (t.kind, t.url, t.key) for t in targets})
+    found = await scan_many({t.name: (t.kind, t.url, t.key) for t in targets})
     answered = [(by_name[s.name], s) for s in found if s.name in by_name]
     done = {t.name for t, _ in answered}
     return answered, [t for t in targets if t.configured and t.name not in done]
 
 
-def usable_spec(config: Config, target: Target, server: LocalServer) -> str:
+def usable_spec(config: Config, target: Target, server: Server) -> str:
     """The provider name the registry already knows for this address, or "" when it has to be added first."""
     hp = _hostport(server.url)
     if target.name == "ollama" and hp == _hostport(config.provider_config.ollama.host):
@@ -313,7 +376,7 @@ class LanHit:
     port: int
     label: str
     kind: str
-    server: LocalServer = field(repr=False)
+    server: Server = field(repr=False)
 
     @property
     def url(self) -> str:

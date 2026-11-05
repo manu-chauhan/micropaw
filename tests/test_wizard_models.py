@@ -15,6 +15,8 @@ from micropaw.providers.registry import LocalModel, LocalServer
 GB = 10**9
 GIB = 2**30
 
+pytest_plugins = ["tests.lan_fixtures"]
+
 
 def server(name="ollama", **models) -> LocalServer:
     return LocalServer(name, f"http://127.0.0.1:1/{name}", [LocalModel(n, int(g * GB)) for n, g in models.items()])

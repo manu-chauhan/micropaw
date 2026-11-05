@@ -109,12 +109,6 @@ def _private_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return ip.is_loopback or any(ip in net for net in _PRIVATE_NETS)
 
 
-def _server_key(url: str) -> tuple[str, int]:
-    """(host, port) with the scheme's default port filled in, so two spellings of one server share a gate."""
-    parsed = urlparse(url if "://" in url else f"http://{url}")
-    return (parsed.hostname or "").lower(), parsed.port or (443 if parsed.scheme == "https" else 80)
-
-
 def is_local_url(url: str) -> bool:
     """Loopback or a private network address. Derived from the host, never declared.
 
@@ -239,7 +233,7 @@ class Registry:
         self.config = config
         self.problems: list[str] = []  # why a spec could not be built, for the caller to show
         self._cache: dict[str, AIProvider] = {}
-        self._sems: dict[str | tuple[str, int], asyncio.Semaphore] = {}
+        self._sems: dict[str, asyncio.Semaphore] = {}
         from micropaw.memory.ledger import LateLedger
         self.ledger = LateLedger()  # bound by the gateway once the database is open
         self.presets = {**PRESETS, **self._custom()}
@@ -281,7 +275,7 @@ class Registry:
         return ep is not None and ep.local
 
     def _sem(self, ep: Endpoint) -> asyncio.Semaphore:
-        key = _server_key(ep.base_url) if ep.local else ep.name
+        key = urlparse(ep.base_url if "://" in ep.base_url else f"http://{ep.base_url}").netloc if ep.local else ep.name
         if key not in self._sems:
             self._sems[key] = asyncio.Semaphore(LOCAL_CONCURRENCY if ep.local else CLOUD_CONCURRENCY)
         return self._sems[key]
@@ -364,7 +358,7 @@ class Registry:
 # Local servers: scan, size-aware defaults
 # ---------------------------------------------------------------------------
 
-# name -> (kind, URL[, key]). "ollama" lists /api/tags, the others list /v1/models.
+# name -> (kind, URL). "ollama" lists /api/tags, the others list /v1/models.
 LOCAL_SERVERS: dict[str, tuple[str, str]] = {
     "ollama": ("ollama", "http://127.0.0.1:11434"),
     "lmstudio": ("openai", "http://127.0.0.1:1234"),
@@ -373,10 +367,6 @@ LOCAL_SERVERS: dict[str, tuple[str, str]] = {
     "jan": ("openai", "http://127.0.0.1:1337"),
     "koboldcpp": ("openai", "http://127.0.0.1:5001"),
 }
-
-# `paw models scan` also looks here: the llama.cpp README now says 9931, older builds use 8080. The preset
-# stays on 8080, so a server found here is added by address (`paw models add`), not used by preset name.
-SCAN_EXTRA: dict[str, tuple[str, str]] = {"llamacpp-9931": ("openai", "http://127.0.0.1:9931")}
 
 
 @dataclass
@@ -393,23 +383,16 @@ class LocalServer:
     name: str
     url: str
     models: list[LocalModel]
-    problem: str = ""  # "" = answered with a model list; "key" = 401 or 403; "other" = answered, not a model server
-    ms: int = 0        # time to answer the list request
 
 
-async def _probe(client: httpx.AsyncClient, name: str, kind: str, url: str, details: bool = True) -> LocalServer | None:
-    """List the models on one server. None when nothing answered. `client` carries any key and the timeouts."""
-    import time
-
+async def _probe(client: httpx.AsyncClient, name: str, kind: str, url: str) -> LocalServer | None:
     from micropaw.providers.ollama import fetch_show
-    start = time.monotonic()
     try:
         if kind == "ollama":
             resp = await client.get(f"{url}/api/tags")
             resp.raise_for_status()
             raw = resp.json().get("models") or []
-            infos = await asyncio.gather(*(fetch_show(client, url, m.get("name", "")) for m in raw)) \
-                if details else [None] * len(raw)
+            infos = await asyncio.gather(*(fetch_show(client, url, m.get("name", "")) for m in raw))
             models = []
             for m, info in zip(raw, infos):
                 caps = info.caps if info else None
@@ -424,46 +407,16 @@ async def _probe(client: httpx.AsyncClient, name: str, kind: str, url: str, deta
             resp.raise_for_status()
             models = [LocalModel(m["id"], embedding="embed" in m["id"]) for m in resp.json().get("data") or []
                       if m.get("id")]
-    except httpx.HTTPStatusError as e:
-        key = e.response.status_code in (401, 403)
-        return LocalServer(name, url, [], "key" if key else "other", int((time.monotonic() - start) * 1000))
-    except (ValueError, KeyError, TypeError, AttributeError):
-        return LocalServer(name, url, [], "other", int((time.monotonic() - start) * 1000))
-    except httpx.HTTPError:
+    except (httpx.HTTPError, ValueError, KeyError, TypeError):
         return None
-    return LocalServer(name, url, models, "", int((time.monotonic() - start) * 1000))
+    return LocalServer(name, url, models)
 
 
-def _loopback(url: str) -> bool:
-    host = (urlparse(url).hostname or "").lower()
-    return host == "localhost" or host.endswith(".localhost") or _is_loopback_ip(host)
-
-
-def _is_loopback_ip(host: str) -> bool:
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
-
-
-async def probe_target(name: str, kind: str, url: str, key: str = "", details: bool = True,
-                       connect: float | None = None) -> LocalServer | None:
-    """One server, with its own client so a key only ever goes to that server. Connect timeout: 0.3 s
-    on this computer, 1.5 s for another one (Wi-Fi, a sleeping box)."""
-    headers = {"Authorization": f"Bearer {key}"} if key else {}
-    timeout = httpx.Timeout(3.0, connect=connect if connect is not None else 0.3 if _loopback(url) else 1.5)
-    async with httpx.AsyncClient(timeout=timeout, headers=headers, trust_env=False) as client:
-        return await _probe(client, name, kind, url.rstrip("/"), details)
-
-
-async def scan_local(targets: dict[str, tuple[str, ...]] | None = None) -> list[LocalServer]:
-    """Probe the usual local ports in parallel. Returns the servers that answered, including ones that want a key.
-
-    A target is (kind, url) or (kind, url, key); the key goes to that server only.
-    """
-    found = await asyncio.gather(*(probe_target(n, t[0], t[1], t[2] if len(t) > 2 else "")
-                                   for n, t in (targets or LOCAL_SERVERS).items()))
-    return [s for s in found if s and s.problem != "other"]
+async def scan_local(targets: dict[str, tuple[str, str]] | None = None) -> list[LocalServer]:
+    """Probe the usual local ports in parallel (300 ms to connect). Returns the servers that answered."""
+    async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=0.3)) as client:
+        found = await asyncio.gather(*(_probe(client, n, k, u) for n, (k, u) in (targets or LOCAL_SERVERS).items()))
+    return [s for s in found if s]
 
 
 # (tag, download size in GB) from research/11 section 4. Sizes are of the weights; KV cache comes on top.

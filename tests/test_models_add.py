@@ -12,6 +12,8 @@ import micropaw.modelscan as ms
 from micropaw.cli import main
 from micropaw.config import load_config
 
+pytest_plugins = ["tests.lan_fixtures"]
+
 
 def run(*args, input=None):
     return CliRunner().invoke(main, list(args), input=input)
@@ -338,7 +340,7 @@ def test_a_bad_range_fails_before_any_scan_starts(lan_home, monkeypatch):
         called.append(1)
         return []
 
-    monkeypatch.setattr("micropaw.providers.registry.scan_local", spy)
+    monkeypatch.setattr(ms, "scan_many", spy)
     r = run("models", "scan", "--range", "8.8.8.0/24")
     assert r.exit_code != 0 and "Only private IPv4 ranges" in r.output and not called
 
