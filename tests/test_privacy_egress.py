@@ -168,7 +168,7 @@ def test_native_stacks_and_symbols_airgapped():
     assert guard(mode="local").decide("ctypes.dlsym", (None, "connect")) is None
 
 
-# --- the real hook, in a child interpreter (a hook cannot be removed, so never in pytest itself) -------------
+# --- the real hook, in a child interpreter (a hook cannot be removed, so never in pytest itself) ---
 
 def run_child(code: str, mode: str = "airgapped", extra_env: dict | None = None, timeout: float = 30.0):
     env = {**os.environ, "MICROPAW_PRIVACY": mode, **(extra_env or {})}

@@ -213,7 +213,7 @@ def fake_ollama():
     server.shutdown()
 
 
-# --- scenario 1: a full turn --------------------------------------------------------------------------------------
+# --- scenario 1: a full turn ----------------------------------------------------------------------
 
 @pytest.mark.skipif(not (HAVE_BWRAP and SHELL_PYTHON), reason="needs Linux with bubblewrap and /usr/bin/python3")
 def test_airgapped_gateway_turn_makes_no_outside_connection(tmp_path, listener, lan_listener, fake_ollama):
@@ -276,7 +276,7 @@ def test_airgapped_gateway_turn_makes_no_outside_connection(tmp_path, listener, 
                for e in events(out / "post.jsonl"))
 
 
-# --- scenario 2: the rules without the gateway ---------------------------------------------------------------------
+# --- scenario 2: the rules without the gateway ----------------------------------------------------
 
 def test_lan_off_blocks_a_private_address(tmp_path, listener):
     out, proc = run_child(tmp_path, base_config(1, allow_lan=False), mode="probes",
@@ -288,7 +288,7 @@ def test_lan_off_blocks_a_private_address(tmp_path, listener):
     assert_nothing_left(out, set(), lan_ok=False)
 
 
-# --- mutation: the same checks must fail when the guard is off ---------------------------------------------------
+# --- mutation: the same checks must fail when the guard is off ------------------------------------
 
 def test_the_canary_notices_a_leak_when_the_guard_is_off(tmp_path, listener):
     out, proc = run_child(tmp_path, base_config(1), mode="probes",

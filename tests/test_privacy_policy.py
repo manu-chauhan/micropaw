@@ -41,7 +41,7 @@ def no_dns(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", boom)
 
 
-# --- is_local_url by mode -------------------------------------------------------------------------------------------
+# --- is_local_url by mode -------------------------------------------------------------------------
 
 @pytest.mark.parametrize("url,expected", [
     ("http://localhost:11434", True), ("http://127.0.0.1:1234/v1", True), ("http://[::1]:80", True),
@@ -71,7 +71,7 @@ def test_normal_mode_still_looks_names_up(monkeypatch):
     assert is_local_url("http://gpu-box:11434")
 
 
-# --- roles ----------------------------------------------------------------------------------------------------------
+# --- roles ----------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("name", ["local", "airgapped"])
 @pytest.mark.parametrize("role", ["main", "fast", "vision", "fallback", "compaction"])
@@ -144,7 +144,7 @@ def test_a_show_reply_naming_a_remote_host_is_refused_in_local_mode(show):
         asyncio.run(p2.chat(USER))
 
 
-# --- fallbacks and helpers ------------------------------------------------------------------------------------------
+# --- fallbacks and helpers ------------------------------------------------------------------------
 
 def test_local_mode_builds_no_cloud_fallback(no_dns):
     set_mode("local")
@@ -199,7 +199,7 @@ def test_local_mode_main_that_is_cloud_has_no_runtime(no_dns):
         build_runtimes(c, Registry(c))
 
 
-# --- the config check lists everything at once ----------------------------------------------------------------------
+# --- the config check lists everything at once ----------------------------------------------------
 
 def test_check_config_lists_every_refusal_at_once(no_dns, monkeypatch):
     set_mode("airgapped")
@@ -268,7 +268,7 @@ def test_enforce_fails_before_anything_starts_when_the_guard_is_not_working(monk
         privacy.enforce(config())
 
 
-# --- gateway start --------------------------------------------------------------------------------------------------
+# --- gateway start --------------------------------------------------------------------------------
 
 async def test_gateway_start_refuses_cloud_model_and_telegram_listing_both(monkeypatch, capsys):
     from unittest.mock import MagicMock
@@ -295,7 +295,7 @@ async def test_gateway_start_refuses_cloud_model_and_telegram_listing_both(monke
     assert "main model claude" in err and "Telegram" in err
 
 
-# --- tools and owner commands ---------------------------------------------------------------------------------------
+# --- tools and owner commands ---------------------------------------------------------------------
 
 def test_tools_off_by_mode():
     set_mode("normal")

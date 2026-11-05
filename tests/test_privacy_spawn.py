@@ -51,7 +51,7 @@ def fake_stub(platform):
                            executable=sys.executable)
 
 
-# --- the self test ------------------------------------------------------------------------------------------------
+# --- the self test --------------------------------------------------------------------------------
 
 @needs_bwrap
 def test_selftest_passes_with_a_real_wrapper():
@@ -78,7 +78,7 @@ def test_selftest_fails_when_the_wrapper_cannot_start(monkeypatch):
     assert sandbox._selftest() is False
 
 
-# --- resolve in each mode -------------------------------------------------------------------------------------
+# --- resolve in each mode -------------------------------------------------------------------------
 
 @pytest.mark.parametrize("platform,word", [("win32", "Windows"), ("darwin", "macOS")])
 def test_airgapped_refuses_shell_where_children_cannot_be_cut_off(monkeypatch, platform, word):
@@ -139,7 +139,7 @@ def test_local_shell_with_network_always_asks(monkeypatch):
     assert tool.needs_approval({"command": "ls"}, ctx) is None          # normal mode is unchanged
 
 
-# --- the MCP wrapper ----------------------------------------------------------------------------------------------
+# --- the MCP wrapper ------------------------------------------------------------------------------
 
 def test_mcp_argv_uses_the_allow_list_layout(tmp_path):
     cfg = MCPServerConfig(command="/usr/bin/python3", args=["s.py"], paths=[str(tmp_path)], env={
@@ -289,7 +289,7 @@ def test_local_mcp_child_gets_network_only_when_it_asks(tmp_path, monkeypatch):
     assert _run_probe(tmp_path, monkeypatch, network=True)["config"] is False  # still cannot see the config
 
 
-# --- the same through the real hook ---------------------------------------------------------------------------------
+# --- the same through the real hook ---------------------------------------------------------------
 
 @needs_bwrap
 def test_airgapped_child_interpreter_runs_only_isolated_commands(tmp_path):

@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from micropaw import privacy
+from micropaw import net, privacy
 from micropaw.providers.base import AIProvider, AIResponse, Message, ToolDef
 from micropaw.providers.failover import (
     FallbackProvider,
@@ -567,7 +567,8 @@ async def _probe(client: httpx.AsyncClient, name: str, kind: str, url: str) -> L
 
 async def scan_local(targets: dict[str, tuple[str, str]] | None = None) -> list[LocalServer]:
     """Probe the usual local ports in parallel (300 ms to connect). Returns the servers that answered."""
-    async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=0.3)) as client:
+    # Local servers and the LAN never go through an HTTP proxy from the environment
+    async with net.client(timeout=httpx.Timeout(3.0, connect=0.3), local=True) as client:
         found = await asyncio.gather(*(_probe(client, n, k, u) for n, (k, u) in (targets or LOCAL_SERVERS).items()))
     return [s for s in found if s]
 
