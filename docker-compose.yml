@@ -1,47 +1,43 @@
-# MicroPaw — Docker Compose
+# MicroPaw with Docker Compose.
 #
-# Usage:
-#   micropaw chat    → docker compose run --rm micropaw chat
-#   micropaw start   → docker compose up
-#   with browser      → docker compose --profile browser up
-#   all extras        → docker compose --profile full up
+#   First time (asks for your provider and keys, saved in the data volume):
+#     docker compose run --rm micropaw paw setup
+#   Run in the background:
+#     docker compose up -d
+#   With a local model server (Ollama) next to it:
+#     docker compose --profile ollama up -d
+#     docker compose exec ollama ollama pull llama3.1
+#     then set the Ollama host to http://ollama:11434 in the setup wizard
+#   Chat in a terminal:
+#     docker compose run --rm micropaw paw chat
+#
+# Keys: put them in a .env file next to this one (see .env.example); it is read at run time only.
+# The container is the boundary for shell commands, so MicroPaw's own sandbox is not needed inside it.
+# Nothing is published on the host except WebChat on 127.0.0.1, and only if you enable that channel.
 
 services:
   micropaw:
-    build:
-      context: .
-      target: base
-    env_file: .env
+    build: .
+    image: micropaw:local
+    env_file:
+      - path: .env
+        required: false   # Compose 2.24 or newer
     volumes:
-      - micropaw-data:/home/micropaw/.micropaw
-    restart: unless-stopped
-    stdin_open: true
-    tty: true
-
-  micropaw-browser:
-    build:
-      context: .
-      target: browser
-    env_file: .env
-    volumes:
-      - micropaw-data:/home/micropaw/.micropaw
-    restart: unless-stopped
-    profiles:
-      - browser
-
-  micropaw-full:
-    build:
-      context: .
-      target: full
-    env_file: .env
-    volumes:
-      - micropaw-data:/home/micropaw/.micropaw
+      - micropaw-data:/home/paw/.micropaw
     ports:
-      - "8765:8765"   # WebChat WebSocket
-      - "8080:8080"   # WhatsApp webhook
+      - "127.0.0.1:8765:8765"   # WebChat; unused unless that channel is enabled
     restart: unless-stopped
-    profiles:
-      - full
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  ollama:
+    profiles: [ollama]
+    image: ollama/ollama
+    volumes:
+      - ollama-models:/root/.ollama
+    restart: unless-stopped
+    # No ports: only the micropaw service reaches it, at http://ollama:11434.
 
 volumes:
   micropaw-data:
+  ollama-models:
