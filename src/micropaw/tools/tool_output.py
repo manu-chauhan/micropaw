@@ -115,6 +115,7 @@ class ToolOutputTool(Tool):
             pick = n or numbers[-1]
             if pick not in numbers:
                 return f"No saved output {pick}. Saved: {', '.join(map(str, numbers))}."
+            context.tainted = context.tainted or found[pick].parent != _dir(context.conversation_id)
             text = found[pick].read_text(encoding="utf-8")
             pages = -(-len(text) // PAGE)
             if page > pages:

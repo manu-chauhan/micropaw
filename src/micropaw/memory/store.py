@@ -444,15 +444,35 @@ class MemoryStore:
         )
         return (conversation_id, message.role, message.content, tool_calls_json, message.tool_call_id, local)
 
-    async def save_message(self, conversation_id: str, message: Message) -> None:
-        await self.save_messages(conversation_id, [message])
+    async def save_message(self, conversation_id: str, message: Message, local: bool = False) -> None:
+        await self.save_messages(conversation_id, [message], local)
 
-    async def save_messages(self, conversation_id: str, messages: list[Message]) -> None:
-        """Save a turn's messages in one transaction (one commit)."""
+    async def has_local_data(self, conversation_id: str, user_id: str) -> bool:
+        """True when anything saved in local or airgapped mode could reach a model in this conversation:
+        its messages, the user's memories, document pieces and contacts, a summary, a scheduled job."""
+        for sql, args in (
+            ("SELECT 1 FROM messages WHERE conversation_id = ? AND local_only = 1 LIMIT 1", (conversation_id,)),
+            ("SELECT 1 FROM memories WHERE user_id = ? AND local_only = 1 LIMIT 1", (user_id,)),
+            ("SELECT 1 FROM document_chunks WHERE user_id = ? AND local_only = 1 LIMIT 1", (user_id,)),
+            ("SELECT 1 FROM contacts WHERE local_only = 1 LIMIT 1", ()),
+            ("SELECT 1 FROM kv_meta WHERE key = ? LIMIT 1", (f"summary_local:{conversation_id}",)),
+            ("SELECT 1 FROM cron_jobs WHERE local_only = 1 LIMIT 1", ()),
+        ):
+            try:
+                async with self.db.execute(sql, args) as cursor:
+                    if await cursor.fetchone():
+                        return True
+            except aiosqlite.OperationalError:
+                pass  # the scheduler has not made its table in this database
+        return False
+
+    async def save_messages(self, conversation_id: str, messages: list[Message], local: bool = False) -> None:
+        """Save a turn's messages in one transaction (one commit). local=True flags them local_only
+        whatever the mode: the turn's model saw local data, so its words may repeat it."""
         if not messages:
             await self.db.commit()  # still ends the turn's open transaction
             return
-        local = _local_now()
+        local = int(local) or _local_now()
         await self.db.executemany(
             "INSERT INTO messages (conversation_id, role, content, tool_calls, tool_call_id, local_only) "
             "VALUES (?, ?, ?, ?, ?, ?)",
@@ -620,13 +640,15 @@ class MemoryStore:
 
     async def save_memory(
         self, key: str, value: str, tags: list[str] | None = None, user_id: str = "_global", marked: bool = False,
+        local: bool = False,
     ) -> None:
-        """Save a fact. marked=True when it was written by a conversation that had read outside content."""
+        """Save a fact. marked=True when it was written by a conversation that had read outside content.
+        local=True keeps it local_only whatever the mode (the turn's model saw local data)."""
         tags_str = ",".join(tags) if tags else ""
         embedding = await self.embedder.embed(f"{key}: {value}")
         embedding_json = serialize_embedding(embedding)
 
-        local = _local_now()
+        local = int(local) or _local_now()
         await self.db.execute(
             "INSERT INTO memories (key, value, tags, embedding, user_id, marked, local_only) "
             "VALUES (?, ?, ?, ?, ?, ?, ?) "
@@ -714,7 +736,7 @@ class MemoryStore:
     # --- Document chunks (RAG) ---
 
     async def ingest_document(
-        self, source: str, content: str, user_id: str = "_global", max_chunks: int = 0,
+        self, source: str, content: str, user_id: str = "_global", max_chunks: int = 0, local: bool = False,
     ) -> int:
         """Chunk, embed, and store a document. Dual-writes to vec_chunks when available.
 
@@ -732,7 +754,7 @@ class MemoryStore:
         async with self._embed_slot:
             blobs = [serialize_embedding_blob(await self.embedder.embed(text)) for text in chunks]
 
-        local = _local_now()
+        local = int(local) or _local_now()
         async with self._ingest_lock:  # two ingests of one source must not interleave
             try:
                 await self._delete_chunks("source = ? AND user_id = ?", (source, user_id))

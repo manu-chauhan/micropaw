@@ -306,7 +306,7 @@ async def test_agent_keeps_auto_ingest_tasks_and_cancels_them(monkeypatch):
     agent = _agent(_Say([]))
     gate = asyncio.Event()
 
-    async def slow(source, content, user_id):
+    async def slow(source, content, user_id, local=False):
         await gate.wait()
 
     monkeypatch.setattr(agent, "_auto_ingest", slow)

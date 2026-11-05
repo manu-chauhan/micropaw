@@ -36,6 +36,9 @@ class ToolContext:
     agent: str = "main"  # the agent this chat talks to; jobs it creates run on it later
     # False when the model answering is not local: what was saved in local or airgapped mode stays hidden from it
     local_data: bool = True
+    # True once this turn's model could see data saved in local or airgapped mode (it is local, and such
+    # data exists). Whatever the turn saves is then kept local_only too, as it may repeat that data.
+    tainted: bool = False
     # Asks the owner on the chat this request came from. None = nobody to ask (cron, heartbeat,
     # background tasks), so anything that needs approval is refused there.
     approve: Callable[[str, str], Awaitable[bool]] | None = None

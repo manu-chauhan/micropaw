@@ -239,3 +239,77 @@ def test_share_history_command_says_no_history_for_an_empty_file(monkeypatch, tm
     monkeypatch.setattr(cli, "DB_FILE", tmp_path / "data.db")
     r = CliRunner().invoke(cli.main, ["privacy", "share-history", "--yes"])
     assert r.exit_code == 0 and "no saved history" in r.output
+
+
+class Echo:
+    """A model that repeats the context it was given, so a leak shows in the saved reply."""
+    def __init__(self, host, log):
+        self.name, self.model, self.host, self.log = "mock", "m", host, log
+
+    async def chat(self, messages, tools=None):
+        from micropaw.providers.base import AIResponse
+        self.log.append(" ".join(m.content for m in messages))
+        return AIResponse(content="You told me: " + messages[-1].content, tool_calls=[], usage={})
+
+
+async def test_a_turn_that_saw_local_data_saves_its_rows_as_local_only(tmp_path):
+    from micropaw.config import Config
+    from micropaw.core.agent import Agent
+    from micropaw.tools.base import ToolRegistry
+    store = MemoryStore(tmp_path / "data.db", NullEmbedding())
+    await store.init()
+    go_local()
+    await store.save_memory("diag", "secret diagnosis lymphoma")
+    go_normal()
+    log: list[str] = []
+    agent = Agent(Config(), Echo("http://127.0.0.1:11434", log), ToolRegistry(), store)
+    reply = await agent.handle_message("what do you remember?", "owner", "terminal")
+    assert "lymphoma" in reply  # the local model saw the memory
+    async with store.db.execute("SELECT role, local_only FROM messages ORDER BY id") as cur:
+        assert await cur.fetchall() == [("user", 1), ("assistant", 1)]
+    cloud_log: list[str] = []
+    cloud = Agent(Config(), Echo("https://api.anthropic.com", cloud_log), ToolRegistry(), store)
+    await cloud.handle_message("hello again", "owner", "terminal")
+    assert "lymphoma" not in cloud_log[0]
+    await store.close()
+
+
+async def test_a_local_model_with_no_local_data_saves_plain_rows(tmp_path):
+    from micropaw.config import Config
+    from micropaw.core.agent import Agent
+    from micropaw.tools.base import ToolRegistry
+    store = MemoryStore(tmp_path / "data.db", NullEmbedding())
+    await store.init()
+    go_normal()
+    agent = Agent(Config(), Echo("http://127.0.0.1:11434", []), ToolRegistry(), store)
+    await agent.handle_message("hi", "owner", "terminal")
+    async with store.db.execute("SELECT local_only FROM messages") as cur:
+        assert [r[0] for r in await cur.fetchall()] == [0, 0]
+    await store.close()
+
+
+async def test_a_tainted_turn_saves_memories_as_local_only(tmp_path):
+    from micropaw.tools import memory_tool
+    from micropaw.tools.base import ToolContext
+    store = MemoryStore(tmp_path / "data.db", NullEmbedding())
+    await store.init()
+    memory_tool.set_store(store)
+    go_normal()
+    tool = memory_tool.MemoryTool()
+    await tool.execute({"action": "save", "key": "a", "value": "plain"}, ToolContext("c", "u", "terminal"))
+    await tool.execute({"action": "save", "key": "b", "value": "from a tainted turn"},
+                       ToolContext("c", "u", "terminal", tainted=True))
+    assert [m["key"] for m in await store.get_all_memories(include_local=False)] == ["a"]
+    await store.close()
+
+
+async def test_reading_a_local_mode_file_taints_the_turn(tmp_path, monkeypatch):
+    import micropaw.tools.files_tool as ft
+    monkeypatch.setattr(ft, "_FILES_DIR", tmp_path / "files")
+    tool = ft.FilesTool()
+    go_local()
+    await tool.execute({"action": "save", "path": "n.txt", "content": "private"}, ctx(False))
+    go_normal()
+    c = ctx(False)
+    await tool.execute({"action": "read", "path": "n.txt"}, c)
+    assert c.tainted

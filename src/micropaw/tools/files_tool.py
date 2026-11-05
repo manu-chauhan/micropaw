@@ -116,6 +116,7 @@ class FilesTool(Tool):
             target = next((t for r in _roots(context) if (t := _safe_path(rel, r)) and t.is_file()), None)
             if not target:
                 return f"Error: File not found: {rel}"
+            context.tainted = context.tainted or local_dir().resolve() in target.parents
             data = await asyncio.to_thread(target.read_text, encoding="utf-8", errors="replace")
             if len(data) > _DISPLAY_LIMIT:
                 return data[:_DISPLAY_LIMIT] + f"\n\n... (truncated, full file is {_human_size(target.stat().st_size)})"
@@ -129,6 +130,7 @@ class FilesTool(Tool):
                 return "Error: Invalid directory path."
             if not bases:
                 return f"Error: Directory not found: {rel or '/'}"
+            context.tainted = context.tainted or any(b == local_dir().resolve() for b in bases)
             entries = sorted({e.name: e for b in bases for e in b.iterdir()}.values(), key=lambda e: e.name)
             if not entries:
                 return "No files saved yet." if not rel else f"Empty directory: {rel}"
