@@ -460,6 +460,25 @@ async def test_private_agent_turns_cloud_embeddings_off(monkeypatch):
     assert not isinstance(await gateway({"family": LOCAL_AGENT})._create_embedding_provider(), OpenAIEmbedding)
 
 
+async def test_private_main_agent_also_turns_cloud_embeddings_off(monkeypatch, caplog):
+    from micropaw.memory.embeddings import NullEmbedding, OpenAIEmbedding
+
+    async def no_ollama(host, model):
+        return False
+
+    monkeypatch.setattr("micropaw.memory.embeddings.probe_ollama", no_ollama)
+
+    def gateway(**kw):
+        c = Config(provider="ollama", **kw)
+        c.provider_config.openai.api_key = "sk-fake"
+        return Gateway(c, MagicMock(), MagicMock(), [], runtimes=build_runtimes(c, Registry(c)))
+
+    assert not isinstance(await gateway()._create_embedding_provider(), OpenAIEmbedding)  # auto
+    with caplog.at_level("WARNING"):
+        got = await gateway(embedding={"provider": "openai"})._create_embedding_provider()  # explicit
+    assert isinstance(got, NullEmbedding) and "embeddings are off" in caplog.text
+
+
 class TestPrivateAgentScopes:
     def test_memory_scope_follows_separate_history(self):
         from micropaw.core.profile import AgentProfile

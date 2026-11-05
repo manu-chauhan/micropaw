@@ -677,14 +677,15 @@ class Gateway:
         if cfg.enabled == "false":
             return NullEmbedding()
 
-        # Every message is embedded, so a private (all-local) agent rules out a cloud embedding service
-        cloud_ok = not any(name != "main" and rt.profile.private for name, rt in self._runtimes.items())
+        # Every message is embedded, so a private (all-local) agent, main included, rules out a cloud embedding service
+        cloud_ok = not any(rt.profile.private for rt in self._runtimes.values())
         if not cloud_ok:
             logger.warning("An agent is private (local models only), so cloud embeddings are off.")
 
         # Explicit provider (user set provider != auto, or enabled == "true")
         if cfg.provider != "auto":
             if cfg.provider == "openai" and not cloud_ok:
+                logger.warning("embedding.provider is openai, but an agent is private: embeddings are off.")
                 return NullEmbedding()
             return self._create_explicit_provider(cfg)
 
