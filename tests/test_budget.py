@@ -369,3 +369,19 @@ def test_price_and_registry_agree_on_what_is_local():
                   "http://100.128.0.1", "http://[::1]:1"):
         assert is_local(where) == is_local_url(where), where
     assert is_local("http://100.101.102.103:11434") and not is_local("http://100.128.0.1")
+
+
+def test_a_custom_server_named_like_a_local_one_is_judged_by_its_address():
+    from types import SimpleNamespace
+
+    from micropaw.providers.metered import MeteredProvider
+    from micropaw.utils.prices import is_local_provider
+
+    cloud = SimpleNamespace(name="vllm", model="m", _api_url="https://api.example.com/v1/chat/completions")
+    lan = SimpleNamespace(name="vllm", model="m", _api_url="http://10.0.0.5:8000/v1/chat/completions")
+    named_only = SimpleNamespace(name="ollama", model="m")
+    assert not is_local_provider(cloud) and is_local_provider(lan) and is_local_provider(named_only)
+    use = {"input": 1000, "output": 1000}
+    meter = {"agent": "main", "role": "chat", "ledger": None, "budget": BudgetConfig()}
+    assert MeteredProvider(cloud, **meter)._price(use) is None  # unpriced, never free
+    assert MeteredProvider(lan, **meter)._price(use) == 0.0

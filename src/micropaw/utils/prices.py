@@ -97,11 +97,10 @@ def is_local(where: str) -> bool:
 
 def is_local_provider(provider: object) -> bool:
     """True when this provider object talks to a local server (by name or by its base URL)."""
-    name = str(getattr(provider, "name", ""))
-    if name in LOCAL_PROVIDERS:
-        return True
     url = getattr(provider, "host", "") or getattr(provider, "_api_url", "") or getattr(provider, "base_url", "")
-    return bool(url) and is_local(str(url))
+    if url:  # the address decides: a custom server named "vllm" that points at a cloud URL is not free
+        return is_local(str(url))
+    return str(getattr(provider, "name", "")) in LOCAL_PROVIDERS
 
 
 def cost(provider: str, model: str, usage: dict[str, int]) -> float | None:

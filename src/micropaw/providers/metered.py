@@ -9,7 +9,7 @@ from typing import Any
 
 from micropaw.memory.ledger import Totals
 from micropaw.providers.base import AIProvider, AIResponse, Message, ToolDef
-from micropaw.utils.prices import cost, is_local_provider
+from micropaw.utils.prices import LOCAL_PROVIDERS, cost, is_local_provider
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,9 @@ class MeteredProvider(AIProvider):
         return getattr(self.inner, attr)
 
     def _price(self, usage: dict[str, int]) -> float | None:
-        return cost("local" if self.local else self.inner.name, self.inner.model, usage)
+        if self.local:
+            return 0.0
+        return None if self.inner.name in LOCAL_PROVIDERS else cost(self.inner.name, self.inner.model, usage)
 
     def _caps(self) -> list[tuple[float, str]]:
         """(USD cap, agent name or "" for the global cap), only the ones that are set."""
