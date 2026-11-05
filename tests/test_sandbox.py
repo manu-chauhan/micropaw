@@ -298,7 +298,7 @@ def test_powershell_command_line(monkeypatch, tmp_path):
     seen = {}
 
     async def fake_exec(*argv, **kw):
-        seen["argv"] = argv
+        seen["argv"], seen["kw"] = argv, kw
         raise OSError("stop")
 
     monkeypatch.setattr(sandbox, "resolve", lambda: Sandbox("none"))
@@ -306,7 +306,10 @@ def test_powershell_command_line(monkeypatch, tmp_path):
     monkeypatch.setattr(shell.shutil, "which", lambda n: None)
     monkeypatch.setattr(shell.asyncio, "create_subprocess_exec", fake_exec)
     asyncio.run(shell.ShellTool().execute({"command": "Get-Date"}, _ctx(tmp_path)))
-    assert seen["argv"] == ("powershell", "-NoProfile", "-NonInteractive", "-Command", "Get-Date")
+    assert seen["argv"] == (
+        "powershell", "-NoProfile", "-NonInteractive", "-Command",
+        "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Date")
+    assert seen["kw"]["stdin"] == asyncio.subprocess.DEVNULL
 
 
 @pytest.mark.skipif(os.name == "nt", reason="uses cat and a POSIX shell")
@@ -510,3 +513,64 @@ async def test_gateway_start_probes_and_warns_when_no_sandbox(monkeypatch, tmp_p
     with caplog.at_level("WARNING"):
         await gw.start()
     assert "No sandbox found; shell commands run on this computer and always ask." in caplog.text
+
+
+@pytest.mark.skipif(os.name == "nt", reason="uses /bin/sh")
+def test_shell_has_no_stdin_and_a_timeout_kills_the_children(monkeypatch, tmp_path):
+    seen = {}
+    real = asyncio.create_subprocess_shell
+
+    async def spy(*a, **kw):
+        seen.update(kw)
+        return await real(*a, **kw)
+
+    monkeypatch.setattr(sandbox, "resolve", lambda: Sandbox("none"))
+    monkeypatch.setattr(shell.asyncio, "create_subprocess_shell", spy)
+    monkeypatch.setattr(shell, "TIMEOUT", 1)
+    out = asyncio.run(shell.ShellTool().execute(
+        {"command": "sleep 300 & echo $! > child.pid; wait"}, _ctx(tmp_path)))
+    assert "timed out" in out
+    assert seen["stdin"] == asyncio.subprocess.DEVNULL and seen["start_new_session"] is True
+    pid = int((tmp_path / "child.pid").read_text())
+    import time
+    for _ in range(20):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.1)
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="uses /bin/sh")
+def test_a_command_that_reads_stdin_does_not_wait(monkeypatch, tmp_path):
+    monkeypatch.setattr(sandbox, "resolve", lambda: Sandbox("none"))
+    out = asyncio.run(shell.ShellTool().execute({"command": "cat; echo after"}, _ctx(tmp_path)))
+    assert out == "after"
+
+
+def test_windows_timeout_uses_taskkill(monkeypatch):
+    calls = []
+
+    class Proc:
+        pid = 4242
+
+        def kill(self):
+            calls.append("kill")
+
+        async def wait(self):
+            return 0
+
+    class Killer:
+        async def wait(self):
+            return 0
+
+    async def fake_exec(*argv, **kw):
+        calls.append(argv)
+        return Killer()
+
+    monkeypatch.setattr(shell.os, "name", "nt")
+    monkeypatch.setattr(shell.asyncio, "create_subprocess_exec", fake_exec)
+    asyncio.run(shell._kill_tree(Proc()))
+    assert calls[0] == ("taskkill", "/T", "/F", "/PID", "4242") and calls[1] == "kill"

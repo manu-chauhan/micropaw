@@ -6,6 +6,7 @@ import asyncio
 import os
 import re
 import shutil
+import signal
 from pathlib import Path
 from typing import Any
 
@@ -99,6 +100,33 @@ def _child_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if not _SECRET_ENV.search(k)}
 
 
+# No stdin (a command that reads it would fight the terminal channel); its own process group on POSIX
+_SPAWN: dict[str, Any] = {
+    "stdin": asyncio.subprocess.DEVNULL, "stdout": asyncio.subprocess.PIPE, "stderr": asyncio.subprocess.PIPE,
+    "start_new_session": os.name != "nt",
+}
+_UTF8 = "[Console]::OutputEncoding=[Text.Encoding]::UTF8; "  # PowerShell prints in the OEM code page otherwise
+
+
+async def _kill_tree(proc: asyncio.subprocess.Process) -> None:
+    """Kill the shell and everything it started. terminate() alone leaves the children running."""
+    try:
+        if os.name == "nt":
+            killer = await asyncio.create_subprocess_exec(
+                "taskkill", "/T", "/F", "/PID", str(proc.pid),
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            await killer.wait()
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        pass
+    try:
+        proc.kill()
+    except ProcessLookupError:
+        pass
+    await proc.wait()
+
+
 def _powershell() -> str:
     return shutil.which("pwsh") or "powershell"
 
@@ -164,19 +192,14 @@ class ShellTool(Tool):
             if sb.active:
                 note = await sandbox.prepare(sb)
                 wrapped = sandbox.wrap(sb, command, cwd or Path.cwd(), _child_env())
-                proc = await asyncio.create_subprocess_exec(
-                    *wrapped.argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                    env=wrapped.env, cwd=cwd,
-                )
+                proc = await asyncio.create_subprocess_exec(*wrapped.argv, env=wrapped.env, cwd=cwd, **_SPAWN)
             elif os.name == "nt":
                 proc = await asyncio.create_subprocess_exec(
-                    _powershell(), "-NoProfile", "-NonInteractive", "-Command", command,
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=_child_env(), cwd=cwd,
+                    _powershell(), "-NoProfile", "-NonInteractive", "-Command", _UTF8 + command,
+                    env=_child_env(), cwd=cwd, **_SPAWN,
                 )
             else:
-                proc = await asyncio.create_subprocess_shell(
-                    command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=_child_env(), cwd=cwd,
-                )
+                proc = await asyncio.create_subprocess_shell(command, env=_child_env(), cwd=cwd, **_SPAWN)
         except sandbox.SandboxError as e:
             return f"Error: {e} Not run."
         except Exception as e:
@@ -210,16 +233,7 @@ class ShellTool(Tool):
             return note + result
 
         except TimeoutError:
-            try:
-                proc.terminate()
-                await asyncio.wait_for(proc.wait(), timeout=3.0)
-            except (TimeoutError, ProcessLookupError):
-                # Process didn't die from SIGTERM; force kill (works on Windows too)
-                try:
-                    proc.kill()
-                    await proc.wait()
-                except (ProcessLookupError, OSError):
-                    pass
+            await _kill_tree(proc)
             if wrapped and wrapped.cleanup:
                 cleanup = await asyncio.create_subprocess_exec(
                     *wrapped.cleanup, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
