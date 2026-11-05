@@ -9,25 +9,38 @@ import time
 from typing import Any
 
 from micropaw.config import CONFIG_DIR
+from micropaw.utils.redact import redact, redact_obj
 
 AUDIT_FILE = CONFIG_DIR / "audit.jsonl"
 _MAX_VALUE = 300  # long arguments (email bodies, file contents) are cut in the log
+_MAX_RESULT = 200
 
 logger = logging.getLogger(__name__)
 
 
-def record(tool: str, args: dict[str, Any], outcome: str, conversation: str, approval: str = "") -> None:
-    """One line per tool call. outcome: ok | error | refused | declined; approval: asked text or ""."""
+def _cut(v: Any) -> Any:
+    return (v[:_MAX_VALUE] + "...") if isinstance(v, str) and len(v) > _MAX_VALUE else v
+
+
+def record(
+    tool: str, args: dict[str, Any], outcome: str, conversation: str, approval: str = "", result: str = "",
+) -> None:
+    """One line per tool call. outcome: ok | error | refused | declined; approval: asked text or "".
+
+    Secrets are redacted before anything is cut, so a key split at the cut cannot survive.
+    """
     entry = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "conversation": conversation,
         "tool": tool,
-        "args": {k: (v[:_MAX_VALUE] + "...") if isinstance(v, str) and len(v) > _MAX_VALUE else v
-                 for k, v in args.items()},
+        "args": {k: _cut(v) for k, v in redact_obj(args).items()},
         "outcome": outcome,
     }
     if approval:
-        entry["approval"] = approval
+        entry["approval"] = redact(approval)
+    if result:
+        preview = redact(result)
+        entry["result"] = preview[:_MAX_RESULT] + ("..." if len(preview) > _MAX_RESULT else "")
     try:
         AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(str(AUDIT_FILE), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
