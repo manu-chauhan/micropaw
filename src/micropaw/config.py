@@ -347,6 +347,8 @@ class Config(BaseModel):
     agents: dict[str, AgentConfig] = {}  # absent = one agent "main" built from the fields above
     routes: dict[str, str] = {}          # "telegram:-100123" or "discord:*" -> agent name
     providers: dict[str, CustomProviderConfig] = {}
+    # Tools shown to the model: auto = a short list for a local model and all of them for a cloud one
+    toolset: Literal["auto", "lean", "all"] = "auto"
 
     @model_validator(mode="after")
     def _check_agents(self) -> Config:

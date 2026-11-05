@@ -66,47 +66,8 @@ def _make_gateway(config: Config, registry, channels):
 
 def _create_registry(config: Config):
     """Create and populate the tool registry, respecting disabled_tools config."""
-    import logging
-
-    from micropaw.tools.base import ToolRegistry
-    from micropaw.tools.calendar_tool import CalendarTool
-    from micropaw.tools.channel_send import ChannelSendTool
-    from micropaw.tools.contacts_tool import ContactsTool
-    from micropaw.tools.cron_tool import CronTool
-    from micropaw.tools.delegate import DelegateTool
-    from micropaw.tools.email_tool import EmailTool
-    from micropaw.tools.file_read import FileReadTool
-    from micropaw.tools.file_write import FileWriteTool
-    from micropaw.tools.files_tool import FilesTool
-    from micropaw.tools.har_tool import HarTool
-    from micropaw.tools.http_request import HttpRequestTool
-    from micropaw.tools.inspect_tool import InspectTool
-    from micropaw.tools.memory_tool import MemoryTool
-    from micropaw.tools.pdf_read import PdfReadTool
-    from micropaw.tools.sessions import SessionsTool
-    from micropaw.tools.shell import ShellTool
-    from micropaw.tools.skill_tool import SkillTool
-    from micropaw.tools.tool_output import ToolOutputTool
-    from micropaw.tools.vision import VisionTool
-    from micropaw.tools.web_browse import WebBrowseTool
-    from micropaw.tools.web_search import WebSearchTool
-
-    disabled = set(config.permissions.disabled_tools)
-    if disabled:
-        logging.getLogger(__name__).info("Disabled tools: %s", ", ".join(sorted(disabled)))
-
-    registry = ToolRegistry()
-    for tool in [
-        WebSearchTool(), WebBrowseTool(), FileReadTool(), FileWriteTool(),
-        ShellTool(), HttpRequestTool(), MemoryTool(), PdfReadTool(),
-        VisionTool(), SessionsTool(), DelegateTool(), CronTool(),
-        EmailTool(), CalendarTool(), ContactsTool(), FilesTool(),
-        ChannelSendTool(), InspectTool(), HarTool(), ToolOutputTool(), SkillTool(),
-    ]:
-        if tool.name not in disabled:
-            registry.register(tool)
-
-    return registry
+    from micropaw.core.toolsets import build_registry
+    return build_registry(config)
 
 
 def _create_channels(config: Config) -> list:

@@ -17,18 +17,17 @@ MAX_PROPOSAL = 3500
 class SkillTool(Tool):
     name = "skill"
     description = (
-        "Skills are short how-to guides. Actions: 'list' (names and descriptions), "
-        "'read' (load one skill by name, and optionally a text file beside it with 'file'), "
-        "'propose' (suggest a new skill with name, description and body; the owner must approve it)."
+        "Skills are short how-to guides. Actions: list, read (a skill by name, or a text file beside it), "
+        "propose (a new skill with name, description and body; the owner must approve it)."
     )
     parameters: dict[str, Any] = {
         "type": "object",
         "properties": {
             "action": {"type": "string", "enum": ["list", "read", "propose"]},
-            "name": {"type": "string", "description": "Skill name: lowercase letters, digits and dashes"},
-            "file": {"type": "string", "description": "For read: a text file in the skill folder"},
-            "description": {"type": "string", "description": "For propose: one line, at most 160 characters"},
-            "body": {"type": "string", "description": "For propose: the instructions, kept short"},
+            "name": {"type": "string", "description": "Skill name (lowercase, digits, dashes)"},
+            "file": {"type": "string", "description": "For read: a file in the skill folder"},
+            "description": {"type": "string", "description": "For propose: one line, 160 characters at most"},
+            "body": {"type": "string", "description": "For propose: the instructions"},
         },
         "required": ["action"],
     }

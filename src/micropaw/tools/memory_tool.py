@@ -22,8 +22,7 @@ def set_store(store: MemoryStore) -> None:
 class MemoryTool(Tool):
     name = "memory"
     description = (
-        "Manage long-term memories. Actions: 'save' (store a memory), "
-        "'search' (find memories by query), 'list' (show all), 'delete' (remove)."
+        "Long-term memory. Actions: save (key and value), search (query), list, delete (key)."
     )
     parameters: dict[str, Any] = {
         "type": "object",
