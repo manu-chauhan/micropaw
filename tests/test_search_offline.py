@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import socket
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
@@ -255,6 +256,15 @@ async def test_airgapped_search_only_connects_to_loopback(kiwix, mode, monkeypat
         return real(self, address)
 
     monkeypatch.setattr(socket.socket, "connect", spy)
+    if sys.platform == "win32":  # asyncio on Windows connects through the proactor, not socket.connect
+        from asyncio import windows_events
+        proactor_connect = windows_events.IocpProactor.connect
+
+        def proactor_spy(self, conn, address):
+            seen.append(address)
+            return proactor_connect(self, conn, address)
+
+        monkeypatch.setattr(windows_events.IocpProactor, "connect", proactor_spy)
     await WebSearchTool().execute({"query": "python"}, ctx())
     assert seen and all(a[0] in ("127.0.0.1", "::1") for a in seen)
 

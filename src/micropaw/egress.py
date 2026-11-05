@@ -314,13 +314,15 @@ def _wrap_multiprocessing(guard: Guard) -> None:
         return original(path, args, passfds)
 
     util.spawnv_passfds = spawnv_passfds
+    if sys.platform == "win32":  # Windows starts children with _winapi.CreateProcess, which the hook already sees
+        return
     try:  # popen_spawn_posix and popen_forkserver bind the name at import
         import multiprocessing.popen_forkserver as pf
         import multiprocessing.popen_spawn_posix as ps
         for mod in (pf, ps):
             if hasattr(mod.util, "spawnv_passfds"):
                 mod.util.spawnv_passfds = spawnv_passfds
-    except ImportError:
+    except (ImportError, AttributeError):  # a platform without fork has neither module
         pass
 
 

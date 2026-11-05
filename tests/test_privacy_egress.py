@@ -51,7 +51,8 @@ def test_connect_names_and_other_families():
     assert addr(g, "socket.connect", "localhost") is None
     assert addr(g, "socket.connect", "gpu-box") is None
     assert "blocked a connection to example.com:443" in addr(g, "socket.connect", "example.com")
-    assert g.decide("socket.connect", (FakeSock(socket.AF_UNIX), "/run/x.sock")) is None
+    if hasattr(socket, "AF_UNIX"):
+        assert g.decide("socket.connect", (FakeSock(socket.AF_UNIX), "/run/x.sock")) is None
     assert g.decide("socket.sendmsg", (FakeSock(), None)) is None
 
 
@@ -123,6 +124,7 @@ def test_denials_keep_hosts_only():
     assert list(g.denied) == ["8.8.8.8:443", "example.com"]
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="bubblewrap paths are Linux only")
 def test_spawn_rules_airgapped():
     g = guard()
     g.wrappers.add("/usr/bin/bwrap")
@@ -151,6 +153,7 @@ def test_spawn_wrapper_needs_the_flags_before_the_first_separator():
                                           None, None)) is not None
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="bubblewrap paths are Linux only")
 def test_spawn_checks_the_program_that_runs_not_only_argv0():
     g = guard()
     g.wrappers.add("/usr/bin/bwrap")

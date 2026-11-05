@@ -242,13 +242,13 @@ def run(idle: int, starts: int) -> dict:
 
 
 def main() -> None:
-    if not sys.platform.startswith("linux"):
-        sys.exit("bench.py reads /proc, so it runs on Linux only.")
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--idle", type=int, default=60, help="idle window in seconds (default 60)")
     ap.add_argument("--starts", type=int, default=5, help="cold starts to time (default 5)")
     ap.add_argument("--json", action="store_true", help="print one JSON object")
     args = ap.parse_args()
+    if not sys.platform.startswith("linux"):
+        sys.exit("bench.py reads /proc, so it runs on Linux only.")
     result = run(args.idle, args.starts)
     if args.json:
         print(json.dumps(result))
