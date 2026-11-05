@@ -569,6 +569,10 @@ class MemoryStore:
         await self._set_meta(key, summary)
         await self.db.commit()
 
+    async def _has_table(self, name: str) -> bool:
+        async with self.db.execute("SELECT 1 FROM sqlite_master WHERE name = ?", (name,)) as cursor:
+            return await cursor.fetchone() is not None
+
     async def checkpoint(self) -> None:
         """Fold the write-ahead log into the database and empty it, so deleted text is not left in -wal."""
         await self.db.commit()
@@ -616,13 +620,14 @@ class MemoryStore:
             except aiosqlite.Error:
                 pass  # the scheduler has not made its tables yet
         await self.db.commit()
-        if self.has_fts:
-            try:
-                # merge the index, so old words do not stay in blocks of their own
-                await self.db.execute("INSERT INTO messages_fts(messages_fts) VALUES('optimize')")
-                await self.db.commit()
-            except aiosqlite.Error as e:
-                logger.debug("Search index merge skipped: %s", e)
+        for index, present in (("messages_fts", self.has_fts), ("chunks_fts", await self._has_table("chunks_fts"))):
+            if present:
+                try:
+                    # merge the index, so old words do not stay in blocks of their own
+                    await self.db.execute(f"INSERT INTO {index}({index}) VALUES('optimize')")
+                    await self.db.commit()
+                except aiosqlite.Error as e:
+                    logger.debug("Search index merge skipped: %s", e)
         await self.compact_storage()
         return counts
 

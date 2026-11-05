@@ -33,6 +33,10 @@ async def ensure_index(db) -> bool:
     except Exception as e:  # no FTS5 in this SQLite build
         logger.debug("chunks_fts not available: %s", e)
         return False
+    try:  # FTS5 keeps the words of deleted rows in its index until a merge, unless told to wipe them
+        await db.execute("INSERT INTO chunks_fts(chunks_fts, rank) VALUES('secure-delete', 1)")
+    except Exception as e:  # SQLite older than 3.42: retention and forget merge or drop the index instead
+        logger.debug("FTS5 secure-delete is not available: %s", e)
     for name, when, body in _TRIGGERS:
         await db.execute(f"CREATE TRIGGER IF NOT EXISTS chunks_fts_{name} {when} BEGIN {body} END")
     await db.execute("INSERT INTO chunks_fts(chunks_fts) VALUES ('rebuild')")  # index what is already there

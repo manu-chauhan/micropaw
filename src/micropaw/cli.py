@@ -448,7 +448,8 @@ def export(conversation_id, fmt, output_file):
 
 
 @main.command()
-@click.option("--all", "everything", is_flag=True, help="Delete every message, memory, document, contact and log.")
+@click.option("--all", "everything", is_flag=True,
+              help="Delete every message, memory, document, contact, scheduled job and log.")
 @click.option("--older-than", "older", default="", metavar="AGE", help="Delete what is older than AGE (30d, 4w).")
 @click.option("--yes", is_flag=True, help="Do not ask first.")
 def forget(everything, older, yes):
@@ -465,7 +466,7 @@ def forget(everything, older, yes):
         if svc.running_gateway():
             _fail(click.ClickException("MicroPaw is running. Stop it first: paw service stop"))
         if not yes:
-            click.confirm("Delete every message, memory, document, contact and log?", abort=True)
+            click.confirm("Delete every message, memory, document, contact, scheduled job and log?", abort=True)
         for problem in storage.forget_all(DB_FILE, CONFIG_DIR):
             console.print(f"[yellow]{problem}[/yellow]")
         console.print("Done. Your config and keys are still there. Files you exported are not touched.")

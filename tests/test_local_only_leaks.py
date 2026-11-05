@@ -313,3 +313,51 @@ async def test_reading_a_local_mode_file_taints_the_turn(tmp_path, monkeypatch):
     c = ctx(False)
     await tool.execute({"action": "read", "path": "n.txt"}, c)
     assert c.tainted
+
+
+def _raw(db) -> bytes:
+    from pathlib import Path
+    db = Path(db)
+    return b"".join(p.read_bytes() for p in (db, db.with_name(db.name + "-wal")) if p.exists())
+
+
+WORDS = (b"zebraquartz", b"flamingoxylo", b"lymphoma")
+TEXT = "zebraquartz lymphoma diagnosis is confidential flamingoxylo " * 30
+
+
+async def test_forget_all_leaves_no_document_words_in_the_search_index_and_clears_jobs(tmp_path):
+    import sqlite3
+
+    from micropaw import storage
+    from micropaw.scheduler import Scheduler
+    db = tmp_path / "data.db"
+    store = MemoryStore(db, NullEmbedding())
+    await store.init()
+    assert await docsearch.ensure_index(store.db)
+    await store.ingest_document("tax.txt", TEXT)
+    sched = Scheduler(str(db), None, None, [])
+    await sched.init()
+    await sched.add_job("remind me about the chemo appointment", 3600, one_shot=True)
+    await sched.close()
+    await store.close()
+    assert all(w in _raw(db) for w in WORDS)
+    assert storage.forget_all(db, tmp_path) == []
+    raw = _raw(db)
+    assert not any(w in raw for w in WORDS) and b"chemo" not in raw
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT COUNT(*) FROM cron_jobs").fetchone()[0] == 0
+    con.close()
+
+
+async def test_retention_leaves_no_old_document_words_in_the_search_index(tmp_path):
+    db = tmp_path / "data.db"
+    store = MemoryStore(db, NullEmbedding())
+    await store.init()
+    assert await docsearch.ensure_index(store.db)
+    await store.ingest_document("tax.txt", TEXT)
+    await store.db.execute("UPDATE document_chunks SET created_at = datetime('now', '-40 days')")
+    await store.db.commit()
+    assert (await store.purge_older_than(30))["chunks"] > 0
+    await store.close()
+    raw = _raw(db)
+    assert not any(w in raw for w in WORDS)
