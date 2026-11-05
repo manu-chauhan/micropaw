@@ -479,17 +479,13 @@ def mcp_refusal(name: str, srv) -> str | None:
     if not local_only():
         return None
     if srv.url:
-        host = urlparse(srv.url).hostname or ""
-        if not local_host(host) and not srv.url.startswith("https://"):
-            return f"MCP server {name} at {host} is not on this machine or a listed LAN host."
-        if airgapped():
-            if not local_host(host):
-                return f"MCP server {name} at {host} is outside this machine, so air-gapped mode refuses it."
-            if name.lower() not in settings().trusted_services and host.lower() not in settings().trusted_services:
-                return (f"MCP server {name} runs outside MicroPaw's sandbox and MicroPaw cannot see where it sends "
-                        f'data. Add "{name}" to privacy.trusted_local_services to use it.')
-        elif not local_host(host):
-            return f"MCP server {name} at {host} is outside your network, so local mode refuses it."
+        host = (urlparse(srv.url).hostname or "").lower()
+        if host not in ("localhost", "127.0.0.1", "::1"):  # the agent's own tools never reach the LAN
+            return (f"MCP server {name} at {host} is not on this machine, so {mode()} mode refuses it. "
+                    "Run it on this machine and use a localhost address.")
+        if airgapped() and name.lower() not in settings().trusted_services and host not in settings().trusted_services:
+            return (f"MCP server {name} runs outside MicroPaw's sandbox and MicroPaw cannot see where it sends "
+                    f'data. Add "{name}" to privacy.trusted_local_services to use it.')
         return None
     base = os.path.basename(srv.command).lower().removesuffix(".cmd").removesuffix(".exe")
     if airgapped() and (base in _DOWNLOADERS or (base == "pipx" and "run" in srv.args)):

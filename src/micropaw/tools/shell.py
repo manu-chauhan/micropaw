@@ -10,6 +10,7 @@ import signal
 from pathlib import Path
 from typing import Any
 
+from micropaw import privacy
 from micropaw.tools import sandbox
 from micropaw.tools.base import Tool, ToolContext
 from micropaw.utils.redact import SECRET_NAME, redact
@@ -165,7 +166,9 @@ class ShellTool(Tool):
             return None  # execute() refuses
         if not context.confirm_dangerous and not context.marked:
             host_always_asks = not sb.active and (os.name == "nt" or sb.host_asks)
-            if sb.may_skip_ask and not host_always_asks:
+            # In local mode a command that can reach the network always asks: it could go around every search approval
+            has_network = privacy.local_only() and (sb.network or not sb.active)
+            if sb.may_skip_ask and not host_always_asks and not has_network:
                 return None
         risky = any(p.search(command) for p in _DANGEROUS_RE)
         warning = "Careful: this can delete or change things.\n" if risky else ""
