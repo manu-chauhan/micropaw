@@ -20,6 +20,7 @@ import httpx
 from micropaw.channels.base import Channel
 from micropaw.config import CONFIG_DIR, CONFIG_FILE, DB_FILE, Config, load_config
 from micropaw.core.agent import Agent
+from micropaw.memory.ledger import Ledger
 from micropaw.memory.store import MemoryStore
 from micropaw.providers.base import AIProvider
 from micropaw.tools.base import ToolRegistry
@@ -220,6 +221,8 @@ class Gateway:
         self._rate_limiter = _RateLimiter(config.rate_limit.messages_per_minute, config.rate_limit.burst_limit)
         self._access = _AccessGuard(config)
         self._approvals = _Approvals(CONFIG_DIR / "approved_actions.json")
+        self._chat_locks: dict[Any, asyncio.Lock] = {}  # one turn at a time per conversation
+        self.ledger: Ledger | None = None  # usage ledger; created on first /usage if nobody set it
 
     async def start(self) -> None:
         """Initialize everything and start all channels."""
@@ -435,6 +438,8 @@ class Gateway:
             lines = [f"- {m['key']}: {m['value']}" + (" (saved after reading outside content)" if m["marked"] else "")
                      for m in memories]
             return "What I remember (remove one with /forget <key>):\n" + "\n".join(lines)
+        if text.lower() == "/usage" and self.store:
+            return await self._usage_text()
         if (m := _FORGET_CMD.match(text)) and self.store:
             key = m.group(1).strip()
             return f"Forgot: {key}" if await self.store.delete_memory(key) else f"Nothing saved as: {key}"
@@ -446,6 +451,26 @@ class Gateway:
         if not job:
             return f"Cron job #{job_id} not found."
         return f"Cron job #{job_id} {action}d: \"{job['description']}\""
+
+    async def _usage_text(self) -> str:
+        """Today's spend by agent and model, with the cap when one is set."""
+        if self.ledger is None:
+            self.ledger = Ledger(self.store.db)
+            await self.ledger.init()
+        rows = await self.ledger.breakdown(1)
+        if not rows:
+            return "No model calls recorded today."
+        total = sum(t.usd for *_, t in rows)
+        cap = self.config.budget.daily_usd
+        lines = [f"Today: ${total:.2f}" + (f" of ${cap:.2f}" if cap else "") + ". It resets at midnight."]
+        for _, agent, model, t in rows:
+            price = f"${t.usd:.2f}" + (" plus calls with no known price" if t.unpriced_tokens else "")
+            lines.append(f"- {agent}, {model}: {price}, {t.tokens:,} tokens, {t.calls} calls")
+        return "\n".join(lines)
+
+    def _chat_lock(self, platform: str, user_id: str, channel_id: str | None) -> asyncio.Lock:
+        key = self.agent.conversations.get_conversation_id(platform, user_id, channel_id)
+        return self._chat_locks.setdefault(key, asyncio.Lock())
 
     async def _handle_message(
         self, text: str, user_id: str, platform: str, channel_id: str | None, media: list | None = None,
@@ -459,7 +484,8 @@ class Gateway:
             return reply
         self._record_channel_activity(platform, user_id, channel_id)
         logger.debug("[%s] %s: %s", platform, user_id, text[:80])
-        response = await self.agent.handle_message(text, user_id, platform, channel_id, media=media)
+        async with self._chat_lock(platform, user_id, channel_id):
+            response = await self.agent.handle_message(text, user_id, platform, channel_id, media=media)
         self._track_usage()
         logger.debug("[%s] MicroPaw: %s", platform, response[:80])
         return redact(response)
@@ -478,9 +504,10 @@ class Gateway:
             return reply
         self._record_channel_activity(platform, user_id, channel_id)
         logger.debug("[%s] %s: %s", platform, user_id, text[:80])
-        response = await self.agent.handle_message_stream(
-            text, user_id, platform, channel_id, on_chunk=on_chunk, media=media,
-        )
+        async with self._chat_lock(platform, user_id, channel_id):
+            response = await self.agent.handle_message_stream(
+                text, user_id, platform, channel_id, on_chunk=on_chunk, media=media,
+            )
         self._track_usage()
         logger.debug("[%s] MicroPaw: %s", platform, response[:80])
         return redact(response)

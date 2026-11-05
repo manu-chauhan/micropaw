@@ -86,6 +86,8 @@ CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id
 CREATE INDEX IF NOT EXISTS idx_memories_key ON memories(key);
 CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_source ON document_chunks(source, user_id);
+CREATE INDEX IF NOT EXISTS idx_memories_user_updated ON memories(user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chunks_user_created ON document_chunks(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts(name COLLATE NOCASE);
 """
 
@@ -104,6 +106,7 @@ class MemoryStore:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._db = await aiosqlite.connect(self.db_path)
         await self._db.execute("PRAGMA journal_mode=WAL")
+        await self._db.execute("PRAGMA synchronous=NORMAL")  # safe with WAL; one fsync less per commit
         await self._db.execute("PRAGMA busy_timeout=5000")
         await self._db.executescript(_SCHEMA)
         await self._migrate()
@@ -128,10 +131,13 @@ class MemoryStore:
                 await self.db.execute(f"ALTER TABLE {table} ADD COLUMN marked INTEGER DEFAULT 0")
 
     async def is_marked(self, conversation_id: str) -> bool:
-        """True once this conversation has read outside content (web, email, files, commands)."""
+        """True once this conversation has read outside content (web, email, files, commands).
+
+        A summary made from marked messages keeps the mark too, even if the conversation row is reset.
+        """
         async with self.db.execute("SELECT marked FROM conversations WHERE id = ?", (conversation_id,)) as cur:
             row = await cur.fetchone()
-        return bool(row and row[0])
+        return bool(row and row[0]) or await self._get_meta(f"summary_marked:{conversation_id}") is not None
 
     async def set_marked(self, conversation_id: str) -> None:
         await self.db.execute("UPDATE conversations SET marked = 1 WHERE id = ?", (conversation_id,))
@@ -265,6 +271,8 @@ class MemoryStore:
     # --- Conversations ---
 
     async def get_or_create_conversation(self, conv_id: str, platform: str, user_id: str) -> str:
+        """Create the row on first use. An existing row is left alone (save_messages bumps updated_at),
+        so a normal turn opens no write transaction before the model answers."""
         async with self.db.execute("SELECT id FROM conversations WHERE id = ?", (conv_id,)) as cursor:
             row = await cursor.fetchone()
 
@@ -273,11 +281,7 @@ class MemoryStore:
                 "INSERT INTO conversations (id, platform, user_id) VALUES (?, ?, ?)",
                 (conv_id, platform, user_id),
             )
-        else:
-            await self.db.execute(
-                "UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (conv_id,)
-            )
-        await self.db.commit()
+            await self.db.commit()
         return conv_id
 
     async def list_conversations(self) -> list[dict]:
@@ -307,14 +311,28 @@ class MemoryStore:
 
     # --- Messages ---
 
-    async def save_message(self, conversation_id: str, message: Message) -> None:
+    @staticmethod
+    def _message_row(conversation_id: str, message: Message) -> tuple:
         tool_calls_json = (
             json.dumps([{"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in message.tool_calls])
             if message.tool_calls else None
         )
-        await self.db.execute(
+        return (conversation_id, message.role, message.content, tool_calls_json, message.tool_call_id)
+
+    async def save_message(self, conversation_id: str, message: Message) -> None:
+        await self.save_messages(conversation_id, [message])
+
+    async def save_messages(self, conversation_id: str, messages: list[Message]) -> None:
+        """Save a turn's messages in one transaction (one commit)."""
+        if not messages:
+            await self.db.commit()  # still ends the turn's open transaction
+            return
+        await self.db.executemany(
             "INSERT INTO messages (conversation_id, role, content, tool_calls, tool_call_id) VALUES (?, ?, ?, ?, ?)",
-            (conversation_id, message.role, message.content, tool_calls_json, message.tool_call_id),
+            [self._message_row(conversation_id, m) for m in messages],
+        )
+        await self.db.execute(
+            "UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (conversation_id,),
         )
         await self.db.commit()
 
@@ -338,35 +356,46 @@ class MemoryStore:
             messages.append(Message(role=role, content=content, tool_calls=tool_calls, tool_call_id=tool_call_id))
         return messages
 
-    async def compact_messages(self, conversation_id: str, summary: str, keep_recent: int) -> None:
+    async def keep_boundary(self, conversation_id: str, keep_recent: int) -> int | None:
+        """Id of the oldest of the last `keep_recent` messages (compaction deletes everything before it)."""
+        async with self.db.execute(
+            "SELECT MIN(id) FROM (SELECT id FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?)",
+            (conversation_id, keep_recent),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return row[0] if row else None
+
+    async def compact_messages(
+        self, conversation_id: str, summary: str, keep_recent: int, marked: bool = False,
+        before_id: int | None = None,
+    ) -> None:
         """Delete old messages, keep the last N, and persist the summary.
 
-        Uses a per-conversation lock to prevent concurrent compaction from
-        corrupting the message history.
+        `before_id` (from keep_boundary, taken before the summary was written) limits the delete to what
+        the summary covers, so messages saved meanwhile survive. `marked` keeps the mark on the summary.
+        Uses a per-conversation lock to prevent concurrent compaction from corrupting the message history.
         """
         lock = self._compact_locks.setdefault(conversation_id, asyncio.Lock())
         async with lock:
-            await self._compact_messages_inner(conversation_id, summary, keep_recent)
+            await self._compact_messages_inner(conversation_id, summary, keep_recent, marked, before_id)
 
-    async def _compact_messages_inner(self, conversation_id: str, summary: str, keep_recent: int) -> None:
-        async with self.db.execute(
-            "SELECT id FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
-            (conversation_id, keep_recent),
-        ) as cursor:
-            keep_ids = [r[0] for r in await cursor.fetchall()]
-
-        if not keep_ids:
+    async def _compact_messages_inner(
+        self, conversation_id: str, summary: str, keep_recent: int, marked: bool, before_id: int | None,
+    ) -> None:
+        if before_id is None:
+            before_id = await self.keep_boundary(conversation_id, keep_recent)
+        if before_id is None:
             return
-
-        min_kept = min(keep_ids)
 
         # Delete all messages older than the kept ones
         await self.db.execute(
             "DELETE FROM messages WHERE conversation_id = ? AND id < ?",
-            (conversation_id, min_kept),
+            (conversation_id, before_id),
         )
         # Store summary in kv_meta (avoids ID ordering issues with messages table).
         # get_messages_with_summary() injects it before the kept messages.
+        if marked:
+            await self._set_meta(f"summary_marked:{conversation_id}", "1")
         await self._set_meta(f"summary:{conversation_id}", summary)
         await self.db.commit()
 

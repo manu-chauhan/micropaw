@@ -12,11 +12,14 @@ from typing import Any
 import httpx
 
 from micropaw.config import Config
-from micropaw.core.context import KEEP_RECENT, ContextManager
-from micropaw.core.conversation import ConversationManager
+from micropaw.core.context import ContextManager
+from micropaw.core.conversation import MAX_HISTORY, ConversationManager, sanitize_history
 from micropaw.memory.store import MemoryStore
-from micropaw.providers.base import AIProvider, AIResponse, MediaItem, Message
+from micropaw.providers.base import AIProvider, AIResponse, MediaItem, Message, ToolCall
+from micropaw.providers.metered import BudgetExceeded
 from micropaw.tools.base import ToolContext, ToolRegistry, ToolResult, run_tool
+from micropaw.tools.tool_output import shorten
+from micropaw.utils.prices import is_local_provider
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +31,9 @@ _CACHEABLE_TOOLS = frozenset({"web_search", "pdf_read", "vision"})
 _INGEST_TOOLS = frozenset({"file_read", "pdf_read", "web_browse"})
 _MIN_INGEST_SIZE = 500  # only ingest results larger than this
 _INTERNAL_PLATFORMS = frozenset({"heartbeat", "system"})
+# Calls that only read can run side by side. The rest run one at a time, in the order the model gave.
+_READ_ONLY_TOOLS = frozenset({"web_search", "file_read", "pdf_read", "inspect", "har", "tool_output"})
+_READ_ONLY_ACTIONS = {"memory": frozenset({"search", "list"}), "sessions": frozenset({"list", "info"})}
 
 # Approver(platform, chat_id, tool_name, text, marked) -> owner said yes. Set by the gateway.
 Approver = Callable[[str, str, str, str, bool], Awaitable[bool]]
@@ -79,6 +85,9 @@ class Agent:
         self.session_usage: dict[str, int] = {"input": 0, "output": 0}
         self.message_count: int = 0
         self._file_cache: dict[str, tuple[float, str]] = {}  # path → (mtime, content)
+        self.turn_usage: dict[str, dict[str, int]] = {}  # conversation id -> usage of its latest turn
+        self.ledger = None  # set by the gateway when budgets are on; carries the "budget nearly used" note
+        self._compact_tasks: dict[str, asyncio.Task] = {}  # one background compaction per conversation
 
     def _build_tool_context(
         self, conv_id: str, user_id: str, platform: str, channel_id: str | None = None,
@@ -224,32 +233,64 @@ class Agent:
         conv_id = self.conversations.get_conversation_id(platform, user_id, channel_id)
         # Use "dm" as platform for unified DM conversations to avoid arbitrary first-writer
         store_platform = "dm" if conv_id.startswith("dm:") else platform
-        history = await self.conversations.load_history(conv_id, store_platform, user_id)
-        marked = await self.store.is_marked(conv_id)
+
+        async def nothing() -> list:
+            return []
+
         # Memories and documents belong to the owner's DMs. Group chats never see
         # them, or anything read in private would leak to everyone in the group.
-        memories: list[dict] = []
-        docs: list[dict] = []
-        if channel_id is None:
-            memories = await self.store.get_recent_memories(10, user_id="_global")
-            docs = await self.store.search_documents(text, limit=5, user_id="_global")
+        private = channel_id is None
+        history, marked, memories, docs, summary = await asyncio.gather(
+            self.conversations.load_history(conv_id, store_platform, user_id),
+            self.store.is_marked(conv_id),
+            self.store.get_recent_memories(10, user_id="_global") if private else nothing(),
+            self.store.search_documents(text, limit=5, user_id="_global") if private else nothing(),
+            self.store.get_summary(conv_id),
+        )
         # Stored documents came from outside, and memories saved while marked carry that mark
         marked = marked or bool(docs) or any(m.get("marked") for m in memories)
 
         system = Message(role="system", content=self._build_system_prompt(platform))
-        summary = await self.store.get_summary(conv_id)
-        messages, new_summary = await self.context_manager.compact(
-            [system, *history, Message(role="user", content=text)], self.fast_provider or self.provider,
-        )
-        if new_summary:
-            await self.store.compact_messages(conv_id, new_summary, KEEP_RECENT)
-            summary = new_summary
-        turns = [m for m in messages if m.role != "system"]
         context = self._context_block(memories, docs, summary)
-        turns[-1] = Message(role="user", content=f"{context}\n\n{text}", media=images or [])
+        user_msg = Message(role="user", content=f"{context}\n\n{text}", media=images or [])
+        return conv_id, [system, *history, user_msg], marked
 
-        await self.conversations.save_message(conv_id, Message(role="user", content=text))
-        return conv_id, [system, *turns], marked
+    def _window_tokens(self) -> int:
+        """The model's context size: the config value, else 8192 for local servers and 100000 for cloud."""
+        return self.config.context.window_tokens or (8192 if is_local_provider(self.provider) else 100_000)
+
+    def _schedule_compaction(self, conv_id: str, messages: list[Message]) -> None:
+        """After the reply: summarize old messages in the background, one task per conversation."""
+        if not self.context_manager.needs_compaction(messages, self._window_tokens()):
+            return
+        task = self._compact_tasks.get(conv_id)
+        if task and not task.done():
+            return
+        task = asyncio.create_task(self._compact(conv_id))
+        self._compact_tasks[conv_id] = task
+
+        def forget(done: asyncio.Task) -> None:
+            if self._compact_tasks.get(conv_id) is done:
+                del self._compact_tasks[conv_id]
+
+        task.add_done_callback(forget)
+
+    async def _compact(self, conv_id: str) -> None:
+        window = self._window_tokens()
+        try:
+            history = sanitize_history(await self.store.get_messages(conv_id, MAX_HISTORY))
+            keep = self.context_manager.keep_count(history, window)
+            boundary = await self.store.keep_boundary(conv_id, keep)
+            previous = await self.store.get_summary(conv_id)
+            _, summary = await self.context_manager.compact(
+                history, self.fast_provider or self.provider, previous, window, force=True,
+            )
+            if summary:
+                await self.store.compact_messages(
+                    conv_id, summary, keep, marked=await self.store.is_marked(conv_id), before_id=boundary,
+                )
+        except Exception as e:
+            logger.warning("Background compaction failed for %s: %s", conv_id, e)
 
     async def _cleanup_browse_session(self, conv_id: str) -> None:
         """Close any browser session opened during this agent turn."""
@@ -345,6 +386,7 @@ class Agent:
         cache: dict[tuple, str | ToolResult] = {}
 
         conv_id, messages, was_marked = await self._prepare(text, user_id, platform, channel_id, send_typing, images)
+        pending = [Message(role="user", content=text)]  # saved together at the end of the turn
         tool_defs = self.registry.to_tool_defs()
         ctx = self._build_tool_context(conv_id, user_id, platform, channel_id)
         ctx.marked = was_marked
@@ -370,20 +412,92 @@ class Agent:
                         reply = response.content or "I'm not sure how to respond to that."
                     break
 
-                messages = await self._execute_tools(messages, response, ctx, conv_id, cache)
+                messages = await self._execute_tools(messages, response, ctx, conv_id, cache, pending)
                 await _safe_typing(send_typing)
             else:
                 reply = (response.content if response and response.content
                          else "I've been working on this for a while. Here's what I have so far.")
-            await self.conversations.save_message(conv_id, Message(role="assistant", content=reply))
+            pending.append(Message(role="assistant", content=reply))
+            if self.ledger is not None and (note := self.ledger.take_warning()):
+                if on_chunk:
+                    await on_chunk(f"\n\n{note}")
+                reply = f"{reply}\n\n{note}"
             return reply
         finally:
-            self.last_usage = usage
+            self.last_usage = self.turn_usage[conv_id] = usage
             for k in usage:
                 self.session_usage[k] += usage[k]
+            try:
+                await self.conversations.save_messages(conv_id, pending)
+            except Exception as e:
+                logger.error("Could not save the turn for %s: %s", conv_id, e)
             if ctx.marked and not was_marked:
                 await self.store.set_marked(conv_id)
             await self._cleanup_browse_session(conv_id)
+            self._schedule_compaction(conv_id, messages)
+
+    def _can_run_together(self, tc: ToolCall, ctx: ToolContext) -> bool:
+        """True when this call only reads and will not ask the owner, so it may run beside others."""
+        tool = self.registry.get(tc.name)
+        if tool is None:
+            return False
+        if tc.name not in _READ_ONLY_TOOLS and tc.arguments.get("action") not in _READ_ONLY_ACTIONS.get(tc.name, ()):
+            return False
+        try:
+            return not tool.needs_approval(tc.arguments, ctx)
+        except Exception:
+            return False
+
+    async def _run_call(
+        self, tc: ToolCall, tool_context: ToolContext, cache: dict[tuple, str | ToolResult],
+    ) -> str | ToolResult:
+        tool = self.registry.get(tc.name)
+        if tool is None:
+            logger.warning("Unknown tool called: %s", tc.name)
+            return f"Unknown tool: {tc.name}"
+        logger.info("[%s] %s", tc.name, _summarize_args(tc.arguments))
+        ck = _cache_key(tc.name, tc.arguments) if tc.name in _CACHEABLE_TOOLS else None
+        if ck and ck in cache:
+            logger.debug("[%s] cache hit", tc.name)
+            return cache[ck]
+        try:
+            result = await run_tool(tool, tc.arguments, tool_context)
+        except Exception as e:
+            result = f"Tool error: {e}"
+            logger.error("[%s] %s", tc.name, e)
+        if ck:
+            text = result.text if isinstance(result, ToolResult) else result
+            if not text.startswith(("Tool error:", "Error:")):
+                cache[ck] = result
+        return result
+
+    async def _run_calls(
+        self, calls: list[ToolCall], tool_context: ToolContext, cache: dict[tuple, str | ToolResult],
+    ) -> list[str | ToolResult]:
+        """Run the calls in the order given, except that a run of read-only calls goes side by side.
+
+        Anything that writes or asks the owner runs alone, so it never overtakes a call before it.
+        Results come back in call order.
+        """
+        results: list[str | ToolResult] = []
+        i = 0
+        while i < len(calls):
+            j = i
+            seen: set[tuple] = set()
+            while j < len(calls) and self._can_run_together(calls[j], tool_context):
+                ck = _cache_key(calls[j].name, calls[j].arguments) if calls[j].name in _CACHEABLE_TOOLS else None
+                if ck in seen:  # the same lookup twice: let the second one hit the cache
+                    break
+                if ck:
+                    seen.add(ck)
+                j += 1
+            if j - i > 1:
+                results += await asyncio.gather(*(self._run_call(tc, tool_context, cache) for tc in calls[i:j]))
+            else:
+                j = i + 1
+                results.append(await self._run_call(calls[i], tool_context, cache))
+            i = j
+        return results
 
     async def _execute_tools(
         self,
@@ -392,36 +506,20 @@ class Agent:
         tool_context: ToolContext,
         conv_id: str,
         cache: dict[tuple, str | ToolResult],
+        pending: list[Message] | None = None,
     ) -> list[Message]:
-        """Execute tool calls from a response, append results to messages."""
+        """Execute tool calls from a response, append results to messages.
+
+        New messages go to `pending` (the turn saves them in one commit); without it they are saved here.
+        """
         assistant_msg = Message(
             role="assistant", content=response.content, tool_calls=response.tool_calls, thinking=response.thinking,
         )
         messages.append(assistant_msg)
-        await self.conversations.save_message(conv_id, assistant_msg)
+        new = [assistant_msg]
 
-        for tc in response.tool_calls:
-            tool = self.registry.get(tc.name)
-            if tool:
-                logger.info("[%s] %s", tc.name, _summarize_args(tc.arguments))
-                ck = _cache_key(tc.name, tc.arguments) if tc.name in _CACHEABLE_TOOLS else None
-                if ck and ck in cache:
-                    result = cache[ck]
-                    logger.debug("[%s] cache hit", tc.name)
-                else:
-                    try:
-                        result = await run_tool(tool, tc.arguments, tool_context)
-                    except Exception as e:
-                        result = f"Tool error: {e}"
-                        logger.error("[%s] %s", tc.name, e)
-                    if ck:
-                        text = result.text if isinstance(result, ToolResult) else result
-                        if not text.startswith(("Tool error:", "Error:")):
-                            cache[ck] = result
-            else:
-                result = f"Unknown tool: {tc.name}"
-                logger.warning("Unknown tool called: %s", tc.name)
-
+        results = await self._run_calls(response.tool_calls, tool_context, cache)
+        for tc, result in zip(response.tool_calls, results):
             # Normalize to text + media
             if isinstance(result, ToolResult):
                 content_text = result.text
@@ -439,10 +537,15 @@ class Agent:
                 source = tc.arguments.get("path") or tc.arguments.get("url") or "unknown"
                 asyncio.create_task(self._auto_ingest(source, content_text, "_global"))
 
-            tool_msg = Message(role="tool", content=content_text, tool_call_id=tc.id, media=media)
+            shown = await shorten(conv_id, content_text)
+            tool_msg = Message(role="tool", content=shown, tool_call_id=tc.id, media=media)
             messages.append(tool_msg)
-            await self.conversations.save_message(conv_id, tool_msg)
+            new.append(tool_msg)
 
+        if pending is None:
+            await self.conversations.save_messages(conv_id, new)
+        else:
+            pending.extend(new)
         return messages
 
     async def _auto_ingest(self, source: str, content: str, user_id: str) -> None:
@@ -469,6 +572,8 @@ _HTTP_ERRORS = {
 
 def _classify_error(e: Exception) -> str:
     """Turn a provider exception into a user-friendly message."""
+    if isinstance(e, BudgetExceeded):
+        return str(e)
     if isinstance(e, httpx.ConnectError):
         return "Cannot connect to the AI provider. Check your network or if Ollama is running."
     if isinstance(e, httpx.TimeoutException):

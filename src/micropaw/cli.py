@@ -116,6 +116,7 @@ def _create_registry(config: Config):
     from micropaw.tools.pdf_read import PdfReadTool
     from micropaw.tools.sessions import SessionsTool
     from micropaw.tools.shell import ShellTool
+    from micropaw.tools.tool_output import ToolOutputTool
     from micropaw.tools.vision import VisionTool
     from micropaw.tools.web_browse import WebBrowseTool
     from micropaw.tools.web_search import WebSearchTool
@@ -130,7 +131,7 @@ def _create_registry(config: Config):
         ShellTool(), HttpRequestTool(), MemoryTool(), PdfReadTool(),
         VisionTool(), SessionsTool(), DelegateTool(), CronTool(),
         EmailTool(), CalendarTool(), ContactsTool(), FilesTool(),
-        ChannelSendTool(), InspectTool(), HarTool(),
+        ChannelSendTool(), InspectTool(), HarTool(), ToolOutputTool(),
     ]:
         if tool.name not in disabled:
             registry.register(tool)
@@ -896,6 +897,37 @@ def mcp_trust(name):
     if click.confirm("Trust this tool list?", default=False):
         pin_mcp_tools(name, digest)
         console.print("[green]Trusted.[/green]")
+
+
+@main.command()
+@click.option("--days", default=7, show_default=True, help="How many days back to show.")
+def usage(days):
+    """Show model usage and spend by day, agent and model."""
+    async def _usage():
+        from micropaw.memory.ledger import Ledger
+        from micropaw.memory.store import MemoryStore
+        store = MemoryStore(DB_FILE)
+        await store.init()
+        try:
+            ledger = Ledger(store.db)
+            await ledger.init()
+            rows = await ledger.breakdown(days)
+        finally:
+            await store.close()
+        if not rows:
+            console.print("[dim]No model calls recorded yet.[/dim]")
+            return
+        table = Table(title=f"Usage, last {days} day(s)")
+        for col in ("Day", "Agent", "Model", "USD", "Tokens", "Calls"):
+            table.add_column(col, justify="right" if col in ("USD", "Tokens", "Calls") else "left")
+        for day, agent, model, t in rows:
+            usd = f"{t.usd:.2f}" + ("+" if t.unpriced_tokens else "")
+            table.add_row(day, agent, model, usd, f"{t.tokens:,}", str(t.calls))
+        console.print(table)
+        if any(t.unpriced_tokens for *_, t in rows):
+            console.print("[dim]+ means some calls had no known price and are not in the USD figure.[/dim]")
+
+    asyncio.run(_usage())
 
 
 @main.group()
