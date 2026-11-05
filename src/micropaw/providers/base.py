@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 from abc import ABC
@@ -16,17 +17,26 @@ logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 1.0  # seconds
+CONNECT_TIMEOUT = 5.0  # an unreachable host fails fast instead of hanging for the read timeout
+
+# Set by the fallback chain around a provider that has another one behind it: failing over beats sleeping.
+NO_RETRY: contextvars.ContextVar[bool] = contextvars.ContextVar("micropaw_no_retry", default=False)
+
+
+def http_timeout(read: float) -> httpx.Timeout:
+    return httpx.Timeout(read, connect=CONNECT_TIMEOUT)
 
 
 async def retry_on_transient(func, *args, **kwargs):
     """Retry an async function on transient HTTP errors (429, 503) with exponential backoff."""
     last_exc = None
-    for attempt in range(MAX_RETRIES + 1):
+    max_retries = 0 if NO_RETRY.get() else MAX_RETRIES
+    for attempt in range(max_retries + 1):
         try:
             return await func(*args, **kwargs)
         except httpx.HTTPStatusError as e:
             last_exc = e
-            if e.response.status_code in (429, 503) and attempt < MAX_RETRIES:
+            if e.response.status_code in (429, 503) and attempt < max_retries:
                 # Check for Retry-After header
                 retry_after = e.response.headers.get("retry-after")
                 if retry_after:
@@ -38,7 +48,7 @@ async def retry_on_transient(func, *args, **kwargs):
                     delay = RETRY_BASE_DELAY * (2 ** attempt)
                 logger.warning(
                     "Retrying after %s (attempt %d/%d, status %d)",
-                    f"{delay:.1f}s", attempt + 1, MAX_RETRIES, e.response.status_code,
+                    f"{delay:.1f}s", attempt + 1, max_retries, e.response.status_code,
                 )
                 await asyncio.sleep(delay)
             else:

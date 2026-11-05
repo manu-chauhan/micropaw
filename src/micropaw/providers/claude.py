@@ -9,7 +9,15 @@ from collections.abc import AsyncGenerator
 
 import httpx
 
-from micropaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef, parse_sse
+from micropaw.providers.base import (
+    AIProvider,
+    AIResponse,
+    Message,
+    ToolCall,
+    ToolDef,
+    http_timeout,
+    parse_sse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +41,7 @@ class ClaudeProvider(AIProvider):
         self.max_tokens = max_tokens
         self.effort = effort
         self._api_url = f"{base_url.rstrip('/')}/v1/messages"
-        self._client = httpx.AsyncClient(timeout=120.0)
+        self._client = httpx.AsyncClient(timeout=http_timeout(120.0))
 
     def _headers(self) -> dict[str, str]:
         return {

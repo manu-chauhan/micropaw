@@ -45,8 +45,9 @@ def sanitize_history(messages: list[Message]) -> list[Message]:
 
 
 class ConversationManager:
-    def __init__(self, store: MemoryStore) -> None:
+    def __init__(self, store: MemoryStore, prefix: str = "") -> None:
         self.store = store
+        self.prefix = prefix  # "agent:<name>:" gives an agent its own conversations
         self._global_override: str | None = None
         self._channel_overrides: dict[str, str] = {}  # platform → conv_id
 
@@ -59,16 +60,16 @@ class ConversationManager:
         Priority: group → per-channel override → global override → default.
         """
         if channel_id:
-            return f"{platform}:{channel_id}"
+            return f"{self.prefix}{platform}:{channel_id}"
         if platform in self._channel_overrides:
-            return self._channel_overrides[platform]
+            return self.prefix + self._channel_overrides[platform]
         if self._global_override:
-            return self._global_override
-        return _DM_CONV_ID
+            return self.prefix + self._global_override
+        return self.prefix + _DM_CONV_ID
 
     def current_shared_id(self) -> str:
         """Return the current shared DM conversation ID."""
-        return self._global_override or _DM_CONV_ID
+        return self.prefix + (self._global_override or _DM_CONV_ID)
 
     async def load_history(self, conversation_id: str, platform: str, user_id: str) -> list[Message]:
         await self.store.get_or_create_conversation(conversation_id, platform, user_id)

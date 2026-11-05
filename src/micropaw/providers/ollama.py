@@ -4,51 +4,139 @@ from __future__ import annotations
 
 import base64
 import logging
+import os
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator
+from dataclasses import dataclass
 
 import httpx
 
-from micropaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef, parse_sse
+from micropaw.providers.base import (
+    AIProvider,
+    AIResponse,
+    Message,
+    ToolCall,
+    ToolDef,
+    http_timeout,
+    parse_sse,
+)
 
 logger = logging.getLogger(__name__)
+
+_GIB = 2**30
+
+
+def ram_bytes() -> int | None:
+    """Physical memory, or None when it cannot be read. No psutil."""
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            class _MemStatus(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            status = _MemStatus()
+            status.dwLength = ctypes.sizeof(_MemStatus)
+            if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):  # type: ignore[attr-defined]
+                return None
+            return int(status.ullTotalPhys)
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (AttributeError, ValueError, OSError):
+        return None
+
+
+def default_num_ctx(ram: int | None = None) -> int:
+    """8192 on a machine with 16 GB or less (or unknown), else 16384. The KV cache grows with it."""
+    ram = ram_bytes() if ram is None else ram
+    return 16384 if ram and ram > 17 * _GIB else 8192
+
+
+@dataclass(frozen=True)
+class ShowInfo:
+    caps: frozenset[str] | None  # None: this Ollama is too old to list capabilities
+    ctx: int | None              # the model's own maximum context
+
+    @property
+    def tools(self) -> bool:
+        return self.caps is None or "tools" in self.caps
+
+    @property
+    def vision(self) -> bool:
+        return self.caps is not None and "vision" in self.caps
+
+
+def parse_show(data: dict) -> ShowInfo:
+    """Read /api/show: `capabilities` (completion, vision, tools, thinking, embedding) and the context size."""
+    caps = data.get("capabilities")
+    ctx = next((v for k, v in (data.get("model_info") or {}).items()
+                if k.endswith(".context_length") and isinstance(v, int)), None)
+    return ShowInfo(frozenset(caps) if isinstance(caps, list) else None, ctx)
+
+
+async def fetch_show(client: httpx.AsyncClient, host: str, model: str) -> ShowInfo | None:
+    """None when the model is not pulled or the server cannot be reached."""
+    try:
+        resp = await client.post(f"{host}/api/show", json={"model": model})
+        resp.raise_for_status()
+        return parse_show(resp.json())
+    except (httpx.HTTPError, ValueError):
+        return None
+
+
+async def pull_model(host: str, model: str) -> AsyncIterator[dict]:
+    """Stream /api/pull progress: {"status", "total", "completed"} dicts, ending with status "success"."""
+    async with httpx.AsyncClient(timeout=httpx.Timeout(None, connect=5.0)) as client:
+        async with client.stream("POST", f"{host.rstrip('/')}/api/pull", json={"model": model}) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                chunk = parse_sse(line, prefix="")
+                if chunk is not None:
+                    if chunk.get("error"):
+                        raise RuntimeError(chunk["error"])
+                    yield chunk
 
 
 class OllamaProvider(AIProvider):
     name = "ollama"
 
-    def __init__(self, host: str = "http://localhost:11434", model: str = "llama3.1", max_tokens: int = 4096) -> None:
+    def __init__(
+        self, host: str = "http://localhost:11434", model: str = "llama3.1", max_tokens: int = 4096,
+        num_ctx: int = 0, keep_alive: str = "30m",
+    ) -> None:
         host = host.rstrip("/")
         if not host.startswith(("http://", "https://")):
             host = f"http://{host}"
         self.host = host
         self.model = model
         self.max_tokens = max_tokens
-        self._client = httpx.AsyncClient(timeout=300.0)  # local models can be slow
-        self._tools_supported = True  # set False if model rejects tools
+        self.num_ctx = num_ctx or default_num_ctx()
+        self.keep_alive = keep_alive
+        self._client = httpx.AsyncClient(timeout=http_timeout(300.0))  # local models can be slow
+        self._tools_supported = True  # set False when /api/show or the server says no
+        self.info: ShowInfo | None = None  # from /api/show, filled by load_capabilities()
+        self.missing = False  # the model is not pulled
 
     def _url(self) -> str:
         return f"{self.host}/api/chat"
 
-    async def check_tool_support(self) -> bool:
-        """Probe whether the model supports tool calling. Call once at startup."""
-        try:
-            dummy_tool = {
-                "type": "function",
-                "function": {"name": "test", "description": "test", "parameters": {"type": "object", "properties": {}}},
-            }
-            resp = await self._client.post(self._url(), json={
-                "model": self.model, "stream": False,
-                "messages": [{"role": "user", "content": "hi"}],
-                "tools": [dummy_tool], "options": {"num_predict": 1},
-            })
-            if resp.status_code == 400 and "does not support tools" in resp.text:
-                logger.warning("Model %s does not support tools — tool use disabled", self.model)
-                self._tools_supported = False
-                return False
-        except Exception:
-            pass  # network error — assume tools supported, will fail at runtime
-        return True
+    async def load_capabilities(self) -> ShowInfo | None:
+        """Read /api/show once (cached). Never loads the model into memory."""
+        if self.info is None:
+            self.info = await fetch_show(self._client, self.host, self.model)
+            self.missing = self.info is None
+            if self.info is not None:
+                self._tools_supported = self.info.tools
+        return self.info
+
+    def _ctx(self) -> int:
+        ceiling = self.info.ctx if self.info and self.info.ctx else self.num_ctx
+        return min(self.num_ctx, ceiling)
 
     def _build_body(self, messages: list[Message], tools: list[ToolDef] | None = None, stream: bool = False) -> dict:
         if not self._tools_supported:
@@ -81,7 +169,8 @@ class OllamaProvider(AIProvider):
             "model": self.model,
             "messages": api_messages,
             "stream": stream,
-            "options": {"num_predict": self.max_tokens},
+            "options": {"num_predict": self.max_tokens, "num_ctx": self._ctx()},
+            "keep_alive": self.keep_alive,
         }
         if tools:
             body["tools"] = [

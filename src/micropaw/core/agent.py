@@ -14,8 +14,10 @@ import httpx
 from micropaw.config import Config
 from micropaw.core.context import ContextManager
 from micropaw.core.conversation import MAX_HISTORY, ConversationManager, sanitize_history
+from micropaw.core.profile import AgentProfile
 from micropaw.memory.store import MemoryStore
 from micropaw.providers.base import AIProvider, AIResponse, MediaItem, Message, ToolCall
+from micropaw.providers.failover import AllProvidersFailedError, FriendlyError
 from micropaw.providers.metered import BudgetExceeded
 from micropaw.tools.base import ToolContext, ToolRegistry, ToolResult, run_tool
 from micropaw.tools.tool_output import shorten
@@ -61,18 +63,23 @@ async def _safe_typing(send_typing: Callable[[], Awaitable[None]] | None) -> Non
 class Agent:
     """Core agent loop: chat with the LLM, execute tools, repeat until done."""
 
+    profile: AgentProfile | None = None
+
     def __init__(
         self,
         config: Config,
         provider: AIProvider,
         registry: ToolRegistry,
         store: MemoryStore,
+        profile: AgentProfile | None = None,
     ) -> None:
-        self.config = config
+        self.config = config  # for a named agent: its own persona and workspace already applied
+        self.profile = profile
+        self.name = profile.name if profile else "main"
         self.provider = provider
-        self.registry = registry
+        self.registry = registry  # for a named agent: a ToolView with its allow/deny rules
         self.store = store
-        self.conversations = ConversationManager(store)
+        self.conversations = ConversationManager(store, profile.prefix if profile else "")
         self.context_manager = ContextManager(
             max_history=config.context.max_history_messages,
             compaction_threshold=config.context.compaction_threshold,
@@ -145,7 +152,8 @@ class Agent:
         parts.append(f"You are {self.config.persona.name}, an AI assistant.")
 
         # Persona: SOUL.md overrides default personality if present
-        soul = self._cached_file("SOUL.md")
+        # SOUL.md is the main agent's persona; an agent with its own personality keeps it
+        soul = "" if self.profile and self.profile.personality else self._cached_file("SOUL.md")
         parts.append(soul or f"You are {self.config.persona.personality}.")
         parts.append("Help users by chatting naturally and using tools when needed.")
         parts.append("Keep responses concise and conversational.")
@@ -572,7 +580,9 @@ _HTTP_ERRORS = {
 
 def _classify_error(e: Exception) -> str:
     """Turn a provider exception into a user-friendly message."""
-    if isinstance(e, BudgetExceeded):
+    if isinstance(e, AllProvidersFailedError) and e.__cause__ is not None:
+        e = e.__cause__  # say what went wrong with the last provider
+    if isinstance(e, (FriendlyError, BudgetExceeded)):
         return str(e)
     if isinstance(e, httpx.ConnectError):
         return "Cannot connect to the AI provider. Check your network or if Ollama is running."

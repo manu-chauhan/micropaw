@@ -18,57 +18,24 @@ from micropaw.config import (
     CONFIG_DIR,
     CONFIG_FILE,
     DB_FILE,
-    OPENAI_COMPATIBLE,
     Config,
     config_exists,
     display_config,
     load_config,
 )
+from micropaw.core.profile import ProfileError, build_runtimes
+from micropaw.providers.registry import Registry
 from micropaw.utils.logger import quiet_console, setup_logging
 
 console = Console()
 
 
-def _create_single_provider(provider_name: str, config: Config, model: str = ""):
-    """Create a single AI provider by name, optionally with a different model."""
-    if provider_name == "claude":
-        from micropaw.providers.claude import ClaudeProvider
-        cfg = config.provider_config.claude
-        if not cfg.api_key:
-            return None
-        return ClaudeProvider(cfg.api_key, model or cfg.model, cfg.max_tokens, cfg.base_url, effort=cfg.effort)
-    elif provider_name == "openai":
-        from micropaw.providers.openai import OpenAIProvider
-        cfg = config.provider_config.openai
-        if not cfg.api_key:
-            return None
-        return OpenAIProvider(cfg.api_key, model or cfg.model, cfg.max_tokens, cfg.base_url)
-    elif provider_name == "ollama":
-        from micropaw.providers.ollama import OllamaProvider
-        cfg = config.provider_config.ollama
-        return OllamaProvider(cfg.host, model or cfg.model, cfg.max_tokens)
-    elif provider_name == "gemini":
-        from micropaw.providers.gemini import GeminiProvider
-        cfg = config.provider_config.gemini
-        if not cfg.api_key:
-            return None
-        return GeminiProvider(cfg.api_key, model or cfg.model, cfg.max_tokens, cfg.base_url)
-    elif provider_name in OPENAI_COMPATIBLE and model:
-        from micropaw.providers.openai import OpenAIProvider
-        base_url, key_env = OPENAI_COMPATIBLE[provider_name]
-        key = os.environ.get(key_env, "") if key_env else "local"
-        if not key:
-            return None
-        return OpenAIProvider(key, model, config.provider_config.openai.max_tokens, base_url)
-    return None
-
-
 def _create_role_provider(spec: str, config: Config):
-    """A model for one job, from "provider:model". None when unset or unusable (the main model is used)."""
+    """A model for one job, from "provider:model". None when unset or unusable."""
     if not spec:
         return None
-    name, _, model = spec.partition(":")
-    provider = _create_single_provider(name.strip().lower(), config, model.strip())
+    registry = Registry(config)
+    provider = registry.get(spec)
     if provider is None:
         console.print(f"[yellow]Model '{spec}' isn't usable (unknown provider or missing key); "
                       "using the main model for that job.[/yellow]")
@@ -76,23 +43,33 @@ def _create_role_provider(spec: str, config: Config):
 
 
 def _create_provider(config: Config):
-    """Create the AI provider with optional failover chain."""
-    primary = _create_single_provider(config.provider, config)
-    if not primary:
+    """The main agent's provider, with its fallback chain."""
+    registry = Registry(config)
+    provider = registry.role("main", "chat", [config.provider, *config.fallback_providers])
+    if not provider:
         console.print(f"[red]Error: No API key for {config.provider}. Run 'paw setup'.[/red]")
         sys.exit(1)
+    return provider
 
-    if config.fallback_providers:
-        from micropaw.providers.failover import FailoverProvider
-        providers = [primary]
-        for name in config.fallback_providers:
-            fallback = _create_single_provider(name, config)
-            if fallback:
-                providers.append(fallback)
-        if len(providers) > 1:
-            return FailoverProvider(providers)
 
-    return primary
+def _create_runtimes(config: Config) -> tuple[Registry, dict]:
+    """The model registry and one runtime (profile, providers) per agent. Exits with a plain message on failure."""
+    registry = Registry(config)
+    try:
+        runtimes = build_runtimes(config, registry)
+    except ProfileError as e:
+        console.print(f"[red]Error: {e} Run 'paw setup' or 'paw models list'.[/red]")
+        sys.exit(1)
+    for problem in dict.fromkeys(registry.problems):
+        console.print(f"[yellow]{problem}[/yellow]")
+    return registry, runtimes
+
+
+def _make_gateway(config: Config, registry, channels):
+    models, runtimes = _create_runtimes(config)
+    main = runtimes["main"]
+    from micropaw.gateway import Gateway
+    return Gateway(config, main.provider, registry, channels, main.fast, main.vision, runtimes=runtimes, models=models)
 
 
 def _create_registry(config: Config):
@@ -214,20 +191,9 @@ def chat():
     config.channels.whatsapp.enabled = False
     config.channels.webchat.enabled = False
 
-    provider = _create_provider(config)
     registry = _create_registry(config)
     channels = _create_channels(config)
-
-    from micropaw.gateway import Gateway
-    gw = Gateway(config, provider, registry, channels, **_role_providers(config))
-    asyncio.run(gw.start())
-
-
-def _role_providers(config: Config) -> dict:
-    return {
-        "fast_provider": _create_role_provider(config.models.fast, config),
-        "vision_provider": _create_role_provider(config.models.vision, config),
-    }
+    asyncio.run(_make_gateway(config, registry, channels).start())
 
 
 @main.command()
@@ -243,7 +209,6 @@ def start(headless):
         run_setup()
 
     config = load_config()
-    provider = _create_provider(config)
     registry = _create_registry(config)
     channels = _create_channels(config)
 
@@ -251,9 +216,7 @@ def start(headless):
         console.print("[red]No channels enabled. Run 'paw setup' to configure.[/red]")
         sys.exit(1)
 
-    from micropaw.gateway import Gateway
-    gw = Gateway(config, provider, registry, channels, **_role_providers(config))
-    _run_single(gw)
+    _run_single(_make_gateway(config, registry, channels))
 
 
 @main.command()
@@ -445,7 +408,6 @@ def _interactive() -> bool:
 def _start_headless() -> int:
     """Gateway without the terminal channel, restarted after a crash, one instance per machine."""
     from micropaw import service as svc
-    from micropaw.gateway import Gateway
 
     def make():
         config = load_config()
@@ -453,8 +415,7 @@ def _start_headless() -> int:
         if not channels:
             console.print("[red]No channels enabled. Run 'paw setup' to configure.[/red]")
             sys.exit(1)
-        return Gateway(config, _create_provider(config), _create_registry(config), channels,
-                       **_role_providers(config))
+        return _make_gateway(config, _create_registry(config), channels)
 
     try:
         return svc.run_headless(make)
@@ -1081,6 +1042,220 @@ def remove(job_id):
 def _fmt(seconds: int) -> str:
     from micropaw.tools.cron_tool import _fmt_interval
     return _fmt_interval(seconds)
+
+
+# ---------------------------------------------------------------------------
+# Models and agents
+# ---------------------------------------------------------------------------
+
+@main.group()
+def models():
+    """See, find and test the models MicroPaw can use."""
+
+
+@models.command(name="list")
+def models_list():
+    """Show each agent's models and the built-in providers."""
+    from micropaw.core.profile import resolve_profiles
+    config = load_config()
+    registry = Registry(config)
+    try:
+        profiles = resolve_profiles(config, registry)
+    except ProfileError as e:
+        console.print(f"[red]{e}[/red]")
+        return
+    table = Table(title="Agents")
+    for col in ("Agent", "Model", "Fast", "Vision", "Fallbacks", "Where"):
+        table.add_column(col)
+    for p in profiles.values():
+        where = "local only" if p.private else "cloud or mixed"
+        table.add_row(p.name, p.main, p.fast or "(main)", p.vision or "-", ", ".join(p.fallbacks) or "-", where)
+    console.print(table)
+    presets = Table(title="Providers (use as provider:model)")
+    for col in ("Name", "Address", "Key", "Where"):
+        presets.add_column(col)
+    for name in ("claude", "openai", "gemini", "ollama"):
+        ep = registry.resolve(name)
+        key = "-" if name == "ollama" else ("set" if getattr(config.provider_config, name).api_key else "missing")
+        presets.add_row(name, ep.base_url, key, "local" if ep.local else "cloud")
+    for name, pre in registry.presets.items():
+        state = "set" if os.environ.get(pre.key_env) else "missing"
+        key = f"{pre.key_env} {state}" if pre.key_env else "-"
+        presets.add_row(name, pre.base_url, key, "local" if registry.is_local(f"{name}:x") else "cloud")
+    console.print(presets)
+
+
+@models.command()
+def scan():
+    """Look for model servers on this computer (Ollama, LM Studio, llama.cpp, vLLM, Jan, KoboldCpp)."""
+    from micropaw.providers.ollama import ram_bytes
+    from micropaw.providers.registry import pick_local, scan_local
+    found = asyncio.run(scan_local())
+    if not found:
+        console.print("[yellow]No local model server found.[/yellow] Install Ollama from https://ollama.com/download, "
+                      "or start LM Studio's server (Developer tab).")
+        return
+    ram = ram_bytes()
+    for server in found:
+        console.print(f"[bold]{server.name}[/bold] at {server.url}")
+        for m in server.models:
+            notes = [n for n, on in (("no tools", not m.tools), ("vision", m.vision), ("embedding", m.embedding)) if on]
+            size = f"{m.size / 1e9:.1f} GB" if m.size else ""
+            console.print(f"  {server.name}:{m.name}  [dim]{size} {' '.join(notes)}[/dim]")
+        pick = pick_local(server.models, ram)
+        if pick.main:
+            console.print(f"  [green]Suggested main model: {server.name}:{pick.main.name}[/green]")
+    if ram:
+        console.print(f"[dim]Memory: {ram / 2**30:.0f} GB. Models up to 60% of that are suggested.[/dim]")
+
+
+@models.command(name="test")
+@click.argument("spec", required=False)
+def models_test(spec):
+    """Send one small chat and one tool call to a model (default: every model in your agents)."""
+    from micropaw.core.profile import resolve_profiles
+    config = load_config()
+    registry = Registry(config)
+    if spec:
+        specs = [spec]
+    else:
+        profiles = resolve_profiles(config, registry).values()
+        specs = list(dict.fromkeys(s for p in profiles for s in (p.main, p.fast, p.vision, *p.fallbacks) if s))
+    table = Table(title="Model test")
+    for col in ("Model", "Chat", "Tools", "Vision"):
+        table.add_column(col)
+
+    async def run_all() -> list:
+        rows = [(sp, *await _test_model(registry, sp)) for sp in specs]
+        await registry.close()
+        return rows
+
+    for row in asyncio.run(run_all()):
+        table.add_row(*row)
+    console.print(table)
+    for problem in dict.fromkeys(registry.problems):
+        console.print(f"[yellow]{problem}[/yellow]")
+
+
+async def _test_model(registry: Registry, spec: str) -> tuple[str, str, str]:
+    import time
+
+    from micropaw.core.profile import providers_in
+    from micropaw.providers.base import Message, ToolDef
+    provider = registry.get(spec)
+    if provider is None:
+        return "not usable", "-", "-"
+    try:
+        start = time.monotonic()
+        await asyncio.wait_for(provider.chat([Message(role="user", content="Reply with one word.")]), 180)
+        chat = f"ok, {time.monotonic() - start:.1f}s"
+        tool = ToolDef("ping", "Call this with any number.", {
+            "type": "object", "properties": {"n": {"type": "number"}}, "required": ["n"]})
+        reply = await asyncio.wait_for(provider.chat(
+            [Message(role="user", content="Call the ping tool with n=1.")], [tool]), 180)
+        tools = "ok" if any(c.name == "ping" for c in reply.tool_calls) else "did not call it"
+    except Exception as e:
+        from micropaw.core.agent import _classify_error
+        return f"failed: {_classify_error(e)}", "-", "-"
+    vision = "not tested"
+    for p in providers_in(provider):
+        if hasattr(p, "load_capabilities"):
+            info = await p.load_capabilities()
+            vision = "yes" if info and info.vision else "no"
+    return chat, tools, vision
+
+
+@main.group()
+def agent():
+    """Named agents: each has its own model, persona and tools."""
+
+
+def _tool_names(config: Config) -> list[str]:
+    return _create_registry(config).names
+
+
+@agent.command(name="add")
+@click.argument("name")
+@click.option("--model", required=True, help="Main model, provider:model (e.g. ollama:qwen3.5:9b).")
+@click.option("--fast", default=None, help="Model for summaries and sub-agents (empty = the main model).")
+@click.option("--vision", default=None, help="Model that describes photos.")
+@click.option("--fallback", "fallbacks", multiple=True, help="Fallback model, repeatable.")
+@click.option("--strict", is_flag=True, help="No fallbacks at all (ignore the top-level list).")
+@click.option("--persona", default="", help="Personality, e.g. 'terse senior engineer'.")
+@click.option("--allow", "allow", multiple=True, help="Tool the agent may use (only these), repeatable.")
+@click.option("--deny", "deny", multiple=True, help="Tool the agent may not use, repeatable. Patterns: mcp_*.")
+@click.option("--workspace", default="", help="Folder for its files and shell.")
+@click.option("--separate-history", is_flag=True, help="Give it its own conversations.")
+@click.option("--allow-cloud", is_flag=True, help="Let a local agent use cloud models you list.")
+@click.option("--route", "routes", multiple=True, help="Chat for this agent: telegram:-100123 or discord:*.")
+def agent_add(name, model, fast, vision, fallbacks, strict, persona, allow, deny, workspace,
+              separate_history, allow_cloud, routes):
+    """Add an agent to the config after checking it. Restart `paw start` to use it."""
+    from micropaw.config import update_config_file
+    from micropaw.core.profile import resolve_profiles, unknown_tool_names
+
+    entry: dict = {"model": model}
+    if fast is not None:
+        entry["fast"] = fast
+    if vision is not None:
+        entry["vision"] = vision
+    if fallbacks or strict:
+        entry["fallbacks"] = list(fallbacks)
+    if persona:
+        entry["persona"] = {"personality": persona}
+    if allow or deny:
+        entry["tools"] = {"allow": list(allow), "deny": list(deny)}
+    if workspace:
+        entry["workspace"] = workspace
+    if separate_history:
+        entry["history"] = "separate"
+    if allow_cloud:
+        entry["allow_cloud"] = True
+
+    def change(raw: dict) -> None:
+        agents = raw.setdefault("agents", {})
+        if name in agents:
+            raise ValueError(f"Agent '{name}' already exists. Remove it first: paw agent remove {name}")
+        agents[name] = entry
+        for chat in routes:
+            raw.setdefault("routes", {})[chat] = name
+
+    def validate(cfg: Config) -> None:
+        resolve_profiles(cfg, Registry(cfg))
+        if bad := unknown_tool_names([*allow, *deny], _tool_names(cfg)):
+            raise ValueError(f"Unknown tool name(s): {', '.join(bad)}. Type /tools in the terminal chat for the names.")
+
+    try:
+        update_config_file(change, validate)
+    except (ValueError, ProfileError) as e:
+        raise click.ClickException(str(e))
+    console.print(f"[green]Agent '{name}' added.[/green] Restart paw start to use it. "
+                  f"In a chat, /agent {name} switches to it; /whoami shows the chat ID for --route.")
+
+
+@agent.command(name="list")
+def agent_list():
+    """List the agents and where each one runs."""
+    models_list.callback()
+
+
+@agent.command(name="remove")
+@click.argument("name")
+def agent_remove(name):
+    """Remove an agent and the routes that point to it."""
+    from micropaw.config import update_config_file
+
+    def change(raw: dict) -> None:
+        if name not in raw.get("agents", {}):
+            raise ValueError(f"No agent called '{name}' in the config.")
+        del raw["agents"][name]
+        raw["routes"] = {k: v for k, v in raw.get("routes", {}).items() if v != name}
+
+    try:
+        update_config_file(change)
+    except ValueError as e:
+        raise click.ClickException(str(e))
+    console.print(f"[green]Agent '{name}' removed.[/green] Restart paw start to apply.")
 
 
 if __name__ == "__main__":

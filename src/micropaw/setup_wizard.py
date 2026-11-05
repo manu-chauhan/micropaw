@@ -2,12 +2,146 @@
 
 from __future__ import annotations
 
+import asyncio
+import shutil
+from dataclasses import dataclass, field
+
 from rich.console import Console
 from rich.panel import Panel
 
-from micropaw.config import Config, config_exists, load_config, save_config
+from micropaw.config import AgentConfig, Config, config_exists, load_config, save_config
+from micropaw.providers.registry import (
+    CLOUD_DEFAULTS,
+    LOCAL_SERVERS,
+    LocalPick,
+    LocalServer,
+    pick_local,
+    scan_local,
+    suggest_pull,
+)
 
 console = Console()
+
+OLLAMA_DOWNLOAD = "https://ollama.com/download"
+
+
+@dataclass
+class ModelPlan:
+    main: str = ""  # spec ("" = keep what the user chose)
+    fast: str = ""
+    vision: str = ""
+    fallbacks: list[str] = field(default_factory=list)
+
+
+def best_local(servers: list[LocalServer], ram: int | None) -> tuple[LocalServer, LocalPick] | None:
+    """The first server (Ollama first) that has a model fit to run as the main model."""
+    for server in servers:
+        pick = pick_local(server.models, ram)
+        if pick.main:
+            return server, pick
+    return None
+
+
+def plan_models(provider: str, servers: list[LocalServer], ram: int | None, hybrid: bool) -> ModelPlan:
+    """Default models by what is available (plan 4.1). Cloud: main and fast from one lab, or hybrid with a
+    small local model for quick jobs and a local fallback. Local only: main = largest that fits, fast = main."""
+    local = best_local(servers, ram)
+    if provider in CLOUD_DEFAULTS:
+        main_id, fast_id = CLOUD_DEFAULTS[provider]
+        plan = ModelPlan(main=f"{provider}:{main_id}", fast=f"{provider}:{fast_id}")
+        if hybrid and local:
+            server, pick = local
+            plan.fast = f"{server.name}:{pick.fast.name}"
+            plan.fallbacks = [f"{server.name}:{pick.main.name}"]
+        return plan
+    if local:
+        server, pick = local
+        plan = ModelPlan(main=f"{server.name}:{pick.main.name}")
+        if pick.vision:
+            plan.vision = f"{server.name}:{pick.vision.name}"
+        return plan
+    return ModelPlan()
+
+
+def apply_plan(config: Config, plan: ModelPlan) -> None:
+    """Write a plan into the config: the legacy fields for the built-in providers, agents.main for the rest."""
+    if plan.main:
+        name, _, model = plan.main.partition(":")
+        if name in ("claude", "openai", "gemini", "ollama"):
+            config.provider = name
+            getattr(config.provider_config, name).model = model
+        else:
+            config.agents["main"] = AgentConfig(model=plan.main)
+    config.models.fast = plan.fast
+    config.models.vision = plan.vision
+    if plan.fallbacks:
+        config.fallback_providers = plan.fallbacks
+
+
+def _pull(host: str, tag: str) -> bool:
+    """`ollama pull` through the API, with a progress bar."""
+    from rich.progress import BarColumn, DownloadColumn, Progress, TextColumn
+
+    from micropaw.providers.ollama import pull_model
+
+    async def run() -> None:
+        with Progress(TextColumn("{task.description}"), BarColumn(), DownloadColumn(), console=console) as bar:
+            tasks: dict[str, int] = {}
+            async for chunk in pull_model(host, tag):
+                status = chunk.get("status", "")
+                if chunk.get("total"):
+                    task = tasks.setdefault(status, bar.add_task(status[:30], total=chunk["total"]))
+                    bar.update(task, completed=chunk.get("completed", 0))
+
+    try:
+        asyncio.run(run())
+        return True
+    except Exception as e:
+        console.print(f"[yellow]Download failed: {e}[/yellow]")
+        return False
+
+
+def _choose_models(questionary, config: Config, provider: str) -> None:
+    """The model step: look for local servers, pick RAM-sized defaults, offer hybrid, offer to pull."""
+    from micropaw.providers.ollama import ram_bytes
+
+    console.print("[dim]Looking for local model servers...[/dim]")
+    targets = dict(LOCAL_SERVERS)
+    targets["ollama"] = ("ollama", config.provider_config.ollama.host.rstrip("/"))  # the host the user typed
+    servers = asyncio.run(scan_local(targets))
+    if provider == "ollama":
+        servers = [sv for sv in servers if sv.name == "ollama"]
+    ram = ram_bytes()
+    for server in servers:
+        console.print(f"[green]Found {server.name}[/green] at {server.url}: {len(server.models)} model(s)")
+    hybrid = False
+    if provider in CLOUD_DEFAULTS and best_local(servers, ram):
+        hybrid = bool(questionary.confirm(
+            "Use a small local model for quick jobs (summaries) and as a backup if the cloud is down?",
+            default=True).ask())
+    plan = plan_models(provider, servers, ram, hybrid)
+
+    if provider not in CLOUD_DEFAULTS and not plan.main:
+        # Nothing usable on this computer. Offer a download sized for the RAM.
+        ollama_up = any(s.name == "ollama" for s in servers)
+        if not ollama_up and not shutil.which("ollama"):
+            console.print(f"[yellow]Ollama is not installed.[/yellow] Download it from {OLLAMA_DOWNLOAD}, "
+                          "then run paw setup again.")
+        elif not ollama_up:
+            console.print("[yellow]Ollama is installed but not running.[/yellow] Start it, then run paw setup again.")
+        else:
+            tag = suggest_pull(ram)
+            if questionary.confirm(f"No suitable model is pulled yet. Download {tag}?", default=True).ask():
+                if _pull(config.provider_config.ollama.host, tag):
+                    plan = ModelPlan(main=f"ollama:{tag}")
+        if not plan.main:
+            return
+    if plan.main:
+        console.print(f"[green]Main model: {plan.main}[/green]"
+                      + (f"  Quick jobs: {plan.fast}" if plan.fast else "")
+                      + (f"  Backup: {', '.join(plan.fallbacks)}" if plan.fallbacks else ""))
+        if questionary.confirm("Use these?", default=True).ask():
+            apply_plan(config, plan)
 
 
 def run_setup() -> None:
@@ -54,37 +188,12 @@ def run_setup() -> None:
             getattr(config.provider_config, provider).api_key = api_key
     elif provider == "ollama":
         host = questionary.text(
-            "Ollama host:", default="http://localhost:11434"
+            "Ollama host:", default=config.provider_config.ollama.host
         ).ask()
         if host:
             config.provider_config.ollama.host = host
 
-        # Validate Ollama is running and let user pick a model
-        from micropaw.connector import validate_ollama
-        console.print("[dim]Checking Ollama...[/dim]")
-        ok, detail = validate_ollama(host or "http://localhost:11434")
-        if ok:
-            console.print(f"[green]Ollama is running: {detail}[/green]")
-            # Fetch model list for selection
-            try:
-                import httpx
-                resp = httpx.get(f"{(host or 'http://localhost:11434').rstrip('/')}/api/tags", timeout=5)
-                models = [m.get("name", "") for m in resp.json().get("models", []) if m.get("name")]
-                if models:
-                    model = questionary.select(
-                        "Which model do you want to use?",
-                        choices=models,
-                        default=models[0],
-                    ).ask()
-                    if model:
-                        config.provider_config.ollama.model = model
-                else:
-                    console.print("[yellow]No models found. Pull one with: ollama pull llama3.1[/yellow]")
-            except Exception:
-                pass
-        else:
-            console.print(f"[yellow]Warning: {detail}[/yellow]")
-            console.print("[dim]You can start Ollama later. The default model is llama3.1.[/dim]")
+    _choose_models(questionary, config, provider)
 
     # Persona
     name = questionary.text(
@@ -184,7 +293,7 @@ def run_setup() -> None:
                     config.embedding.model = "nomic-embed-text"
 
     # Fallback providers
-    use_fallback = questionary.confirm(
+    use_fallback = not config.fallback_providers and questionary.confirm(
         "Set up fallback providers?", default=False
     ).ask()
     if use_fallback:

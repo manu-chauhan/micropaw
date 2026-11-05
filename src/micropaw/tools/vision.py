@@ -43,8 +43,15 @@ class VisionTool(Tool):
         "required": ["path"],
     }
 
+    def __init__(self, provider: AIProvider | None = None) -> None:
+        self._provider = provider  # set per agent (its vision model); None = the shared one
+
+    def bound(self, provider: AIProvider) -> VisionTool:
+        return VisionTool(provider)
+
     async def execute(self, args: dict[str, Any], context: ToolContext) -> str:
-        if _provider is None:
+        provider = self._provider or _provider
+        if provider is None:
             return "Error: Vision provider not configured."
 
         path_str = args["path"]
@@ -68,7 +75,7 @@ class VisionTool(Tool):
             import asyncio as _aio
             image_data = await _aio.get_running_loop().run_in_executor(None, path.read_bytes)
             media = MediaItem(type="image", data=image_data, mime_type=SUPPORTED_TYPES[suffix])
-            response = await _provider.chat([
+            response = await provider.chat([
                 Message(role="user", content=question, media=[media]),
             ])
             return response.content or "Could not analyze the image."
