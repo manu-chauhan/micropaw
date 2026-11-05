@@ -8,6 +8,7 @@ import os
 import shutil
 import sys
 from datetime import UTC
+from urllib.parse import urlparse
 
 import click
 from rich.console import Console
@@ -344,6 +345,7 @@ def doctor(quiet):
     free_mb = usage.free / (1024 * 1024)
     table.add_row("Disk space", ok(free_mb > 100), f"{free_mb:.0f} MB free")
     _doctor_install_rows(table, config)
+    _doctor_server_rows(table, config)
 
     console.print(table)
 
@@ -670,14 +672,19 @@ def _doctor_install_rows(table: Table, config: Config) -> None:
     web = config.channels.webchat
     if web.enabled and web.host in ("0.0.0.0", "::", ""):
         row("WebChat bind", None, f"{web.host}:{web.port} is open to your network; use 127.0.0.1 unless you need it")
-    specs = (config.provider, config.models.fast, config.models.vision)
-    uses_ollama = any(sp == "ollama" or sp.startswith("ollama:") for sp in specs)
-    if uses_ollama and _on_wsl():
-        host = config.provider_config.ollama.host
-        if not _reachable(host):
-            row("Ollama from WSL", False, f"{host} is not reachable. Ollama on the Windows side listens on "
-                "Windows localhost only; set OLLAMA_HOST=0.0.0.0 in Windows, restart Ollama, and point the "
-                "MicroPaw Ollama host at the Windows IP.")
+
+
+def _doctor_server_rows(table: Table, config: Config) -> None:
+    """One row per model, memory-search and speech server in use: pass, or why not."""
+    from micropaw.modelscan import doctor_rows
+    rows = asyncio.run(doctor_rows(config))
+    for name, mark, detail in rows:
+        table.add_row(name, {"pass": "[green]pass[/green]", "warn": "[yellow]warn[/yellow]"}.get(
+            mark, "[red]FAIL[/red]"), detail)
+    if _on_wsl() and any(mark == "fail" for _, mark, _ in rows):
+        table.add_row("Ollama from WSL", "[yellow]note[/yellow]",
+                      "Ollama on the Windows side listens on Windows localhost only. Set OLLAMA_HOST=0.0.0.0 in "
+                      "Windows, restart Ollama, and point the MicroPaw Ollama host at the Windows IP.")
 
 
 def _on_wsl() -> bool:
@@ -685,15 +692,6 @@ def _on_wsl() -> bool:
     try:
         return "microsoft" in Path("/proc/version").read_text().lower()
     except OSError:
-        return False
-
-
-def _reachable(url: str) -> bool:
-    import httpx
-    try:
-        httpx.get(url.rstrip("/") + "/api/tags", timeout=2)
-        return True
-    except httpx.HTTPError:
         return False
 
 
@@ -1098,27 +1096,151 @@ def models_list():
 
 
 @models.command()
-def scan():
-    """Look for model servers on this computer (Ollama, LM Studio, llama.cpp, vLLM, Jan, KoboldCpp)."""
+@click.option("--host", "hosts", multiple=True, help="Also check this computer: an address or URL. Repeatable.")
+@click.option("--lan", is_flag=True, help="Also look for servers on your own network. Asks first.")
+@click.option("--range", "net_range", default="", help="Also look in this network, e.g. 192.168.1.0/24. Asks first.")
+@click.option("--yes", "-y", is_flag=True, help="Do not ask before a network scan.")
+def scan(hosts, lan, net_range, yes):
+    """Look for model servers: this computer, the ones in your config, and any --host you name."""
+    from micropaw import modelscan
     from micropaw.providers.ollama import ram_bytes
-    from micropaw.providers.registry import pick_local, scan_local
-    found = asyncio.run(scan_local())
-    if not found:
-        console.print("[yellow]No local model server found.[/yellow] Install Ollama from https://ollama.com/download, "
-                      "or start LM Studio's server (Developer tab).")
-        return
+    from micropaw.providers.registry import pick_local
+    config = load_config()
+    try:
+        targets = modelscan.scan_targets(config, hosts)
+    except ValueError as e:
+        raise click.ClickException(str(e)) from None
+    found, silent = asyncio.run(modelscan.run_scan(targets))
     ram = ram_bytes()
-    for server in found:
-        console.print(f"[bold]{server.name}[/bold] at {server.url}")
+    for target, server in found:
+        remote = not modelscan.is_loopback(server.url)
+        click.echo(f"{target.label or target.name} at {server.url}"
+                   + (f" ({modelscan.where(server.url)})" if remote else ""))
+        if server.problem == "key":
+            click.echo(f"  This server needs a key. Put it in ~/.micropaw/.env as NAME=... and add it with: "
+                       f"paw models add {modelscan.suggested_name(server.url)} {server.url} --key-env NAME")
+            continue
+        prefix = modelscan.usable_spec(config, target, server)
         for m in server.models:
             notes = [n for n, on in (("no tools", not m.tools), ("vision", m.vision), ("embedding", m.embedding)) if on]
             size = f"{m.size / 1e9:.1f} GB" if m.size else ""
-            console.print(f"  {server.name}:{m.name}  [dim]{size} {' '.join(notes)}[/dim]")
-        pick = pick_local(server.models, ram)
-        if pick.main:
-            console.print(f"  [green]Suggested main model: {server.name}:{pick.main.name}[/green]")
-    if ram:
-        console.print(f"[dim]Memory: {ram / 2**30:.0f} GB. Models up to 60% of that are suggested.[/dim]")
+            click.echo(f"  {(prefix + ':') if prefix else ''}{m.name}  {size} {' '.join(notes)}".rstrip())
+        pick = pick_local(server.models, None if remote else ram)
+        if prefix and pick.main:
+            click.echo(f"  Suggested main model: {prefix}:{pick.main.name}"
+                       + ("  (sized for that computer, not this one)" if remote else ""))
+        elif not prefix:
+            click.echo(f"  To use it: paw models add {modelscan.suggested_name(server.url)} {server.url}")
+    for target in silent:
+        click.echo(f"{target.label or target.name} at {target.url}: not answering (asleep, off, or a firewall)")
+    if not found and not silent:
+        console.print("[yellow]No local model server found.[/yellow] Install Ollama from https://ollama.com/download, "
+                      "or start LM Studio's server (Developer tab).")
+    elif ram and any(modelscan.is_loopback(s.url) for _, s in found):
+        click.echo(f"Memory: {ram / 2**30:.0f} GB. Models up to 60% of that are suggested for this computer.")
+    if lan or net_range:
+        _scan_network(net_range or None, yes)
+
+
+def _scan_network(cidr: str | None, yes: bool) -> None:
+    from micropaw import modelscan
+    try:
+        net, addresses = modelscan.lan_range(cidr)
+    except ValueError as e:
+        raise click.ClickException(str(e)) from None
+    if not yes and not click.confirm(
+            f"This sends one short connection attempt to {len(addresses)} addresses on {net}, ports "
+            f"{modelscan.PORT_LIST}. Only scan a network you own or may scan. Continue?"):
+        return
+    hits = asyncio.run(modelscan.scan_lan(addresses))
+    if not hits:
+        click.echo(f"No model server found on {net}.")
+        return
+    click.echo("Address               Port   Looks like   Models")
+    for h in hits:
+        click.echo(f"{h.host:<21} {h.port:<6} {h.label:<12} {len(h.server.models)}")
+    click.echo("To use one: paw models add NAME ADDRESS, for example")
+    for h in hits:
+        click.echo(f"  paw models add {modelscan.suggested_name(h.url)} {h.url}")
+    click.echo("Nothing was saved.")
+
+
+@models.command(name="add")
+@click.argument("name")
+@click.argument("address")
+@click.option("--key-env", default="", help="Name of the variable that holds the key (in ~/.micropaw/.env).")
+@click.option("--kind", type=click.Choice(["auto", "ollama", "openai"]), default="auto", show_default=True)
+@click.option("--use", type=click.Choice(["main", "fast", "vision", "fallback"]), default=None,
+              help="Also use its first model for this job.")
+@click.option("--yes", "-y", is_flag=True, help="Save even if nothing answered. Pick the first when several answer.")
+def models_add(name, address, key_env, kind, use, yes):
+    """Test a model server on another computer and save it. Nothing is saved unless it answers."""
+    from micropaw import modelscan
+    from micropaw.config import server_url
+    from micropaw.providers.registry import pick_local
+    name = name.lower()
+    if problem := modelscan.check_name(name):
+        raise click.ClickException(problem)
+    try:
+        url = server_url(address, "ollama" if kind == "ollama" else "openai")
+    except ValueError as e:
+        raise click.ClickException(str(e)) from None
+    config = load_config()
+    if key_env and not os.environ.get(key_env):
+        raise click.ClickException(f"{key_env} is not set. Put {key_env}=... in ~/.micropaw/.env and run again.")
+    key = os.environ.get(key_env, "") if key_env else ""
+    if refusal := modelscan.refusal_for(config, name, url, key_env):  # before anything is sent
+        raise click.ClickException(refusal)
+    if urlparse(url).port or "://" in address:
+        kind, server = asyncio.run(modelscan.detect(url, kind, key))
+    else:
+        answers = asyncio.run(modelscan.probe_host(modelscan._hostport(url)[0], key))
+        if len(answers) > 1 and not yes:
+            for i, a in enumerate(answers, 1):
+                click.echo(f"  {i}. {a.name} at {a.url}")
+            server = answers[click.prompt("Which one?", type=click.IntRange(1, len(answers)), default=1) - 1]
+        else:
+            server = answers[0] if answers else None
+        if server:
+            url, kind = server.url, modelscan.kind_for(server.url)
+    if server is None and not yes:
+        raise click.ClickException(f"Nothing answered at {url}. Is that computer on, and is the server set to listen "
+                                   "on the network? Run again with --yes to save it anyway.")
+    if server is not None and server.problem == "key":
+        raise click.ClickException("This server needs a key. Put it in ~/.micropaw/.env as NAME=... and run again "
+                                   "with --key-env NAME.")
+    models = server.models if server else []
+    pick = pick_local(models, None)
+    first = (pick.main or (models[0] if models else None))
+    spec = f"{name}:{first.name}" if first else f"{name}:MODEL"
+    saved = modelscan.stored_url(url, kind)
+    try:
+        modelscan.write_entry(name, saved, kind, key_env, use or "", spec, config)
+    except ValueError as e:
+        raise click.ClickException(str(e)) from None
+    if models:
+        click.echo(f"Found {len(models)} model(s) at {url}:")
+        for m in models:
+            click.echo(f"  {name}:{m.name}")
+    click.echo(f"Saved {name}. Use it as {spec}" + (f" (set as {use})." if use else "."))
+    if server and not modelscan.is_loopback(url) and not key:
+        click.echo(modelscan.NO_KEY_WARNING)
+
+
+@models.command(name="remove")
+@click.argument("name")
+def models_remove(name):
+    """Forget a model server added with `paw models add`."""
+    from micropaw import modelscan
+    from micropaw.config import update_config_file
+    name = name.lower()
+    raw = modelscan.read_raw()
+    if name not in (raw.get("providers") or {}):
+        raise click.ClickException(f"There is no server named '{name}' in your config.")
+    if used := modelscan.uses_of(raw, name):
+        raise click.ClickException(f"'{name}' is still used by {', '.join(used)}. Change those first.")
+    update_config_file(lambda r: r["providers"].pop(name, None))
+    click.echo(f"Removed {name}.")
 
 
 @models.command(name="test")
