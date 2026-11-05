@@ -41,6 +41,11 @@ class AgentProfile:
         return f"agent:{self.name}:" if self.separate else ""
 
     @property
+    def memory_user(self) -> str:
+        """Memories and documents follow the history: a separate (or private) agent keeps its own."""
+        return f"agent:{self.name}" if self.separate else "_global"
+
+    @property
     def filters_tools(self) -> bool:
         return bool(self.allow or self.deny)
 

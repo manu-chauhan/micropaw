@@ -96,6 +96,10 @@ class Agent:
         self.ledger = None  # set by the gateway when budgets are on; carries the "budget nearly used" note
         self._compact_tasks: dict[str, asyncio.Task] = {}  # one background compaction per conversation
 
+    @property
+    def _memory_user(self) -> str:
+        return self.profile.memory_user if self.profile else "_global"
+
     def _build_tool_context(
         self, conv_id: str, user_id: str, platform: str, channel_id: str | None = None,
     ) -> ToolContext:
@@ -110,6 +114,7 @@ class Agent:
             allow_web_browse=self.config.permissions.allow_web_browse,
             confirm_dangerous=self.config.permissions.confirm_dangerous,
             workspace=str(Path(self.config.permissions.workspace).expanduser()),
+            memory_user=self._memory_user,
         )
         if self.approver and platform not in _INTERNAL_PLATFORMS:
             approver = self.approver
@@ -251,8 +256,8 @@ class Agent:
         history, marked, memories, docs, summary = await asyncio.gather(
             self.conversations.load_history(conv_id, store_platform, user_id),
             self.store.is_marked(conv_id),
-            self.store.get_recent_memories(10, user_id="_global") if private else nothing(),
-            self.store.search_documents(text, limit=5, user_id="_global") if private else nothing(),
+            self.store.get_recent_memories(10, user_id=self._memory_user) if private else nothing(),
+            self.store.search_documents(text, limit=5, user_id=self._memory_user) if private else nothing(),
             self.store.get_summary(conv_id),
         )
         # Stored documents came from outside, and memories saved while marked carry that mark
@@ -543,7 +548,7 @@ class Agent:
                 and not content_text.startswith("Error")
             ):
                 source = tc.arguments.get("path") or tc.arguments.get("url") or "unknown"
-                asyncio.create_task(self._auto_ingest(source, content_text, "_global"))
+                asyncio.create_task(self._auto_ingest(source, content_text, self._memory_user))
 
             shown = await shorten(conv_id, content_text)
             tool_msg = Message(role="tool", content=shown, tool_call_id=tc.id, media=media)

@@ -16,6 +16,19 @@ def set_store(store: MemoryStore) -> None:
     _store = store
 
 
+
+def _scope(conv_id: str) -> str:
+    """The agent prefix of a conversation id ("agent:coder:"), or "" for shared history."""
+    if conv_id.startswith("agent:"):
+        parts = conv_id.split(":", 2)
+        if len(parts) == 3:
+            return f"agent:{parts[1]}:"
+    return ""
+
+
+def _unscoped(conv_id: str) -> str:
+    return conv_id[len(_scope(conv_id)):]
+
 class SessionsTool(Tool):
     name = "sessions"
     marks = True
@@ -48,7 +61,8 @@ class SessionsTool(Tool):
             user_convos = [
                 c for c in convos
                 if c["id"] == context.conversation_id
-                or (not c["id"].startswith("dm:") and c["user_id"] == context.user_id)
+                or (_scope(c["id"]) == _scope(context.conversation_id)
+                    and not _unscoped(c["id"]).startswith("dm:") and c["user_id"] == context.user_id)
             ]
             if not user_convos:
                 return "No sessions found."
@@ -99,8 +113,10 @@ class SessionsTool(Tool):
         return f"Unknown action: {action}"
 
     async def _is_allowed(self, session_id: str, context: ToolContext) -> bool:
-        """Check if the user can access this session."""
-        if session_id.startswith("dm:"):
+        """Check if the user can access this session (never another agent's, which may be private)."""
+        if _scope(session_id) != _scope(context.conversation_id):
+            return False
+        if _unscoped(session_id).startswith("dm:"):
             return session_id == context.conversation_id
         convos = await _store.list_conversations()
         return any(c["id"] == session_id and c["user_id"] == context.user_id for c in convos)

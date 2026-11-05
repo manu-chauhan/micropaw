@@ -32,6 +32,7 @@ class ToolContext:
     # True once the conversation has read outside content (web, email, files, shell output).
     # Shared with sub-agents, so a page read by a helper still counts.
     marked: bool = False
+    memory_user: str = "_global"  # memory and document scope; an agent with its own history gets its own
     # Asks the owner on the chat this request came from. None = nobody to ask (cron, heartbeat,
     # background tasks), so anything that needs approval is refused there.
     approve: Callable[[str, str], Awaitable[bool]] | None = None

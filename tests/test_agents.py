@@ -458,3 +458,36 @@ async def test_private_agent_turns_cloud_embeddings_off(monkeypatch):
 
     assert isinstance(await gateway({})._create_embedding_provider(), OpenAIEmbedding)
     assert not isinstance(await gateway({"family": LOCAL_AGENT})._create_embedding_provider(), OpenAIEmbedding)
+
+
+class TestPrivateAgentScopes:
+    def test_memory_scope_follows_separate_history(self):
+        from micropaw.core.profile import AgentProfile
+        assert AgentProfile(name="main", main="claude").memory_user == "_global"
+        family = AgentProfile(name="family", main="ollama:gemma4:e4b", separate=True, private=True)
+        assert family.memory_user == "agent:family"
+
+    @pytest.mark.asyncio
+    async def test_memory_tool_uses_the_agent_scope(self, tmp_path):
+        from micropaw.memory.store import MemoryStore
+        from micropaw.tools import memory_tool
+        from micropaw.tools.base import ToolContext
+        store = MemoryStore(str(tmp_path / "m.db"))
+        await store.init()
+        try:
+            memory_tool.set_store(store)
+            ctx = ToolContext(conversation_id="agent:family:dm:owner", user_id="u", platform="telegram",
+                              memory_user="agent:family")
+            await memory_tool.MemoryTool().execute({"action": "save", "key": "k", "value": "private"}, ctx)
+            assert await store.get_all_memories("_global") == []
+            assert [m["key"] for m in await store.get_all_memories("agent:family")] == ["k"]
+        finally:
+            await store.close()
+
+    @pytest.mark.asyncio
+    async def test_sessions_never_cross_agents(self):
+        from micropaw.tools.base import ToolContext
+        from micropaw.tools.sessions import SessionsTool, _scope
+        assert _scope("agent:family:dm:owner") == "agent:family:" and _scope("dm:owner") == ""
+        ctx = ToolContext(conversation_id="dm:owner", user_id="u", platform="telegram")
+        assert await SessionsTool()._is_allowed("agent:family:telegram:-100", ctx) is False
