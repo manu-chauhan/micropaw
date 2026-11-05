@@ -19,18 +19,15 @@
 > **100% free with Ollama** — Run MicroPaw entirely on your machine with zero API keys, zero cost, zero data leaving your network. Just `ollama pull llama3.1` (or `phi3` / `gemma2:2b` on lighter hardware) and go. Cloud providers (Claude, GPT-4o, Gemini) are optional.
 
 ```bash
-pip install micropaw
-paw setup     # pick a provider — Ollama is free, cloud keys are optional
-paw chat      # start talking
+curl -LsSf https://raw.githubusercontent.com/manu-chauhan/micropaw/v0.4.0/install.sh | sh   # Linux, macOS, WSL
+paw chat      # start talking (the installer already ran 'paw setup')
 ```
 
-**Or from source:**
-```bash
-git clone https://github.com/manu-chauhan/micropaw.git
-cd micropaw
-pip install .
-paw setup && paw chat
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/manu-chauhan/micropaw/v0.4.0/install.ps1 | iex"
 ```
+
+Both scripts install [uv](https://docs.astral.sh/uv/) if it is missing, then `uv tool install micropaw`. No sudo, no admin rights. `pip install micropaw` also works. All routes are listed under Installation Options below.
 
 ---
 
@@ -159,7 +156,7 @@ MicroPaw:                "Revenue grew 23% in Q4, driven by..."
 
 - **Fully local option** — Run entirely offline with Ollama. No data leaves your machine. No telemetry. No phone home. Ever.
 
-- **Docker ready** — Multi-stage Dockerfile (base / browser / full). `docker compose up` with profiles. Named volume for persistence.
+- **Docker ready**: uv-built slim image, non-root, health check. `docker compose up` with an optional Ollama profile. Named volume for persistence.
 
 ---
 
@@ -548,16 +545,48 @@ Point any provider at a compatible server (vLLM, LM Studio, Azure OpenAI):
 
 ## Installation Options
 
+**Installer scripts.** The one-liners above point at a release tag. To read a script before you run it:
+
 ```bash
-pip install micropaw
+curl -LsSfO https://raw.githubusercontent.com/manu-chauhan/micropaw/v0.4.0/install.sh
+less install.sh
+sh install.sh --extras telegram,discord        # also: --version 0.4.0, --no-setup, --modify-path
 ```
 
-**From source:**
-```bash
-git clone https://github.com/manu-chauhan/micropaw.git
-cd micropaw
-pip install .
+```powershell
+irm https://raw.githubusercontent.com/manu-chauhan/micropaw/v0.4.0/install.ps1 -OutFile install.ps1
+notepad install.ps1
+.\install.ps1 -Extras telegram,discord          # also: -Version 0.4.0, -NoSetup
 ```
+
+Each release lists the SHA256 of both scripts in its notes (and in `SHA256SUMS`). The scripts only change your user directory. `install.sh` prints the `PATH` line to add; it edits your shell files only with `--modify-path`.
+
+**Other routes.**
+```bash
+uv tool install micropaw             # uv (recommended: its own environment, 'paw' on PATH)
+pipx install micropaw                # pipx
+python -m venv .venv && .venv/bin/pip install micropaw   # pip in a virtual environment
+git clone https://github.com/manu-chauhan/micropaw.git && cd micropaw && pip install -e .   # from source
+```
+
+**Add features later.** Do not run `pip` inside a uv tool or pipx install. Use:
+```bash
+paw extras add telegram discord      # slack whatsapp browser pdf embeddings
+```
+It detects how MicroPaw was installed and runs the matching command (`uv tool install --reinstall "micropaw[...]"`, `pipx inject`, or `pip install`).
+
+**Update.** `paw update` shows the installed and latest version and the exact command, and runs it after you confirm (`--yes` skips the question). It stops the service first and starts it again after. Nothing updates on its own.
+
+**Run in the background.**
+```bash
+paw service install      # systemd user unit (Linux), LaunchAgent (macOS), Task Scheduler task (Windows)
+paw service status       # also: start, stop, logs, uninstall
+```
+The service runs `paw start --headless`: no terminal channel, restarted after a crash (5 s, backing off to 60 s, at most 10 restarts per hour), one copy per machine. It never holds your keys. It reads `~/.micropaw/config.json` and `~/.micropaw/.env`.
+- Linux: needs systemd. `install` also turns on linger so the service survives logout; if that needs root it prints the command. Without systemd (containers, WSL without it) use Docker or a crontab `@reboot` line.
+- macOS: launchd does not see variables exported in `.zshrc`. Put keys in `~/.micropaw/.env`. The install-time `PATH` is written into the agent so `ollama`, `npx` and `uvx` resolve.
+- Windows: a hidden task that starts at logon, keeps running on battery, and has no time limit. `paw service stop` stops it cleanly.
+- `paw doctor` checks the service, linger, config file mode and open ports. `paw doctor --quiet` prints nothing and exits 0 when the gateway runs and the database opens.
 
 Install only what you need:
 ```bash
@@ -571,12 +600,22 @@ pip install "micropaw[embeddings]"    # Offline embeddings without Ollama (faste
 pip install "micropaw[all]"           # Everything
 ```
 
-Docker:
+**Docker.** The image is built with uv on `python:3.13-slim-trixie`, runs as a non-root user (uid 10001), keeps everything in one volume (`/home/paw/.micropaw`), and has a health check (`paw doctor --quiet`).
 ```bash
-docker compose run --rm micropaw chat              # Basic
-docker compose --profile browser up                  # + Playwright
-docker compose --profile full up                     # Everything
+docker compose run --rm micropaw paw setup          # once: provider and keys, saved in the volume
+docker compose up -d                                # run in the background
+docker compose run --rm micropaw paw chat           # chat in a terminal
+docker compose --profile ollama up -d               # add a local model server (Ollama host: http://ollama:11434)
+docker build --build-arg EXTRAS=telegram,pdf,browser .   # choose the extras in the image
 ```
+Compose reads keys from a `.env` file at run time. They are not copied into the image. Ollama's port is not published. WebChat is published on `127.0.0.1` only. The container is the boundary for shell commands, so turn MicroPaw's own sandbox off inside it.
+
+**Hosting.** MicroPaw needs a disk that survives restarts, because the database is SQLite in WAL mode, which does not work on a network filesystem. Check prices on each provider's page before you choose.
+- Fly.io: no free tier for new organizations. Needs a volume mounted at `/home/paw/.micropaw`.
+- Render: free web services have no persistent disk, so they do not suit MicroPaw. A paid service with a disk does.
+- Any VPS (for example Hetzner Cloud): install with the script and run `paw service install`, or use compose.
+- Oracle Cloud Always Free (Arm, 2 OCPU, 12 GB): works, but idle instances can be reclaimed.
+- Raspberry Pi 5 with a small local model: speed varies a lot with the model and cooling. Measure with `ollama run <model> --verbose`.
 
 ---
 

@@ -109,6 +109,7 @@ class TestPathSecurity:
         assert err is not None
         assert "sensitive" in err.lower()
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX system paths; Windows resolves /etc to C:\\etc")
     def test_etc_ssh_blocked(self):
         err = validate_file_path("/etc/ssh/sshd_config")
         assert err is not None
