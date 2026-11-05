@@ -48,9 +48,15 @@ Shell, install and service:
 - `install.sh` and `install.ps1` with uv, `paw service` (systemd, launchd, Windows logon task), `paw update`, `paw extras add`, a headless `paw start` with a supervisor, a uv-built Docker image and a compose file with an Ollama profile.
 - Channels: approval buttons, Discord and Slack media, Telegram voice replies.
 
+Lean core:
+- The config no longer uses pydantic. It is read into plain dataclasses with the same defaults, the same checks and the same error line that names the setting (`has a problem at 'privacy.mode'`). Idle memory of the headless gateway drops from 50.2 to 41.9 MB, and the core install is smaller. Old config files load as before; a test compares both loaders on every shape of config the tests and the setup wizard make.
+- `paw --version` answers in about 11 ms (it was about 195 ms) and bare `paw --help` in about 80 ms (it was about 180 ms), without loading the config, the HTTP client or the model providers. Other commands load the config lazily too, so `paw status` starts faster.
+- CI builds the Docker image for linux/arm64 and linux/arm/v7 and runs an import check. The PowerShell command test no longer leaves stray folders in the repository.
+- An inline delegate helper that read local-only data now marks the parent turn too, so the turn's saved messages stay local-only.
+
 Fixes: scheduler jobs run on the agent that created them; the Gmail ids a job handled are remembered per job; Ollama numeric `keep_alive` and stream errors; saved turns after side effects; owner-only config and log folders; env secrets that the config names are hidden from child processes.
 
-Tests: 1840 passed.
+Tests: 1892 passed.
 
 ---
 
