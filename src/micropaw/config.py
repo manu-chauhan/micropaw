@@ -223,6 +223,13 @@ class ContextConfig(BaseModel):
     max_tool_iterations: int = 15
     max_subagent_iterations: int = 25
     max_message_size: int = 100_000  # max input message size in characters
+    window_tokens: int = 0  # model context size; 0 = auto (8192 for local servers, else 100000)
+
+
+class BudgetConfig(BaseModel):
+    daily_usd: float = 0.0          # 0 = no dollar cap
+    daily_tokens: int = 2_000_000   # cap for cloud models with no known price, used when a dollar cap is set
+    warn_at: float = 0.8            # one-line heads-up when this share of the cap is used
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +253,7 @@ class Config(BaseModel):
     voice: VoiceConfig = VoiceConfig()
     mcp_servers: dict[str, MCPServerConfig] = {}
     fallback_providers: list[str] = []
+    budget: BudgetConfig = BudgetConfig()
 
 
 # ---------------------------------------------------------------------------

@@ -127,11 +127,14 @@ class ClaudeProvider(AIProvider):
     def _usage(usage: dict) -> dict[str, int]:
         cached = usage.get("cache_read_input_tokens", 0) or 0
         written = usage.get("cache_creation_input_tokens", 0) or 0
-        return {
+        out = {
             "input": (usage.get("input_tokens", 0) or 0) + cached + written,
             "output": usage.get("output_tokens", 0) or 0,
             "cache_read": cached,
         }
+        if written:
+            out["cache_write"] = written
+        return out
 
     def _parse_response(self, data: dict) -> AIResponse:
         content = ""
