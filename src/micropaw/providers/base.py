@@ -101,6 +101,7 @@ class AIResponse:
     usage: dict[str, int]  # {"input": N, "output": N}
     stop_reason: str = ""  # "end_turn", "tool_use", "max_tokens", "refusal"
     thinking: list[dict[str, Any]] = field(default_factory=list)
+    note: str = ""  # shown to the user after the reply, never saved ("answered by X because Y failed")
 
 
 class AIProvider(ABC):

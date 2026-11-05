@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -520,3 +521,139 @@ class TestToolResult:
         assert len(tool_msgs) == 1
         assert tool_msgs[0].content == "echo: hello"
         assert tool_msgs[0].media == []
+
+
+# ---------------------------------------------------------------------------
+# Tests: turn persistence, fallback note, chain context window, busy local server
+# ---------------------------------------------------------------------------
+
+class WriteTool(Tool):
+    name = "writer"
+    description = "Changes something"
+    parameters: dict[str, Any] = {"type": "object", "properties": {}}
+
+    async def execute(self, args: dict[str, Any], context: ToolContext) -> str:
+        return "done"
+
+
+class SnapshotProvider(MockProvider):
+    """Records what the store had saved when the model was called the second time."""
+
+    def __init__(self, agent_box, responses):
+        super().__init__(responses)
+        self.box = agent_box
+        self.saved_at_call: list[list[str]] = []
+
+    async def chat(self, messages, tools=None):
+        calls = self.box["agent"].store.save_messages.call_args_list
+        self.saved_at_call.append([m.role for c in calls for m in c[0][1]])
+        return await super().chat(messages, tools)
+
+
+def _two_rounds(tool_name: str):
+    return [
+        AIResponse(content="", tool_calls=[ToolCall(id="t1", name=tool_name, arguments={"query": "x"})],
+                   usage={"input": 1, "output": 1}),
+        AIResponse(content="all done", tool_calls=[], usage={"input": 1, "output": 1}),
+    ]
+
+
+class TestTurnPersistence:
+    async def test_a_side_effect_round_is_saved_before_the_next_model_call(self):
+        box: dict = {}
+        provider = SnapshotProvider(box, _two_rounds("writer"))
+        agent = box["agent"] = _make_agent(provider, tools=[WriteTool()])
+        assert await agent.handle_message("do it", "u", "terminal") == "all done"
+        assert provider.saved_at_call[1] == ["user", "assistant", "tool"]  # on disk before the second call
+        saved = [m.role for c in agent.store.save_messages.call_args_list for m in c[0][1]]
+        assert saved == ["user", "assistant", "tool", "assistant"]  # nothing saved twice
+
+    async def test_a_read_only_round_waits_for_the_end_of_the_turn(self):
+        box: dict = {}
+        provider = SnapshotProvider(box, _two_rounds("web_search"))
+        agent = box["agent"] = _make_agent(provider, tools=[CounterTool()])
+        await agent.handle_message("look", "u", "terminal")
+        assert provider.saved_at_call[1] == []
+        assert agent.store.save_messages.call_count == 1
+
+
+class TestFallbackNote:
+    async def test_note_is_shown_but_not_saved(self):
+        import httpx
+
+        from micropaw.providers.failover import FallbackProvider
+
+        class Down(MockProvider):
+            name = "a"
+            model = "m"
+
+            async def chat(self, messages, tools=None):
+                raise httpx.ReadTimeout("x")
+
+        up = MockProvider([AIResponse(content="hello", tool_calls=[], usage={})])
+        up.model = "m"
+        agent = _make_agent(FallbackProvider([Down(), up]))
+        reply = await agent.handle_message("hi", "u", "terminal")
+        assert reply == "hello\n\n[answered by mock:m because a:m timed out]"
+        saved = [m for c in agent.store.save_messages.call_args_list for m in c[0][1]]
+        assert saved[-1].content == "hello"
+
+
+class TestChainContextWindow:
+    @staticmethod
+    def _chain(*providers):
+        from micropaw.config import BudgetConfig
+        from micropaw.memory.ledger import LateLedger
+        from micropaw.providers.failover import FallbackProvider
+        from micropaw.providers.metered import meter
+
+        metered = [meter(p, agent="main", role="chat", ledger=LateLedger(), budget=BudgetConfig()) for p in providers]
+        return FallbackProvider(metered)
+
+    def test_local_primary_with_a_cloud_backup_uses_its_num_ctx(self):
+        from micropaw.providers.ollama import OllamaProvider
+
+        local = OllamaProvider("http://localhost:11434", "m", 1000, 16384, "30m")
+        cloud = MockProvider()
+        cloud.name = "claude"
+        assert _make_agent(self._chain(local, cloud))._window_tokens() == 16384
+
+    def test_cloud_primary_with_a_local_backup_is_cloud_sized(self):
+        from micropaw.providers.ollama import OllamaProvider
+
+        local = OllamaProvider("http://localhost:11434", "m", 1000, 16384, "30m")
+        cloud = MockProvider()
+        cloud.name = "claude"
+        assert _make_agent(self._chain(cloud, local))._window_tokens() == 100_000
+
+    def test_a_single_metered_local_provider_uses_its_num_ctx(self):
+        from micropaw.providers.ollama import OllamaProvider
+
+        local = OllamaProvider("http://localhost:11434", "m", 1000, 12288, "30m")
+        assert _make_agent(self._chain(local))._window_tokens() == 12288
+
+
+class TestCompactionAndBusyServer:
+    async def test_compaction_is_skipped_while_the_local_server_is_busy(self):
+        class Local(MockProvider):
+            name = "ollama"
+            busy = True
+
+        agent = _make_agent(Local())
+        agent.config.context.window_tokens = 100
+        big = [Message(role="user", content="x" * 4000)] * 8
+        agent._schedule_compaction("c", big)
+        assert not agent._compact_tasks
+        Local.busy = False
+        agent._schedule_compaction("c", big)
+        assert agent._compact_tasks
+        await asyncio.gather(*agent._compact_tasks.values())
+
+    async def test_gate_reports_busy_only_for_a_held_local_slot(self):
+        from micropaw.providers.registry import _Gate
+
+        sem = asyncio.Semaphore(1)
+        local, cloud = _Gate(MockProvider(), sem, "ollama"), _Gate(MockProvider(), sem, None)
+        assert not local.busy
+        async with sem:
+            assert local.busy and not cloud.busy

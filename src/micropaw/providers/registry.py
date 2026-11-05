@@ -152,6 +152,11 @@ class _Gate(AIProvider):
         self.name = inner.name
         self.model = getattr(inner, "model", "")
 
+    @property
+    def busy(self) -> bool:
+        """A local server is already answering someone."""
+        return self._local is not None and self._sem.locked()
+
     def __getattr__(self, item: str):
         if item == "_inner":
             raise AttributeError(item)

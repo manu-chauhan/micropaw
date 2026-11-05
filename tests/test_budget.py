@@ -334,7 +334,7 @@ class TestChainMetering:
         chain = reg.role("main", "chat", specs)
         await chain.chat(MSG)  # spends $2, over the cap
         again = await chain.chat(MSG)  # claude is refused, the free local model answers
-        assert claude.calls == 1 and "daily budget" in again.content
+        assert claude.calls == 1 and "daily budget" in again.note
 
     async def test_usd_cap_refuses_a_chain_of_cloud_models(self, ledger):
         claude = FakeProvider("claude", "claude-sonnet-5-5", usage={"input": 1_000_000, "output": 0})

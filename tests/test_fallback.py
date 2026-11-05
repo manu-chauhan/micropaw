@@ -126,7 +126,8 @@ async def test_all_cooling_still_tries_in_order(clock):
 
 async def test_note_names_the_fallback_and_the_reason():
     r = await FallbackProvider([Fake("a", httpx.ReadTimeout("x")), Fake("b", text="hello")]).chat(USER)
-    assert r.content == "hello\n\n[answered by b:m because a:m timed out]"
+    assert r.content == "hello"  # the note is not part of the reply that gets saved
+    assert r.note == "\n\n[answered by b:m because a:m timed out]"
 
 
 async def test_no_note_when_primary_answers_or_tool_calls_pending():
@@ -174,7 +175,8 @@ async def test_stream_falls_through_before_any_text():
     chain = FallbackProvider([Fake("a", httpx.ConnectError("x")), Fake("b", text="two words")])
     items = await collect(chain.chat_stream(USER))
     assert items[0] == "two " and isinstance(items[-1], AIResponse)
-    assert "[answered by b:m because a:m could not be reached]" in items[-1].content
+    assert "[answered by b:m because a:m could not be reached]" in items[-2]  # streamed to the user
+    assert "answered by" not in items[-1].content and "could not be reached" in items[-1].note
 
 
 async def test_stream_error_after_text_does_not_fall_through():
@@ -183,7 +185,8 @@ async def test_stream_error_after_text_does_not_fall_through():
     items = await collect(FallbackProvider([a, b]).chat_stream(USER))
     assert b.calls == 0
     final = items[-1]
-    assert final.content.startswith("one two ") and "[reply cut short: a:m timed out]" in final.content
+    assert final.content.startswith("one two ") and "reply cut short" not in final.content
+    assert "[reply cut short: a:m timed out]" in final.note
 
 
 async def test_stream_400_raises():
@@ -289,3 +292,15 @@ async def test_local_gate_runs_one_call_at_a_time():
     gate = _Gate(Slow("s"), asyncio.Semaphore(1), "ollama")
     await asyncio.gather(*(gate.chat(USER) for _ in range(4)))
     assert peak == 1
+
+
+@pytest.mark.parametrize("body, falls", [
+    ("API key not valid. Please pass a valid API key.", True),
+    ('{"error": "Your credit balance is too low"}', True),
+    ("Billing is not enabled", True),
+    ("You exceeded your current QUOTA", True),
+    ("maximum context length exceeded; check your billing", False),  # the request is the problem
+    ("messages: unexpected role", False),
+])
+def test_400_falls_through_when_the_body_blames_the_account(body, falls):
+    assert (classify(status(400, body)) is not None) is falls
