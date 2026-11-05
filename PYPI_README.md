@@ -412,7 +412,7 @@ Your messages go where you point MicroPaw: the model, search and chat services y
 ### The three modes
 
 - `airgapped`: MicroPaw talks only to this computer, and to your own network if `privacy.allow_lan` is on. Models, embeddings, speech and search must run there. Cloud models, chat apps that relay through a company's servers (Telegram, Discord, Slack, WhatsApp), Google mail and calendar, updates and model downloads are refused with a message that says why. Web search answers from offline sources (Kiwix archives and your own documents) and says so.
-- `local`: models, embeddings, speech-to-text and text-to-speech run on this computer or your network. Web search goes only through your own SearXNG (`search.searxng_url`), optionally through a SOCKS proxy such as Tor (`search.proxy`), and you see every query before it is sent, because a query can contain private text. Your Kiwix archives and documents are searched first when you have them. `web_browse` and `http_request` are off unless you name them in `privacy.allow` (`web_browse`, `web_fetch`). `web_browse` shows you each page address for approval and removes tracking parameters from it. `http_request` does not: a plain GET is not asked about and the address is not cleaned, so name `web_fetch` only if you accept that.
+- `local`: models, embeddings, speech-to-text and text-to-speech run on this computer or your network. Web search goes only through your own SearXNG (`search.searxng_url`), optionally through a SOCKS proxy such as Tor (`search.proxy`), and you see every query before it is sent, because a query can contain private text. Your Kiwix archives and documents are searched first when you have them. `web_browse` and `http_request` are off unless you name them in `privacy.allow` (`web_browse`, `web_fetch`). `web_browse` shows you each page address for approval and removes tracking parameters from it. `http_request` does the same: it asks for every address, shows the cleaned one and any long path or query part that could carry data, sends no cookies, referrer or caller headers, and checks every redirect. It makes GET requests only.
 - `normal` (the default): you can use cloud models. Even here, a search asks first once the chat has read outside content, and each reply says which provider answered.
 
 MICROPAW_PRIVACY in the environment can make the mode stricter than the config says, never looser. The mode is read once when MicroPaw starts.
@@ -629,6 +629,7 @@ MicroPaw > [delegate] "Research quantum computing breakthroughs"
 | `paw status` | System status overview |
 | `paw doctor` | Diagnostics: Python, deps, disk, keys, every model server you use, privacy checks (`--search` runs one test search) |
 | `paw privacy` | Where your data goes: the mode, each model, search, channel and server, file permissions |
+| `paw privacy share-history` | Let cloud models see what was saved in local or air-gapped mode (asks first, `--yes` skips the question) |
 | `paw models add <name> <address>` | Test a model server on another computer and save it (`--key-env`, `--use main\|fast\|vision\|fallback`) |
 | `paw models remove <name>` | Forget a server added with `paw models add` |
 | `paw models scan` | Find model servers: this computer, your config, `--host`, and your network with `--lan` or `--range` |

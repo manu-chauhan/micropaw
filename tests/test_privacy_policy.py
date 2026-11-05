@@ -547,3 +547,38 @@ def test_private_lan_hosts_entries_are_not_refused():
                                      "fe80::/10", "box", "::ffff:192.168.1.5"])
     assert privacy.settings().public == ()
     assert privacy.check_config(config(privacy_kw={"mode": "airgapped", "lan_hosts": ["10.0.0.0/8"]})).refusals == []
+
+
+async def test_http_request_in_local_mode_shows_the_cleaned_address_and_fetches_it_clean(monkeypatch):
+    import httpx
+
+    from micropaw import net
+    from micropaw.tools.base import ToolContext
+    from micropaw.tools.http_request import HttpRequestTool
+    tool = HttpRequestTool()
+    ctx = ToolContext("c", "u", "terminal")
+    set_mode("local", allow=["web_fetch"])
+    long = "x" * 50
+    text = tool.needs_approval({"url": f"https://example.com/{long}?utm_source=a&id=7#top"}, ctx)
+    assert text.splitlines()[0] == f"GET https://example.com/{long}?id=7"
+    assert "Long parts that could carry data" in text and "x" * 40 + "..." in text
+    assert tool.needs_approval({"url": "https://example.com/a"}, ctx) == "GET https://example.com/a"
+
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, text="hello", headers={"content-type": "text/plain"})
+
+    real = net.client
+    monkeypatch.setattr(net, "client", lambda *a, **k: real(*a, transport=httpx.MockTransport(handler), **k))
+    monkeypatch.setattr(privacy, "permit", lambda host, *a, **k: privacy.guard().permit(host, 120.0, ()))
+
+    async def fine(url):
+        return None
+    monkeypatch.setattr("micropaw.tools.http_request.validate_url", fine)
+    out = await tool.execute({"url": "https://example.com/p?utm_source=a&id=7",
+                              "headers": {"Authorization": "secret"}}, ctx)
+    assert out.startswith("HTTP 200") and "URL: https://example.com/p?id=7" in out and out.endswith("hello")
+    assert str(seen[0].url) == "https://example.com/p?id=7"
+    assert "authorization" not in seen[0].headers and "referer" not in seen[0].headers
