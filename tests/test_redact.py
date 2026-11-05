@@ -83,7 +83,7 @@ def test_normal_text_is_untouched():
 
 
 def test_config_secrets_walks_fields_and_mcp_env():
-    c = Config.model_validate({
+    c = Config.from_dict({
         "provider_config": {"claude": {"api_key": SECRET}},
         "channels": {"webchat": {"auth_token": "web-token-12345"}},
         "google": {"client_secret": "google-secret-9876"},
@@ -175,7 +175,7 @@ async def test_gateway_start_hides_env_secrets_the_config_names(monkeypatch, tmp
     monkeypatch.setattr(gw_mod, "DB_FILE", tmp_path / "d.db")
     monkeypatch.setattr(gw_mod, "CONFIG_DIR", tmp_path)
     monkeypatch.setattr("micropaw.scheduler.Scheduler.run", lambda self: asyncio.sleep(0))
-    c = Config.model_validate({
+    c = Config.from_dict({
         "providers": {"gpubox": {"base_url": "https://llm.example.com/v1", "api_key_env": "GPUBOX_PASS"}},
         "mcp_servers": {"x": {"url": "https://m.example.com/mcp",
                               "headers": {"Authorization": "Bearer ${MCP_BEARER}"}}},

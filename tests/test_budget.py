@@ -257,7 +257,7 @@ class TestUsageCommand:
     def test_config_budget_defaults_and_old_configs(self):
         c = Config()
         assert (c.budget.daily_usd, c.budget.daily_tokens, c.budget.warn_at) == (0, 2_000_000, 0.8)
-        assert Config.model_validate({"provider": "ollama"}).budget.daily_usd == 0
+        assert Config.from_dict({"provider": "ollama"}).budget.daily_usd == 0
 
 
 class TestRegistryMetering:

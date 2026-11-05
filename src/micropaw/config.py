@@ -1,18 +1,18 @@
-"""MicroPaw configuration — single Pydantic model, env var overrides, redaction."""
+"""MicroPaw configuration: one dataclass tree, env var overrides, redaction."""
 
-from __future__ import annotations
-
+import dataclasses
 import json
 import logging
 import os
 import re
+import types
 from collections.abc import Callable
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, get_args, get_origin
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 from micropaw.providers.registry import BUILTIN, PRESETS
 
@@ -73,10 +73,168 @@ def server_url(text: str, kind: str = "openai") -> str:
 
 
 # ---------------------------------------------------------------------------
+# Model base: reads a JSON-style dict into typed fields, with the checks the config has always had
+# ---------------------------------------------------------------------------
+
+class ConfigValueError(ValueError):
+    """A value in a config dict cannot be used. loc is the dotted path to it, why is in plain words."""
+
+    def __init__(self, loc: list, why: str):
+        super().__init__(why)
+        self.loc, self.why = loc, why
+
+    def __str__(self) -> str:
+        return f"{'.'.join(map(str, self.loc))}: {self.why}" if self.loc else self.why
+
+
+_TRUE = frozenset({"1", "on", "t", "true", "y", "yes"})
+_FALSE = frozenset({"0", "off", "f", "false", "n", "no"})
+_WHOLE = re.compile(r"[+-]?\d+\.0*")
+
+
+def _coerce(tp: Any, v: Any) -> Any:
+    """Check v against a field type and convert it the way a JSON config needs ("5" is 5, "yes" is True)."""
+    origin = get_origin(tp)
+    if origin is types.UnionType:  # X | None
+        return None if v is None else _coerce(next(a for a in get_args(tp) if a is not type(None)), v)
+    if origin is Literal:
+        if isinstance(v, str) and v in get_args(tp):
+            return v
+        raise ConfigValueError([], "Input should be " + " or ".join(repr(a) for a in get_args(tp)))
+    if origin is list:
+        if not isinstance(v, (list, tuple)):
+            raise ConfigValueError([], "Input should be a valid list")
+        out = []
+        for i, item in enumerate(v):
+            try:
+                out.append(_coerce(get_args(tp)[0], item))
+            except ConfigValueError as e:
+                e.loc.insert(0, i)
+                raise
+        return out
+    if origin is dict:
+        if not isinstance(v, dict):
+            raise ConfigValueError([], "Input should be a valid dictionary")
+        key_type, value_type = get_args(tp)
+        out = {}
+        for k, item in v.items():
+            try:
+                out[_coerce(key_type, k)] = _coerce(value_type, item)
+            except ConfigValueError as e:
+                e.loc.insert(0, k)
+                raise
+        return out
+    if dataclasses.is_dataclass(tp):
+        return v if isinstance(v, tp) else tp.from_dict(v)
+    if tp is str:
+        if isinstance(v, str):
+            return v
+        raise ConfigValueError([], "Input should be a valid string")
+    if tp is bool:
+        if isinstance(v, bool):
+            return v
+        word = v.strip().lower() if isinstance(v, str) else v if isinstance(v, (int, float)) else None
+        if word in _TRUE or word == 1:
+            return True
+        if word in _FALSE or word == 0:
+            return False
+        raise ConfigValueError([], "Input should be a valid boolean")
+    if tp is int:
+        if isinstance(v, str):  # "5" and "5.0" are fine, "1e3" is not
+            text = v.strip()
+            try:
+                v = int(text) if text.lstrip("+-").isdecimal() else float(text) if _WHOLE.fullmatch(text) else int(text)
+            except ValueError:
+                raise ConfigValueError([], "Input should be a valid integer") from None
+        if isinstance(v, int) or (isinstance(v, float) and v.is_integer()):
+            return int(v)
+        raise ConfigValueError([], "Input should be a valid integer")
+    if tp is float:
+        if isinstance(v, str):
+            try:
+                return float(v.strip())
+            except ValueError:
+                raise ConfigValueError([], "Input should be a valid number") from None
+        if isinstance(v, (int, float)):
+            return float(v)
+        raise ConfigValueError([], "Input should be a valid number")
+    raise TypeError(f"config field type {tp!r} is not supported")
+
+
+@dataclass
+class _Model:
+    """Base of every config section. Subclasses may set _pre and _post (field name to function, run before
+    and after the type check), _forbid_extra, and define _check() for a rule that spans fields."""
+
+    _pre = {}
+    _post = {}
+    _forbid_extra = False
+
+    def __post_init__(self) -> None:
+        for f in dataclasses.fields(self):
+            v = getattr(self, f.name)
+            try:
+                if f.name in self._pre:
+                    v = self._pre[f.name](v)
+                v = _coerce(f.type, v)
+                if f.name in self._post:
+                    v = self._post[f.name](v)
+            except ConfigValueError as e:
+                e.loc.insert(0, f.name)
+                raise
+            except ValueError as e:
+                raise ConfigValueError([f.name], str(e)) from e
+            setattr(self, f.name, v)
+        try:
+            self._check()
+        except ConfigValueError:
+            raise
+        except ValueError as e:
+            raise ConfigValueError([], str(e)) from e
+
+    def _check(self) -> None:
+        pass
+
+    @classmethod
+    def from_dict(cls, raw: Any):
+        """Build from a dict. Unknown keys are ignored (an agent entry rejects them); a missing required key fails."""
+        if not isinstance(raw, dict):
+            raise ConfigValueError([], "Input should be a valid dictionary")
+        names = {f.name for f in dataclasses.fields(cls)}
+        if cls._forbid_extra:
+            for k in raw:
+                if k not in names:
+                    raise ConfigValueError([k], "Extra inputs are not permitted")
+        for f in dataclasses.fields(cls):
+            if f.default is dataclasses.MISSING and f.default_factory is dataclasses.MISSING and f.name not in raw:
+                raise ConfigValueError([f.name], "Field required")
+        return cls(**{k: v for k, v in raw.items() if k in names})
+
+
+def changed_fields(obj: _Model) -> dict:
+    """The fields of a section that differ from their defaults."""
+    return {f.name: v for f in dataclasses.fields(obj) if (v := getattr(obj, f.name)) !=
+            (f.default if f.default is not dataclasses.MISSING else f.default_factory())}
+
+
+def _sub(cls: type) -> Any:
+    return field(default_factory=cls)
+
+
+def _list() -> Any:
+    return field(default_factory=list)
+
+
+def _dict() -> Any:
+    return field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
 # Provider configs
 # ---------------------------------------------------------------------------
 
-class ClaudeConfig(BaseModel):
+@dataclass
+class ClaudeConfig(_Model):
     api_key: str = ""
     model: str = "claude-sonnet-5-5"
     max_tokens: int = 16000  # room for thinking plus the reply
@@ -84,34 +242,35 @@ class ClaudeConfig(BaseModel):
     effort: str = "medium"  # low | medium | high | xhigh | max; "" = model default (older models reject effort)
 
 
-class OpenAIConfig(BaseModel):
+@dataclass
+class OpenAIConfig(_Model):
     api_key: str = ""
     model: str = "gpt-4o"
     max_tokens: int = 4096
     base_url: str = "https://api.openai.com"
 
 
-class OllamaConfig(BaseModel):
+@dataclass
+class OllamaConfig(_Model):
     host: str = "http://localhost:11434"
     model: str = "llama3.1"
     max_tokens: int = 4096
     num_ctx: int = 0          # 0 = by RAM: 8192 up to 16 GB, else 16384. Ollama cuts longer prompts silently.
     keep_alive: str = "30m"   # how long a model stays loaded after the last call
 
-    @field_validator("host")
-    @classmethod
-    def _host_is_an_address(cls, v: str) -> str:
-        return server_url(v, "ollama")
+    _post = {"host": lambda v: server_url(v, "ollama")}
 
 
-class GeminiConfig(BaseModel):
+@dataclass
+class GeminiConfig(_Model):
     api_key: str = ""
     model: str = "gemini-2.5-flash"
     max_tokens: int = 4096
     base_url: str = "https://generativelanguage.googleapis.com"
 
 
-class ModelsConfig(BaseModel):
+@dataclass
+class ModelsConfig(_Model):
     """Extra models by job, each "provider:model" and local or cloud; empty = use the main model.
 
     provider is claude, openai, gemini, ollama, a preset (providers/registry.py) or one of your own (providers).
@@ -122,7 +281,8 @@ class ModelsConfig(BaseModel):
     vision: str = ""  # images, for when the main model can't see
 
 
-class CustomProviderConfig(BaseModel):
+@dataclass
+class CustomProviderConfig(_Model):
     """Your own OpenAI-style server: `"providers": {"myvllm": {"base_url": "http://gpu-box:8000/v1", ...}}`."""
 
     base_url: str
@@ -131,141 +291,149 @@ class CustomProviderConfig(BaseModel):
     num_ctx: int = 0       # kind ollama: context size; 0 = 8192 for a server on another machine
     keep_alive: str = ""   # kind ollama: how long the model stays loaded; "" = the ollama.keep_alive setting
 
-    @field_validator("base_url")
-    @classmethod
-    def _base_url_is_an_address(cls, v: str) -> str:
-        return server_url(v)
+    _post = {"base_url": server_url}
 
 
-class AgentPersona(BaseModel):
+@dataclass
+class AgentPersona(_Model):
     name: str = ""
     personality: str = ""
     system_prompt_extra: str = ""
 
 
-class ToolFilter(BaseModel):
+@dataclass
+class ToolFilter(_Model):
     """Tool names or patterns ("mcp_*"). A non-empty allow list is all the agent gets; deny removes after that."""
 
-    allow: list[str] = []
-    deny: list[str] = []
+    allow: list[str] = _list()
+    deny: list[str] = _list()
 
 
-class AgentConfig(BaseModel):
+@dataclass
+class AgentConfig(_Model):
     """A named agent. Every field is optional and inherits from the top-level config.
 
     model, fast, vision, fallbacks are specs ("provider:model"). fast = "" means the main model.
     fallbacks = [] means strict (no fallback); leaving it out inherits the top-level list.
     """
 
-    model_config = ConfigDict(extra="forbid")  # a typo or an unsupported key (such as "users") must not pass silently
+    _forbid_extra = True  # a typo or an unsupported key (such as "users") must not pass silently
 
     model: str = ""
     fast: str | None = None
     vision: str | None = None
     fallbacks: list[str] | None = None
-    persona: AgentPersona = AgentPersona()
-    tools: ToolFilter = ToolFilter()
+    persona: AgentPersona = _sub(AgentPersona)
+    tools: ToolFilter = _sub(ToolFilter)
     workspace: str = ""
     history: Literal["shared", "separate"] = "shared"  # separate = own conversation ids
     # A local agent never inherits cloud fallbacks or roles. This lets it use the ones it lists itself.
     allow_cloud: bool = False
 
 
-class MCPServerConfig(BaseModel):
+@dataclass
+class MCPServerConfig(_Model):
     """An MCP server MicroPaw starts as a child process. Pin versions in args (pkg@1.2.3)."""
 
     command: str = ""         # e.g. "npx", "uvx", "python"; empty when `url` is set
     url: str = ""             # streamable HTTP server instead of a child process
-    headers: dict[str, str] = {}  # sent with every request; ${ENV_NAME} is read from the environment
-    args: list[str] = []
-    env: dict[str, str] = {}  # only these are added; MicroPaw's own keys are never passed on
-    allow: list[str] = []     # tool names that run without asking (until outside content is read)
+    headers: dict[str, str] = _dict()  # sent with every request; ${ENV_NAME} is read from the environment
+    args: list[str] = _list()
+    env: dict[str, str] = _dict()  # only these are added; MicroPaw's own keys are never passed on
+    allow: list[str] = _list()     # tool names that run without asking (until outside content is read)
     timeout: float = 300.0    # seconds per call; decompiling can be slow
     enabled: bool = True
     tools_hash: str = ""      # sha256 of the tool list the owner approved; a change blocks the server
     network: bool = False     # local mode only: the child may use the network (ignored in airgapped)
-    paths: list[str] = []     # folders the child may read when it is isolated (privacy local or airgapped)
-    write_paths: list[str] = []  # folders it may also write
+    paths: list[str] = _list()     # folders the child may read when it is isolated (privacy local or airgapped)
+    write_paths: list[str] = _list()  # folders it may also write
 
-    @model_validator(mode="after")
-    def _needs_command_or_url(self) -> MCPServerConfig:
+    def _check(self) -> None:
         if not self.command and not self.url:
             raise ValueError("an MCP server needs a command or a url")
-        return self
 
 
-class ProviderConfig(BaseModel):
-    claude: ClaudeConfig = ClaudeConfig()
-    openai: OpenAIConfig = OpenAIConfig()
-    ollama: OllamaConfig = OllamaConfig()
-    gemini: GeminiConfig = GeminiConfig()
+@dataclass
+class ProviderConfig(_Model):
+    claude: ClaudeConfig = _sub(ClaudeConfig)
+    openai: OpenAIConfig = _sub(OpenAIConfig)
+    ollama: OllamaConfig = _sub(OllamaConfig)
+    gemini: GeminiConfig = _sub(GeminiConfig)
 
 
 # ---------------------------------------------------------------------------
 # Channel configs
 # ---------------------------------------------------------------------------
 
-class TerminalChannelConfig(BaseModel):
+@dataclass
+class TerminalChannelConfig(_Model):
     enabled: bool = True
 
 
-class TelegramChannelConfig(BaseModel):
+@dataclass
+class TelegramChannelConfig(_Model):
     enabled: bool = False
     token: str = ""
-    allowed_users: list[str] = []
+    allowed_users: list[str] = _list()
 
 
-class DiscordChannelConfig(BaseModel):
+@dataclass
+class DiscordChannelConfig(_Model):
     enabled: bool = False
     token: str = ""
-    allowed_users: list[str] = []
+    allowed_users: list[str] = _list()
 
 
-class SlackChannelConfig(BaseModel):
+@dataclass
+class SlackChannelConfig(_Model):
     enabled: bool = False
     bot_token: str = ""
     app_token: str = ""
     signing_secret: str = ""
-    allowed_users: list[str] = []
+    allowed_users: list[str] = _list()
 
 
-class WhatsAppChannelConfig(BaseModel):
+@dataclass
+class WhatsAppChannelConfig(_Model):
     enabled: bool = False
     token: str = ""
     phone_id: str = ""
     verify_token: str = ""
     app_secret: str = ""
-    allowed_users: list[str] = []
+    allowed_users: list[str] = _list()
 
 
-class WebChatChannelConfig(BaseModel):
+@dataclass
+class WebChatChannelConfig(_Model):
     enabled: bool = False
     host: str = "127.0.0.1"
     port: int = 8765
     auth_token: str = ""
-    allowed_origins: list[str] = []
+    allowed_origins: list[str] = _list()
 
 
-class ChannelsConfig(BaseModel):
-    terminal: TerminalChannelConfig = TerminalChannelConfig()
-    telegram: TelegramChannelConfig = TelegramChannelConfig()
-    discord: DiscordChannelConfig = DiscordChannelConfig()
-    slack: SlackChannelConfig = SlackChannelConfig()
-    whatsapp: WhatsAppChannelConfig = WhatsAppChannelConfig()
-    webchat: WebChatChannelConfig = WebChatChannelConfig()
+@dataclass
+class ChannelsConfig(_Model):
+    terminal: TerminalChannelConfig = _sub(TerminalChannelConfig)
+    telegram: TelegramChannelConfig = _sub(TelegramChannelConfig)
+    discord: DiscordChannelConfig = _sub(DiscordChannelConfig)
+    slack: SlackChannelConfig = _sub(SlackChannelConfig)
+    whatsapp: WhatsAppChannelConfig = _sub(WhatsAppChannelConfig)
+    webchat: WebChatChannelConfig = _sub(WebChatChannelConfig)
 
 
 # ---------------------------------------------------------------------------
 # Other configs
 # ---------------------------------------------------------------------------
 
-class PermissionsConfig(BaseModel):
+@dataclass
+class PermissionsConfig(_Model):
     allow_shell: bool = False
     allow_file_write: bool = False
     allow_web_browse: bool = True
     # Ask before every host shell command (False: only once outside content was read)
     confirm_dangerous: bool = True
-    disabled_tools: list[str] = []  # tool names to disable, e.g. ["web_search", "http_request"]
+    disabled_tools: list[str] = _list()  # tool names to disable, e.g. ["web_search", "http_request"]
     workspace: str = "~/micropaw"  # files written here, and shell runs here, without asking
     # Where shell commands run: auto, off, bwrap, seatbelt, docker or podman
     sandbox: Literal["auto", "off", "bwrap", "seatbelt", "docker", "podman"] = "auto"
@@ -273,19 +441,22 @@ class PermissionsConfig(BaseModel):
     sandbox_image: str = "python:3.13-slim"  # image for docker and podman
 
 
-class PersonaConfig(BaseModel):
+@dataclass
+class PersonaConfig(_Model):
     name: str = "MicroPaw"
     personality: str = "friendly, helpful, and clever"
     location: str = ""  # e.g. "San Francisco, CA" — used for "near me" queries
     system_prompt_extra: str = ""
 
 
-class RateLimitConfig(BaseModel):
+@dataclass
+class RateLimitConfig(_Model):
     messages_per_minute: int = 20
     burst_limit: int = 5
 
 
-class EmbeddingConfig(BaseModel):
+@dataclass
+class EmbeddingConfig(_Model):
     enabled: str = "auto"  # "auto", "true", "false"
     provider: Literal["auto", "local", "openai", "ollama"] = "auto"
     model: str = ""  # empty = auto-select best model for provider
@@ -293,15 +464,11 @@ class EmbeddingConfig(BaseModel):
     api_key_env: str = ""  # name of the environment variable that holds the key for base_url; "" = none
     keep_alive: str = "1m"  # how long Ollama keeps the embedding model loaded after the last message
 
-    @field_validator("enabled", mode="before")
-    @classmethod
-    def _coerce_enabled(cls, v):
-        if isinstance(v, bool):
-            return "true" if v else "false"
-        return str(v).lower()
+    _pre = {"enabled": lambda v: ("true" if v else "false") if isinstance(v, bool) else str(v).lower()}
 
 
-class SearchConfig(BaseModel):
+@dataclass
+class SearchConfig(_Model):
     """off: no search. offline: Kiwix and your own documents, no internet. searxng: your own server.
     auto: your own SearXNG or Brave if set, else public instances (never in airgapped or local mode).
     """
@@ -310,15 +477,25 @@ class SearchConfig(BaseModel):
     brave_api_key: str = ""
     searxng_url: str = ""  # self-hosted SearXNG URL, e.g. "http://localhost:8888"
     kiwix_url: str = ""    # kiwix-serve on this computer or your network, e.g. "http://localhost:8080"
-    kiwix_books: list[str] = []  # book names to search (up to 5), e.g. ["wikipedia_en_all_nopic_2026-06"]
+    kiwix_books: list[str] = _list()  # book names to search (up to 5), e.g. ["wikipedia_en_all_nopic_2026-06"]
     proxy: str = ""        # socks5h:// or socks5:// proxy for your own SearXNG (needs: pip install micropaw[tor])
 
 
-class DisplayConfig(BaseModel):
+@dataclass
+class DisplayConfig(_Model):
     show_provider: bool = True  # end each reply with a line naming the model server that answered
 
 
-class PrivacyConfig(BaseModel):
+def _mode_spelling(value: Any) -> Any:
+    from micropaw.privacy import PrivacyError, parse_mode
+    try:
+        return (parse_mode(value) or "normal") if isinstance(value, str) else value
+    except PrivacyError as e:
+        raise ValueError(str(e)) from e
+
+
+@dataclass
+class PrivacyConfig(_Model):
     """Where data may go. airgapped: nothing leaves this machine (and the LAN, if allowed).
     local: models, embeddings and speech only on this machine or the LAN; web search only through your own servers.
     normal: cloud allowed where you configure it, with labels saying where each reply went.
@@ -326,28 +503,22 @@ class PrivacyConfig(BaseModel):
 
     mode: Literal["airgapped", "local", "normal"] = "normal"
 
-    @field_validator("mode", mode="before")
-    @classmethod
-    def _spelling(cls, value):
-        from micropaw.privacy import PrivacyError, parse_mode
-        try:
-            return (parse_mode(value) or "normal") if isinstance(value, str) else value
-        except PrivacyError as e:
-            raise ValueError(str(e)) from e
+    _pre = {"mode": lambda v: _mode_spelling(v)}
 
     allow_lan: bool = True          # private ranges and Tailscale count as "this side" in airgapped and local
-    lan_hosts: list[str] = []       # extra host names or CIDRs that count as local (names are never resolved to decide)
+    lan_hosts: list[str] = _list()  # extra host names or CIDRs that count as local (never resolved to decide)
     allow_cloud_fallback: bool = False  # a local main model may fail over to a cloud model
     # a local main model may use a cloud fast or vision model (normal mode); each delegate task asks first
     allow_cloud_helpers: bool = False
     share_with_cloud: bool = True       # USER.md and the location go to a cloud model (paw setup turns this off)
     # Local-mode exceptions: telegram, discord, slack, whatsapp, google, web_fetch, web_browse, shell_network
-    allow: list[str] = []
+    allow: list[str] = _list()
     # Airgapped: MCP servers over HTTP that you vouch for. MicroPaw cannot see where they send data.
-    trusted_local_services: list[str] = []
+    trusted_local_services: list[str] = _list()
 
 
-class StorageConfig(BaseModel):
+@dataclass
+class StorageConfig(_Model):
     """What MicroPaw keeps on disk, for how long, and what it writes to logs."""
 
     retention_days: int = 0         # delete messages, summaries, chunks and email records older than this (0 = keep)
@@ -358,7 +529,8 @@ class StorageConfig(BaseModel):
     audit: Literal["full", "names"] = "full"  # names: the audit log keeps tool names and outcomes, no arguments
 
 
-class VoiceConfig(BaseModel):
+@dataclass
+class VoiceConfig(_Model):
     """Speech-to-text for voice notes, via any OpenAI-style /v1/audio/transcriptions endpoint.
 
     stt is "openai:<model>", a hosted preset ("groq:whisper-large-v3-turbo"), or "local:<model>"
@@ -379,13 +551,15 @@ class VoiceConfig(BaseModel):
     reply_with_voice: bool = False
 
 
-class SchedulerConfig(BaseModel):
+@dataclass
+class SchedulerConfig(_Model):
     heartbeat_interval: int = 1800  # seconds (30 minutes)
     max_jobs: int = 50
     email_poll_seconds: int = 300   # how often Gmail is checked for email-triggered tasks
 
 
-class GoogleConfig(BaseModel):
+@dataclass
+class GoogleConfig(_Model):
     enabled: bool = False
     client_id: str = ""       # Google Cloud OAuth2 client ID
     client_secret: str = ""   # Google Cloud OAuth2 client secret
@@ -393,7 +567,8 @@ class GoogleConfig(BaseModel):
     calendar_enabled: bool = True
 
 
-class ContextConfig(BaseModel):
+@dataclass
+class ContextConfig(_Model):
     max_history_messages: int = 50
     compaction_threshold: int = 30
     max_tool_iterations: int = 15
@@ -402,7 +577,8 @@ class ContextConfig(BaseModel):
     window_tokens: int = 0  # model context size; 0 = auto (8192 for local servers, else 100000)
 
 
-class BudgetConfig(BaseModel):
+@dataclass
+class BudgetConfig(_Model):
     daily_usd: float = 0.0          # 0 = no dollar cap
     daily_tokens: int = 2_000_000   # cap for cloud models with no known price, used when a dollar cap is set
     warn_at: float = 0.8            # one-line heads-up when this share of the cap is used
@@ -415,36 +591,36 @@ class BudgetConfig(BaseModel):
 _AGENT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
 
-class Config(BaseModel):
+@dataclass
+class Config(_Model):
     config_version: str = "1.0"
     provider: Literal["claude", "openai", "ollama", "gemini"] = "claude"
-    provider_config: ProviderConfig = ProviderConfig()
-    channels: ChannelsConfig = ChannelsConfig()
-    permissions: PermissionsConfig = PermissionsConfig()
-    persona: PersonaConfig = PersonaConfig()
-    rate_limit: RateLimitConfig = RateLimitConfig()
-    embedding: EmbeddingConfig = EmbeddingConfig()
-    search: SearchConfig = SearchConfig()
-    context: ContextConfig = ContextConfig()
-    scheduler: SchedulerConfig = SchedulerConfig()
-    google: GoogleConfig = GoogleConfig()
-    models: ModelsConfig = ModelsConfig()
-    voice: VoiceConfig = VoiceConfig()
-    privacy: PrivacyConfig = PrivacyConfig()
-    storage: StorageConfig = StorageConfig()
-    mcp_servers: dict[str, MCPServerConfig] = {}
-    fallback_providers: list[str] = []
-    budget: BudgetConfig = BudgetConfig()
+    provider_config: ProviderConfig = _sub(ProviderConfig)
+    channels: ChannelsConfig = _sub(ChannelsConfig)
+    permissions: PermissionsConfig = _sub(PermissionsConfig)
+    persona: PersonaConfig = _sub(PersonaConfig)
+    rate_limit: RateLimitConfig = _sub(RateLimitConfig)
+    embedding: EmbeddingConfig = _sub(EmbeddingConfig)
+    search: SearchConfig = _sub(SearchConfig)
+    context: ContextConfig = _sub(ContextConfig)
+    scheduler: SchedulerConfig = _sub(SchedulerConfig)
+    google: GoogleConfig = _sub(GoogleConfig)
+    models: ModelsConfig = _sub(ModelsConfig)
+    voice: VoiceConfig = _sub(VoiceConfig)
+    privacy: PrivacyConfig = _sub(PrivacyConfig)
+    storage: StorageConfig = _sub(StorageConfig)
+    mcp_servers: dict[str, MCPServerConfig] = _dict()
+    fallback_providers: list[str] = _list()
+    budget: BudgetConfig = _sub(BudgetConfig)
     schema_version: int = SCHEMA_VERSION
-    agents: dict[str, AgentConfig] = {}  # absent = one agent "main" built from the fields above
-    routes: dict[str, str] = {}          # "telegram:-100123" or "discord:*" -> agent name
-    providers: dict[str, CustomProviderConfig] = {}
+    agents: dict[str, AgentConfig] = _dict()  # absent = one agent "main" built from the fields above
+    routes: dict[str, str] = _dict()          # "telegram:-100123" or "discord:*" -> agent name
+    providers: dict[str, CustomProviderConfig] = _dict()
     # Tools shown to the model: auto = a short list for a local model and all of them for a cloud one
     toolset: Literal["auto", "lean", "all"] = "auto"
-    display: DisplayConfig = DisplayConfig()
+    display: DisplayConfig = _sub(DisplayConfig)
 
-    @model_validator(mode="after")
-    def _check_agents(self) -> Config:
+    def _check(self) -> None:
         known = {*BUILTIN, *PRESETS, *(n.lower() for n in self.providers)}
 
         def check(where: str, spec: str) -> None:
@@ -464,7 +640,6 @@ class Config(BaseModel):
                 raise ValueError(f"Route '{key}': write it as platform:chat (telegram:-100123) or platform:* .")
             if target != "main" and target not in self.agents:
                 raise ValueError(f"Route '{key}' points to agent '{target}', which is not in agents.")
-        return self
 
 
 # ---------------------------------------------------------------------------
@@ -578,13 +753,10 @@ def load_config(hold: bool = True) -> Config:
     _apply_env_overrides(raw)
     raw.pop("config_version", None)
     try:
-        cfg = Config(**raw)
-    except ValidationError as e:
-        first = e.errors()[0]
-        where = ".".join(str(part) for part in first["loc"])
-        why = first["msg"].removeprefix("Value error, ").rstrip(".")
-        raise ConfigError(f"The config file {CONFIG_FILE} has a problem at '{where}': "
-                          f"{why}. Fix it, or run: paw setup --reset") from None
+        cfg = Config.from_dict(raw)
+    except ConfigValueError as e:
+        raise ConfigError(f"The config file {CONFIG_FILE} has a problem at '{'.'.join(map(str, e.loc))}': "
+                          f"{e.why.rstrip('.')}. Fix it, or run: paw setup --reset") from None
     from micropaw import privacy
     if hold:
         privacy.apply_floor(cfg)  # settings a strict run is holding back stay held in later loads
@@ -628,7 +800,7 @@ def _migrate_file(raw: dict) -> dict:
 
 def save_config(config: Config) -> None:
     """Save config to ~/.micropaw/config.json with restrictive permissions."""
-    _write_private(config.model_dump())
+    _write_private(asdict(config))
 
 
 def private_dir(path: Path) -> None:
@@ -671,7 +843,7 @@ def update_config_file(change: Callable[[dict], None], validate: Callable[[Confi
     if CONFIG_FILE.exists() and raw.get("schema_version", 0) < SCHEMA_VERSION:
         raw = _migrate_file(raw)
     change(raw)
-    config = Config(**{k: v for k, v in raw.items() if k != "config_version"})
+    config = Config.from_dict({k: v for k, v in raw.items() if k != "config_version"})
     if validate:
         validate(config)
     _write_private(raw)
@@ -725,7 +897,7 @@ def _redact(value: str) -> str:
 
 def display_config(config: Config) -> dict:
     """Return a redacted copy of the config for display."""
-    data = config.model_dump()
+    data = asdict(config)
 
     # Redact provider API keys
     for provider in ("claude", "openai", "gemini"):
@@ -743,9 +915,9 @@ def display_config(config: Config) -> dict:
     }
     for channel, fields in secret_fields.items():
         ch = data.get("channels", {}).get(channel, {})
-        for field in fields:
-            if ch.get(field):
-                ch[field] = _redact(ch[field])
+        for name in fields:
+            if ch.get(name):
+                ch[name] = _redact(ch[name])
 
     # Redact search API key
     search_key = data.get("search", {}).get("brave_api_key", "")

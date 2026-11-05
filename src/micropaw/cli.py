@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import os
 import shutil
@@ -19,6 +20,7 @@ from micropaw.config import (
     DB_FILE,
     Config,
     ConfigError,
+    changed_fields,
     config_exists,
     display_config,
     load_config,
@@ -925,7 +927,7 @@ def mcp_add(name, command, url, headers):
         if any(w in key.lower() for w in _SECRET_HEADER) and "${" not in value:
             raise click.BadParameter(f"{key}: put the secret in an environment variable and write ${{ENV_NAME}}")
         entry.setdefault("headers", {})[key] = value
-    cfg = MCPServerConfig(**entry)
+    cfg = MCPServerConfig.from_dict(entry)
     if cfg.url:
         console.print(f"This will connect to: {cfg.url}")
         console.print("Its tools can return anything, so every call asks you first and counts as outside content.")
@@ -935,7 +937,7 @@ def mcp_add(name, command, url, headers):
     if not click.confirm(f"Add '{name}'?", default=False):
         console.print("Nothing was written.")
         return
-    save_mcp_server(name, {**cfg.model_dump(exclude_defaults=True), "enabled": True})
+    save_mcp_server(name, {**changed_fields(cfg), "enabled": True})
     console.print(f"[green]Added '{name}'.[/green] Tools are pinned at first start. Try: paw mcp test {name}")
 
 
@@ -989,7 +991,7 @@ def mcp_trust(name):
     from micropaw.config import pin_mcp_tools
     from micropaw.mcp import MCPError, start_server
 
-    cfg = _mcp_server(name).model_copy(update={"tools_hash": ""})
+    cfg = dataclasses.replace(_mcp_server(name), tools_hash="")
 
     async def _run():
         server, tools = await start_server(name, cfg, timeout=180.0, pin=False)

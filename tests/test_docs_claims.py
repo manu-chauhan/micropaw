@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from pathlib import Path
 
@@ -13,6 +14,10 @@ from micropaw.config import Config, DisplayConfig, PrivacyConfig, SearchConfig
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = [ROOT / "README.md", ROOT / "PYPI_README.md"]
+
+
+def _fields(cls) -> set[str]:
+    return {f.name for f in dataclasses.fields(cls)}
 
 
 @pytest.fixture(params=DOCS, ids=lambda p: p.name)
@@ -30,11 +35,11 @@ def test_the_old_privacy_claims_are_gone(text, claim):
 
 def test_every_privacy_and_search_setting_named_in_the_docs_exists(text):
     for name in set(re.findall(r"`privacy\.(\w+)`", text)):
-        assert name in PrivacyConfig.model_fields, f"privacy.{name} is in the docs but not in PrivacyConfig"
+        assert name in _fields(PrivacyConfig), f"privacy.{name} is in the docs but not in PrivacyConfig"
     for name in set(re.findall(r"`search\.(\w+)`", text)):
-        assert name in SearchConfig.model_fields, f"search.{name} is in the docs but not in SearchConfig"
+        assert name in _fields(SearchConfig), f"search.{name} is in the docs but not in SearchConfig"
     for name in set(re.findall(r"`display\.(\w+)`", text)):
-        assert name in DisplayConfig.model_fields
+        assert name in _fields(DisplayConfig)
 
 
 def _command(path: list[str]):
@@ -82,10 +87,10 @@ def test_every_paw_command_named_in_a_code_span_exists(text):
 def test_settings_and_safeguards_the_docs_name_from_other_branches_exist(text):
     from micropaw.config import EmbeddingConfig
     for name in set(re.findall(r"`embedding\.(\w+)`", text)):
-        assert name in EmbeddingConfig.model_fields, f"embedding.{name} is in the docs but not in EmbeddingConfig"
+        assert name in _fields(EmbeddingConfig), f"embedding.{name} is in the docs but not in EmbeddingConfig"
     storage = getattr(__import__("micropaw.config", fromlist=["Config"]), "StorageConfig", None)
     for name in set(re.findall(r"`storage\.(\w+)`", text)):
-        assert storage and name in storage.model_fields, f"storage.{name} is in the docs but not in the config"
+        assert storage and name in _fields(storage), f"storage.{name} is in the docs but not in the config"
     src = "\n".join(p.read_text(encoding="utf-8") for p in (ROOT / "src").rglob("*.py"))
     ci = (ROOT / ".github" / "workflows" / "ci.yml")
     if "connection leaves loopback" in text or "enforced in the process" in text:

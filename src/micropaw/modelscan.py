@@ -7,6 +7,8 @@ and a key goes only to the host it was named for. None of it is an agent tool.
 from __future__ import annotations
 
 import asyncio
+import copy
+import dataclasses
 import ipaddress
 import os
 import re
@@ -157,7 +159,7 @@ def _entries_know_ollama() -> bool:
     """True when a providers entry can say it is an Ollama server (it has a `kind`). Without that, the entry is
     used as an OpenAI-style server, so an Ollama box is saved at its /v1 address, which Ollama also serves."""
     from micropaw.config import CustomProviderConfig
-    return "kind" in CustomProviderConfig.model_fields
+    return any(f.name == "kind" for f in dataclasses.fields(CustomProviderConfig))
 
 
 def stored_url(url: str, kind: str) -> str:
@@ -208,7 +210,7 @@ def refusal_for(config: Config, name: str, url: str, key_env: str) -> str | None
     from micropaw.config import CustomProviderConfig
     if text := _outside_network(url, key_env):
         return text
-    trial = config.model_copy(deep=True)
+    trial = copy.deepcopy(config)
     trial.providers[name] = CustomProviderConfig(base_url=url, api_key_env=key_env)
     problems = Registry(trial).problems
     return problems[0] if problems else None
