@@ -142,6 +142,32 @@ def _private_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return ip.is_loopback or any(ip in net for net in _PRIVATE_NETS)
 
 
+def origin_of(url: str) -> str:
+    """scheme://host:port of a base URL, without the /v1 path."""
+    u = urlparse(url if "://" in url else f"http://{url}")
+    return f"{u.scheme}://{u.netloc}"
+
+
+async def ollama_verdict(client: httpx.AsyncClient, origin: str, model: str, key: str = "") -> str:
+    """Does this model run on the server at `origin`? Asks Ollama's /api/show, which also answers behind an
+    OpenAI-style /v1 address. "remote" (it names ollama.com or another host), "here", "down" (nothing listens),
+    "unknown" (an Ollama that gave no usable answer) or "other" (not an Ollama, so there is nothing to ask)."""
+    from micropaw.providers.ollama import ShowInfo, show_status
+    got = await show_status(client, origin, model, key)
+    if isinstance(got, ShowInfo):
+        return "remote" if got.remote else "here"
+    if got == "down":
+        return "down"
+    ollama = urlparse(origin).port == 11434
+    if not ollama:
+        try:
+            resp = await client.get(f"{origin}/api/tags", headers={"Authorization": f"Bearer {key}"} if key else {})
+            ollama = resp.status_code == 200 and isinstance(resp.json().get("models"), list)
+        except (httpx.HTTPError, ValueError, AttributeError):
+            pass
+    return "unknown" if ollama else "other"
+
+
 def _host_of(url: str) -> tuple[str, str]:
     """(scheme, lower-case host) of a URL or bare host[:port]."""
     if "://" not in url:
@@ -179,8 +205,9 @@ class _Gate(AIProvider):
     `pending` is the host name of a LAN entry that did not resolve when MicroPaw started."""
 
     def __init__(self, inner: AIProvider, sem: asyncio.Semaphore, local: str | None,
-                 key_env: str = "", pending: str = "") -> None:
+                 key_env: str = "", pending: str = "", verify: tuple[str, str, str] | None = None) -> None:
         self._inner = inner
+        self._verify_args = verify  # (origin, model, key) to ask Ollama's /api/show before the first chat
         self._sem = sem
         self._local = local
         self._key_env = key_env
@@ -215,6 +242,21 @@ class _Gate(AIProvider):
         raise FriendlyError(
             f"{self._pending} resolves to a public address, so plain http would send the key in clear text. "
             "Use https, or a private address (192.168.x, 10.x, Tailscale 100.x).", PermissionError(self._pending))
+
+    async def _verify(self) -> None:
+        """An OpenAI-style address can be an Ollama that serves a model from ollama.com under a local name. Ask
+        once, and refuse in local and airgapped mode unless it is clear the model runs here."""
+        if self._verify_args is None:
+            return
+        origin, model, key = self._verify_args
+        async with net.client(origin, timeout=httpx.Timeout(5.0, connect=2.0), local=True) as client:
+            verdict = await ollama_verdict(client, origin, model, key)
+        if verdict in ("here", "other"):
+            self._verify_args = None
+        elif verdict in ("remote", "unknown"):
+            what = ("it runs on ollama.com, not on this network" if verdict == "remote" else
+                    "Ollama gave no usable answer to /api/show, so it cannot be confirmed that it runs here")
+            raise privacy.EgressBlocked(f"privacy mode blocked the model {model}: {what}")
 
     def _where(self) -> tuple[str, bool]:
         """(host:port, True when that is this machine) of the server behind this gate."""
@@ -268,6 +310,7 @@ class _Gate(AIProvider):
         await self._resolve_pending()
         async with self._sem:
             try:
+                await self._verify()
                 try:
                     return await self._inner.chat(messages, tools)
                 except Exception as e:
@@ -287,6 +330,7 @@ class _Gate(AIProvider):
             for attempt in (0, 1):
                 started = False
                 try:
+                    await self._verify()
                     async for item in self._inner.chat_stream(messages, tools):
                         started = True
                         yield item
@@ -462,8 +506,11 @@ class Registry:
                 need = ep.key_env or f"the {ep.name} API key"
                 self.problems.append(f"Model '{spec}' is not usable: {need} is not set.")
                 return None
+            verify = None
+            if ep.kind == "compat" and ep.local and privacy.local_only():
+                verify = (origin_of(ep.base_url), ep.model, os.environ.get(ep.key_env, "") if ep.key_env else "")
             self._cache[key] = _Gate(inner, self._sem(ep), ep.name if ep.local else None, ep.key_env,
-                                     self.pending.get(ep.name, ""))
+                                     self.pending.get(ep.name, ""), verify)
         return self._cache[key]
 
     def _built(self, specs: list[str], role: str = "") -> list[AIProvider]:

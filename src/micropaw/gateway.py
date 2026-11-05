@@ -260,7 +260,7 @@ class Gateway:
     async def start(self) -> None:
         """Initialize everything and start all channels."""
         try:
-            report = privacy.enforce(self.config, self.channels)
+            report = privacy.enforce(self.config, self.channels, await privacy.remote_model_refusals(self.config))
         except privacy.PrivacyError as e:  # lists every refusal at once; a restart would not change it
             logger.error("%s", e)
             print(e, file=sys.stderr)

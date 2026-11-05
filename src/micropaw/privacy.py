@@ -11,6 +11,7 @@ import ipaddress
 import os
 import re
 import socket
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
@@ -609,6 +610,55 @@ def _voice_refusals(config: Config) -> list[str]:
     return out
 
 
+def _role_specs(config: Config) -> list[tuple[str, str]]:
+    """Every (model spec, role label) the config uses, once each."""
+    out: list[tuple[str, str]] = []
+    agents = dict(config.agents)
+    agents.setdefault("main", None)
+    for name, ac in agents.items():
+        who = "" if name == "main" else f"agent {name} "
+        found = [((ac.model if ac else "") or config.provider, f"{who}main"),
+                 (ac.fast if ac and ac.fast is not None else config.models.fast, f"{who}fast"),
+                 (ac.vision if ac and ac.vision is not None else config.models.vision, f"{who}vision")]
+        found += [(spec, f"{who}fallback")
+                  for spec in (ac.fallbacks if ac and ac.fallbacks is not None else config.fallback_providers)]
+        out += [item for item in found if item[0] and item not in out]
+    return out
+
+
+async def remote_model_refusals(config: Config) -> list[str]:
+    """Ask each local Ollama-style server whether its model really runs there (an alias can point at ollama.com).
+    Only a clear "this runs remotely" is listed here; a server that cannot be read is refused at the first chat."""
+    if not local_only():
+        return []
+    import asyncio
+
+    import httpx
+
+    from micropaw import net
+    from micropaw.providers.registry import ollama_verdict, origin_of
+    bind_config(config)
+    reg = _reg()
+    asked: dict[tuple[str, str, str], list[tuple[str, str]]] = {}
+    for spec, label in _role_specs(config):
+        ep = reg.resolve(spec)
+        if ep is None or ep.kind not in ("ollama", "compat") or not ep.local or ep.pending or cloud_tagged(ep.model):
+            continue
+        key = os.environ.get(ep.key_env, "") if ep.key_env else ""
+        asked.setdefault((origin_of(ep.base_url), ep.model, key), []).append((spec, label))
+    if not asked:
+        return []
+    async with net.client(timeout=httpx.Timeout(4.0, connect=1.5), local=True) as client:
+        verdicts = await asyncio.gather(*(ollama_verdict(client, *k) for k in asked))
+    out = []
+    for specs, verdict in zip(asked.values(), verdicts):
+        if verdict == "remote":
+            spec, label = specs[0]
+            out.append(f"privacy.mode is {mode()}: the {label} model {spec} runs on ollama.com, even though the "
+                       "server is on this machine or network. Use a model that runs here.")
+    return out
+
+
 def check_config(config: Config, channels: list | None = None) -> Report:
     """Every part of the config that the current mode refuses, with the setting to change."""
     rep = Report()
@@ -616,23 +666,9 @@ def check_config(config: Config, channels: list | None = None) -> Report:
         return rep
     bind_config(config)
     reg = _reg()
-    seen: set[tuple[str, str]] = set()
-
-    def role(spec: str, label: str) -> None:
-        if spec and (spec, label) not in seen:
-            seen.add((spec, label))
-            if msg := reg.refusal(spec, label):
-                rep.refusals.append(msg)
-
-    agents = dict(config.agents)
-    agents.setdefault("main", None)
-    for name, ac in agents.items():
-        who = "" if name == "main" else f"agent {name} "
-        role((ac.model if ac else "") or config.provider, f"{who}main")
-        role((ac.fast if ac and ac.fast is not None else config.models.fast), f"{who}fast")
-        role((ac.vision if ac and ac.vision is not None else config.models.vision), f"{who}vision")
-        for spec in (ac.fallbacks if ac and ac.fallbacks is not None else config.fallback_providers):
-            role(spec, f"{who}fallback")
+    for spec, label in _role_specs(config):
+        if msg := reg.refusal(spec, label):
+            rep.refusals.append(msg)
     if os.environ.get("OLLAMA_HOST") and not is_local_url(config.provider_config.ollama.host):
         rep.refusals.append(f"OLLAMA_HOST points at {config.provider_config.ollama.host}, which is not on this "
                             "machine or a listed LAN host.")
@@ -696,11 +732,13 @@ def mcp_refusal(name: str, srv) -> str | None:
     return None
 
 
-def enforce(config: Config, channels: list | None = None) -> Report:
-    """At start: install the guard, list every refusal, raise PrivacyError if any. Returns the notices."""
+def enforce(config: Config, channels: list | None = None, extra: Sequence[str] = ()) -> Report:
+    """At start: install the guard, list every refusal, raise PrivacyError if any. Returns the notices.
+    `extra` are refusals found by a probe (remote_model_refusals)."""
     if (why := ensure_guard(config)) is not None:
         raise PrivacyError(f"privacy.mode is {mode()}, but the network guard is not working: {why}. Not starting.")
     rep = check_config(config, channels)
+    rep.refusals += extra
     rep.raise_if_any()
     return rep
 

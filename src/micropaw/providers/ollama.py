@@ -101,14 +101,22 @@ def _auth(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
 
-async def fetch_show(client: httpx.AsyncClient, host: str, model: str, api_key: str = "") -> ShowInfo | None:
-    """None when the model is not pulled or the server cannot be reached."""
+async def show_status(client: httpx.AsyncClient, host: str, model: str, api_key: str = "") -> ShowInfo | str:
+    """/api/show as ShowInfo, or "down" (nothing listens there) or "failed" (it answered with an error or junk)."""
     try:
         resp = await client.post(f"{host}/api/show", json={"model": model}, headers=_auth(api_key))
         resp.raise_for_status()
         return parse_show(resp.json())
-    except (httpx.HTTPError, ValueError):
-        return None
+    except httpx.ConnectError as e:
+        return "failed" if privacy.blocked(e) else "down"
+    except (httpx.HTTPError, ValueError, AttributeError):
+        return "failed"
+
+
+async def fetch_show(client: httpx.AsyncClient, host: str, model: str, api_key: str = "") -> ShowInfo | None:
+    """None when the model is not pulled or the server cannot be reached."""
+    got = await show_status(client, host, model, api_key)
+    return got if isinstance(got, ShowInfo) else None
 
 
 async def pull_model(host: str, model: str, api_key: str = "") -> AsyncIterator[dict]:
@@ -146,6 +154,7 @@ class OllamaProvider(AIProvider):
         self._tools_supported = True  # set False when /api/show or the server says no
         self.info: ShowInfo | None = None  # from /api/show, filled by load_capabilities()
         self.missing = False  # the model is not pulled
+        self.show_state = ""  # "", "ok", "down" (not running) or "failed" (answered badly), from /api/show
 
     def _url(self) -> str:
         return f"{self.host}/api/chat"
@@ -153,7 +162,9 @@ class OllamaProvider(AIProvider):
     async def load_capabilities(self) -> ShowInfo | None:
         """Read /api/show once (cached). Never loads the model into memory."""
         if self.info is None:
-            self.info = await fetch_show(self._client, self.host, self.model)
+            got = await show_status(self._client, self.host, self.model, self.api_key)
+            self.info = got if isinstance(got, ShowInfo) else None
+            self.show_state = "ok" if self.info else got
             self.missing = self.info is None
             if self.info is not None:
                 self._tools_supported = self.info.tools
@@ -232,6 +243,10 @@ class OllamaProvider(AIProvider):
         if privacy.cloud_tagged(self.model) or (self.info and self.info.remote):
             raise privacy.EgressBlocked(
                 f"privacy mode blocked the model {self.model}: it runs on ollama.com, not on this network")
+        if self.info is None and self.show_state == "failed":  # not knowing is not a yes
+            raise privacy.EgressBlocked(
+                f"privacy mode blocked the model {self.model}: Ollama gave no usable answer to /api/show, so it "
+                "cannot be confirmed that the model runs here. Is it pulled?")
 
     async def _do_chat(self, body: dict) -> dict:
         await self._refuse_cloud()
