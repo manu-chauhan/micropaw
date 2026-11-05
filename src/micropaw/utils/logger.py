@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -12,8 +13,9 @@ from rich.logging import RichHandler
 
 _configured = False
 
-_LOG_DIR = Path.home() / ".micropaw" / "logs"
-_LOG_FILE = _LOG_DIR / "micropaw.log"
+_LOG_DIR = Path(os.environ.get("MICROPAW_HOME") or Path.home() / ".micropaw") / "logs"
+# One file per kind of process: on Windows a service and a chat can't share a rotating file
+_LOG_FILE = _LOG_DIR / ("gateway.log" if sys.argv[1:2] == ["start"] else "chat.log")
 _MAX_LOG_SIZE = 5 * 1024 * 1024  # 5 MB
 _BACKUP_COUNT = 3
 
@@ -70,7 +72,7 @@ def setup_logging(level: str = "INFO") -> None:
 def quiet_console() -> None:
     """Suppress console log output to WARNING+ (for interactive chat/start modes).
 
-    INFO and DEBUG still go to the log file at ~/.micropaw/logs/micropaw.log.
+    INFO and DEBUG still go to the log file at ~/.micropaw/logs/.
     """
     for handler in logging.root.handlers:
         if isinstance(handler, RichHandler):

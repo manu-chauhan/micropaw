@@ -228,9 +228,12 @@ def _role_providers(config: Config) -> dict:
 
 
 @main.command()
-def start():
+@click.option("--headless", is_flag=True, help="No terminal channel; restart after a crash. For services and Docker.")
+def start(headless):
     """Start the gateway with all enabled channels."""
     quiet_console()  # suppress INFO logs — details go to ~/.micropaw/logs/
+    if headless or not _interactive():
+        sys.exit(_start_headless())
     if not config_exists():
         console.print("[yellow]No config found. Running setup wizard first...[/yellow]\n")
         from micropaw.setup_wizard import run_setup
@@ -247,7 +250,7 @@ def start():
 
     from micropaw.gateway import Gateway
     gw = Gateway(config, provider, registry, channels, **_role_providers(config))
-    asyncio.run(gw.start())
+    _run_single(gw)
 
 
 @main.command()
@@ -311,8 +314,12 @@ def status():
 
 
 @main.command()
-def doctor():
+@click.option("--quiet", is_flag=True, help="No output. Exit 0 if the gateway runs and the database opens, else 1.")
+def doctor(quiet):
     """Run diagnostics and check system health."""
+    if quiet:
+        from micropaw.service import healthy
+        sys.exit(0 if healthy()[0] else 1)
     import platform as plat
     config = load_config()
 
@@ -353,6 +360,7 @@ def doctor():
     usage = shutil.disk_usage("/")
     free_mb = usage.free / (1024 * 1024)
     table.add_row("Disk space", ok(free_mb > 100), f"{free_mb:.0f} MB free")
+    _doctor_install_rows(table, config)
 
     console.print(table)
 
@@ -421,6 +429,291 @@ def reset():
         console.print("[green]All MicroPaw data has been reset.[/green]")
     else:
         console.print("[dim]Nothing to reset.[/dim]")
+
+
+# ---------------------------------------------------------------------------
+# Background service, update, extras, headless start
+# ---------------------------------------------------------------------------
+
+def _interactive() -> bool:
+    return sys.stdin is not None and sys.stdin.isatty()  # None under pythonw
+
+
+def _start_headless() -> int:
+    """Gateway without the terminal channel, restarted after a crash, one instance per machine."""
+    from micropaw import service as svc
+    from micropaw.gateway import Gateway
+
+    def make():
+        config = load_config()
+        channels = [c for c in _create_channels(config) if c.name != "terminal"]
+        if not channels:
+            console.print("[red]No channels enabled. Run 'paw setup' to configure.[/red]")
+            sys.exit(1)
+        return Gateway(config, _create_provider(config), _create_registry(config), channels,
+                       **_role_providers(config))
+
+    try:
+        return svc.run_headless(make)
+    except svc.ServiceError as e:
+        console.print(f"[red]{e}[/red]")
+        return 1
+
+
+def _run_single(gw) -> None:
+    """Run a gateway in the foreground, refusing when another one already runs."""
+    from micropaw import service as svc
+    try:
+        svc.acquire_pid()
+    except svc.ServiceError as e:
+        console.print(f"[red]{e}[/red]")
+        sys.exit(1)
+    try:
+        asyncio.run(gw.start())
+    finally:
+        svc.release_pid()
+
+
+def _fail(e: Exception) -> None:
+    console.print(f"[red]{e}[/red]")
+    sys.exit(1)
+
+
+@main.group()
+def service():
+    """Run MicroPaw in the background and start it at login."""
+
+
+@service.command(name="install")
+@click.option("--force", is_flag=True, help="Replace an existing service without asking.")
+def service_install(force):
+    """Install the service and start it."""
+    from micropaw import service as svc
+    try:
+        found = svc.existing_definition()
+        if found and not force:
+            console.print("A service is already installed:\n", markup=False)
+            click.echo(found)
+            if not click.confirm("Replace it?"):
+                return
+        for line in svc.install():
+            console.print(line, markup=False)
+    except svc.ServiceError as e:
+        _fail(e)
+
+
+@service.command(name="uninstall")
+def service_uninstall():
+    """Stop and remove the service."""
+    from micropaw import service as svc
+    try:
+        for line in svc.uninstall():
+            console.print(line, markup=False)
+    except svc.ServiceError as e:
+        _fail(e)
+
+
+@service.command(name="start")
+def service_start():
+    """Start the installed service."""
+    from micropaw import service as svc
+    try:
+        svc.start()
+    except svc.ServiceError as e:
+        _fail(e)
+    console.print("Started.")
+
+
+@service.command(name="stop")
+def service_stop():
+    """Stop the gateway (service or a headless run) and wait for it to exit."""
+    from micropaw import service as svc
+    try:
+        done = svc.stop()
+    except svc.ServiceError as e:
+        _fail(e)
+    console.print("Stopped." if done else "[red]It did not stop in time.[/red]")
+    sys.exit(0 if done else 1)
+
+
+@service.command(name="status")
+def service_status():
+    """Show whether the service is installed and the gateway is healthy."""
+    from micropaw import service as svc
+    try:
+        console.print(f"Service: {svc.state()}", markup=False)
+    except svc.ServiceError as e:
+        _fail(e)
+    good, detail = svc.healthy()
+    console.print(f"Gateway: {detail}", markup=False)
+    sys.exit(0 if good else 1)
+
+
+@service.command(name="logs")
+@click.option("-n", "count", default=50, help="How many lines to show.")
+@click.option("--follow", "-f", is_flag=True, help="Keep printing new lines.")
+def service_logs(count, follow):
+    """Show the gateway log."""
+    import subprocess
+    import time
+
+    from micropaw import service as svc
+    if sys.platform == "linux" and svc.unit_path().exists() and shutil.which("journalctl"):
+        cmd = ["journalctl", "--user", "-u", svc.UNIT_NAME, "-n", str(count), "--no-pager"]
+        sys.exit(subprocess.call(cmd + (["-f"] if follow else [])))
+    path = svc.log_file()
+    for line in svc.tail_lines(path, count):
+        click.echo(line)
+    if follow:
+        try:
+            seen = len(svc.tail_lines(path, 10**9))
+            while True:
+                time.sleep(1)
+                lines = svc.tail_lines(path, 10**9)
+                for line in lines[seen:] if len(lines) >= seen else lines:
+                    click.echo(line)
+                seen = len(lines)
+        except KeyboardInterrupt:
+            pass
+
+
+def _run_install_command(cmd: list[str]) -> bool:
+    import subprocess
+    console.print(f"Running: {' '.join(cmd)}", markup=False)
+    try:
+        ok = subprocess.run(cmd).returncode == 0
+    except OSError as e:
+        console.print(f"[red]{e}[/red]")
+        ok = False
+    if not ok:
+        console.print("[red]That failed.[/red] Run it yourself from a new terminal. On Windows a running "
+                      "paw.exe can block the upgrade; stop the service first.")
+    return ok
+
+
+@main.command()
+@click.option("--yes", "-y", is_flag=True, help="Do not ask before upgrading.")
+def update(yes):
+    """Show the latest version and upgrade the way MicroPaw was installed."""
+    from micropaw import service as svc
+    method = svc.install_method()
+    latest = svc.latest_version()
+    console.print(f"Installed: {__version__} ({method})", markup=False)
+    console.print(f"Latest on PyPI: {latest or 'could not check'}", markup=False)
+    cmd = svc.update_command(method)
+    if cmd is None:
+        hint = {"docker": "Pull or rebuild the image: docker compose build --pull && docker compose up -d",
+                "editable": "From source: git pull, then pip install -e . in the repo."}
+        console.print(hint.get(method, "No update command for this install."), markup=False)
+        return
+    if latest and latest == __version__:
+        console.print("Already up to date.")
+        return
+    console.print(f"Command: {' '.join(cmd)}", markup=False)
+    if not yes and not click.confirm("Upgrade now?"):
+        return
+    was_running = svc.running_gateway() is not None
+    try:
+        if was_running:
+            console.print("Stopping the gateway...")
+            if not svc.stop():
+                _fail(RuntimeError("The gateway did not stop. Nothing was changed."))
+        ok = _run_install_command(cmd)
+        if ok:
+            console.print(f"Version: {__version__} -> {svc.installed_version()}", markup=False)
+        if was_running:
+            if svc.existing_definition() is not None:
+                svc.start()
+                console.print("Service started again.")
+            else:
+                console.print("Start the gateway again with 'paw start --headless'.")
+    except svc.ServiceError as e:
+        _fail(e)
+    sys.exit(0 if ok else 1)
+
+
+@main.group()
+def extras():
+    """Optional features (channels, PDF, browser, embeddings)."""
+
+
+@extras.command(name="add")
+@click.argument("names", nargs=-1, required=True)
+def extras_add(names):
+    """Install extras the way MicroPaw was installed. Names: telegram discord slack whatsapp browser pdf embeddings."""
+    from micropaw import service as svc
+    bad = [n for n in names if n not in svc.EXTRAS]
+    if bad:
+        _fail(click.BadParameter(f"Unknown extra: {', '.join(bad)}. Choose from: {', '.join(svc.EXTRAS)}"))
+    sys.exit(0 if add_extras(list(names)) else 1)
+
+
+def add_extras(names: list[str]) -> bool:
+    """Install extras with the right tool. Returns True on success. Used by 'paw extras add' and setup."""
+    from micropaw import service as svc
+    method = svc.install_method()
+    cmd = svc.extras_command(method, names)
+    if cmd is None:
+        console.print(f"Rebuild the image with: docker build --build-arg EXTRAS={','.join(names)} .", markup=False)
+        return False
+    return _run_install_command(cmd)
+
+
+def _doctor_install_rows(table: Table, config: Config) -> None:
+    """Install method, gateway, service, linger, file mode, bind address, WSL and Ollama."""
+    from micropaw import service as svc
+
+    def row(name: str, good: bool | None, detail: str) -> None:
+        mark = "[yellow]warn[/yellow]" if good is None else "[green]pass[/green]" if good else "[red]FAIL[/red]"
+        table.add_row(name, mark, detail)
+
+    row("Installed with", True, svc.install_method())
+    pid = svc.running_gateway()
+    row("Gateway", True if pid else None, f"running, PID {pid}" if pid else "not running")
+    try:
+        service_state = svc.state()
+    except svc.ServiceError as e:
+        service_state = f"unknown ({e})"
+    row("Service", True if service_state not in ("not installed",) else None, service_state)
+    if sys.platform == "linux" and svc.unit_path().exists() and shutil.which("loginctl"):
+        try:
+            linger = svc.linger_enabled()
+        except svc.ServiceError:
+            linger = False
+        row("Linger", linger, "on" if linger else "off: the service stops at logout. "
+            f"Run: sudo loginctl enable-linger {os.environ.get('USER', '$USER')}")
+    if os.name != "nt" and CONFIG_FILE.exists():
+        mode = CONFIG_FILE.stat().st_mode & 0o777
+        private = not mode & 0o077
+        row("Config file mode", private, f"{mode:03o}" + ("" if private else f": run chmod 600 {CONFIG_FILE}"))
+    web = config.channels.webchat
+    if web.enabled and web.host in ("0.0.0.0", "::", ""):
+        row("WebChat bind", None, f"{web.host}:{web.port} is open to your network; use 127.0.0.1 unless you need it")
+    specs = (config.provider, config.models.fast, config.models.vision)
+    uses_ollama = any(sp == "ollama" or sp.startswith("ollama:") for sp in specs)
+    if uses_ollama and _on_wsl():
+        host = config.provider_config.ollama.host
+        if not _reachable(host):
+            row("Ollama from WSL", False, f"{host} is not reachable. Ollama on the Windows side listens on "
+                "Windows localhost only; set OLLAMA_HOST=0.0.0.0 in Windows, restart Ollama, and point the "
+                "MicroPaw Ollama host at the Windows IP.")
+
+
+def _on_wsl() -> bool:
+    from pathlib import Path
+    try:
+        return "microsoft" in Path("/proc/version").read_text().lower()
+    except OSError:
+        return False
+
+
+def _reachable(url: str) -> bool:
+    import httpx
+    try:
+        httpx.get(url.rstrip("/") + "/api/tags", timeout=2)
+        return True
+    except httpx.HTTPError:
+        return False
 
 
 # ---------------------------------------------------------------------------
