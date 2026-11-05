@@ -338,3 +338,44 @@ def test_the_approval_gate_never_offers_always_for_a_search():
     from micropaw.gateway import _Approvals
     assert _Approvals._rule(SimpleNamespace(), "web_search", "Search via x: q", False) == ""
     assert _Approvals._rule(SimpleNamespace(), "shell", "ls", False) != ""
+
+
+# --- a configured Kiwix is searched in every mode ---
+
+@pytest.mark.parametrize("m,provider", [("normal", "auto"), ("normal", "searxng"), ("local", "auto"),
+                                        ("local", "searxng"), ("airgapped", "auto")])
+async def test_a_configured_kiwix_is_queried_in_every_mode_before_the_online_search(kiwix, mode, monkeypatch, m,
+                                                                                    provider):
+    mode(m)
+    configure(provider=provider, searxng_url="http://127.0.0.1:9", kiwix_url=kiwix.url, kiwix_books=["b"])
+    asked = []
+
+    async def fake_searx(query, n, base_url=None, proxy=""):
+        asked.append(base_url)
+        return "Search results for 'python' (via your SearXNG at 127.0.0.1:9):\n\n- online hit"
+
+    monkeypatch.setattr(web_search, "_search_searxng", fake_searx)
+    out = await WebSearchTool().execute({"query": "python"}, ctx())
+    assert any(p.startswith("/search") for p in Kiwix.log)
+    assert "**Python (programming language)**" in out
+    if m == "airgapped":
+        assert not asked and "online hit" not in out
+    else:
+        assert asked and out.index("Python (programming language)") < out.index("online hit")
+
+
+def test_the_local_approval_says_offline_sources_come_first_only_when_kiwix_is_set(mode):
+    mode("local")
+    configure(provider="searxng", searxng_url="http://s:1", kiwix_url="http://127.0.0.1:8080")
+    assert WebSearchTool().needs_approval({"query": "q"}, ctx()).startswith("Search your offline sources, then via ")
+    configure(provider="searxng", searxng_url="http://s:1")
+    assert WebSearchTool().needs_approval({"query": "q"}, ctx()).startswith("Search via ")
+
+
+async def test_the_offline_header_only_says_no_internet_when_the_server_is_on_your_network(kiwix, mode, monkeypatch):
+    mode("normal")
+    configure(provider="kiwix", kiwix_url=kiwix.url, kiwix_books=["b"])
+    assert "no internet used" in await WebSearchTool().execute({"query": "python"}, ctx())
+    monkeypatch.setattr(privacy, "is_local_url", lambda url: False)
+    out = await WebSearchTool().execute({"query": "python"}, ctx())
+    assert "no internet used" not in out and "is not on your network" in out

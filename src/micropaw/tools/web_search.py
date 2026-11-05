@@ -72,6 +72,10 @@ class Plan:
     def online(self) -> bool:
         return any(b in _ONLINE for b in self.backends)
 
+    @property
+    def offline(self) -> bool:
+        return any(b in ("kiwix", "docs") for b in self.backends)
+
 
 def plan(cfg: Any, mode: str, unattended: bool) -> Plan:
     """The backends for this config, mode and run. Anything online is only here when the mode allows it."""
@@ -96,16 +100,18 @@ def plan(cfg: Any, mode: str, unattended: bool) -> Plan:
             return Plan(offline)
         if unattended:
             return Plan(offline, note="Nobody is here to approve an online search, so only offline sources were used.")
-        return Plan(["searxng"])
+        # offline sources first, so a Kiwix server or your documents are never left unused
+        return Plan([*(["kiwix"] if cfg.kiwix_url else []), "docs", "searxng"])
+    kiwix = ["kiwix"] if cfg.kiwix_url and p in ("auto", "searxng") else []
     if p == "auto":
         if cfg.brave_api_key:
-            return Plan(["brave"])
-        return Plan(["searxng"] if cfg.searxng_url else ["public", "duckduckgo"])
+            return Plan([*kiwix, "brave"])
+        return Plan([*kiwix, *(["searxng"] if cfg.searxng_url else ["public", "duckduckgo"])])
     if p == "searxng" and not cfg.searxng_url:
         return Plan([], "Set search.searxng_url to your SearXNG server, or use provider auto for public instances.")
     if p == "brave" and not cfg.brave_api_key:
         return Plan([], "Set search.brave_api_key to use Brave Search.")
-    return Plan([p])
+    return Plan([*kiwix, p])
 
 
 def _unattended(context: ToolContext) -> bool:
@@ -325,7 +331,9 @@ async def _search_docs(query: str, max_results: int, context: ToolContext) -> li
     return [f"- **{h['source']}**  [your documents]\n  {_strip(h['snippet'])}" for h in hits]
 
 
-async def _search_offline(query: str, max_results: int, cfg: Any, backends: list[str], context: ToolContext) -> str:
+async def _search_offline(query: str, max_results: int, cfg: Any, backends: list[str], context: ToolContext,
+                          quiet: bool = False) -> str:
+    """`quiet`: an online search follows, so "no offline sources yet" is not worth saying."""
     blocks: list[str] = []
     sources: list[str] = []
     if "kiwix" in backends and cfg.kiwix_url:
@@ -338,8 +346,10 @@ async def _search_offline(query: str, max_results: int, cfg: Any, backends: list
             blocks += await _search_docs(query, max_results, context)
             sources.append("your documents")
     if not sources:
-        return "No offline sources yet: run paw docs add <folder> or set search.kiwix_url."
-    head = f"Offline search, no internet used. Sources: {', '.join(sources)}."
+        return "" if quiet else "No offline sources yet: run paw docs add <folder> or set search.kiwix_url."
+    off_net = "kiwix" in backends and cfg.kiwix_url and not privacy.is_local_url(cfg.kiwix_url)
+    head = (f"Offline sources, searched on {_host(cfg.kiwix_url)}, which is not on your network. "
+            if off_net else "Offline search, no internet used. ") + f"Sources: {', '.join(sources)}."
     return f"{head}\n\n" + ("\n\n".join(blocks[:max_results * 2]) if blocks else f"No results found for: {query}")
 
 
@@ -400,7 +410,8 @@ class WebSearchTool(Tool):
                             + (f" ({_proxy_label(cfg.proxy)})" if cfg and cfg.proxy else " (direct)"),
                  "public": "public SearXNG instances, then DuckDuckGo", "brave": "Brave Search",
                  "duckduckgo": "DuckDuckGo"}[next(b for b in p.backends if b in _ONLINE)]
-        return f"Search via {where}: {args.get('query', '')}"
+        first = "your offline sources, then " if "kiwix" in p.backends else ""
+        return f"Search {first}via {where}: {args.get('query', '')}"
 
     async def execute(self, args: dict[str, Any], context: ToolContext) -> str:
         if args.get("action") == "open":
@@ -416,10 +427,16 @@ class WebSearchTool(Tool):
             return f"Error: {p.refusal}"
         if privacy.local_only() and cfg.kiwix_url and not privacy.is_local_url(cfg.kiwix_url):
             return "Error: the Kiwix server is not on this computer or your network, so it was not contacted."
-        out = ""
-        if any(b in ("kiwix", "docs") for b in p.backends):
-            out = await _search_offline(query, max_results, cfg, p.backends, context)
-        elif "brave" in p.backends:
+        offline = await _search_offline(query, max_results, cfg, p.backends, context, quiet=p.online) \
+            if p.offline else ""
+        online = await self._search_online(query, max_results, cfg, p) if p.online else ""
+        if online.startswith("Error:"):
+            return online
+        return "\n\n".join(x for x in (p.note, offline, online) if x)
+
+    @staticmethod
+    async def _search_online(query: str, max_results: int, cfg: Any, p: Plan) -> str:
+        if "brave" in p.backends:
             out = await _search_brave(query, max_results, cfg.brave_api_key) or (
                 "Brave Search is busy or could not be reached. No other search service was tried.")
         elif "duckduckgo" in p.backends and "public" not in p.backends:
@@ -433,4 +450,4 @@ class WebSearchTool(Tool):
                 return "Error: a SOCKS proxy needs an extra package. Run: pip install micropaw[tor]"
         else:  # public instances, then DuckDuckGo: only for provider auto with nothing configured
             out = await _search_searxng(query, max_results) or await _search_duckduckgo(query, max_results)
-        return f"{p.note}\n\n{out}" if p.note else out
+        return out

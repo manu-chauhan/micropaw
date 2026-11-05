@@ -316,6 +316,7 @@ class TestWebSearch:
         mock_config.provider = "auto"
         mock_config.brave_api_key = ""
         mock_config.searxng_url = ""
+        mock_config.kiwix_url = ""
         set_search_config(mock_config)
 
         tool = WebSearchTool()
@@ -338,6 +339,7 @@ class TestWebSearch:
         mock_config.provider = "auto"
         mock_config.brave_api_key = "BSA-test-key"
         mock_config.searxng_url = ""
+        mock_config.kiwix_url = ""
         set_search_config(mock_config)
 
         tool = WebSearchTool()
