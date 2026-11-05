@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 load_dotenv()
 
@@ -78,12 +78,21 @@ class ModelsConfig(BaseModel):
 class MCPServerConfig(BaseModel):
     """An MCP server MicroPaw starts as a child process. Pin versions in args (pkg@1.2.3)."""
 
-    command: str              # e.g. "npx", "uvx", "python"
+    command: str = ""         # e.g. "npx", "uvx", "python"; empty when `url` is set
+    url: str = ""             # streamable HTTP server instead of a child process
+    headers: dict[str, str] = {}  # sent with every request; ${ENV_NAME} is read from the environment
     args: list[str] = []
     env: dict[str, str] = {}  # only these are added; MicroPaw's own keys are never passed on
     allow: list[str] = []     # tool names that run without asking (until outside content is read)
     timeout: float = 300.0    # seconds per call; decompiling can be slow
     enabled: bool = True
+    tools_hash: str = ""      # sha256 of the tool list the owner approved; a change blocks the server
+
+    @model_validator(mode="after")
+    def _needs_command_or_url(self) -> MCPServerConfig:
+        if not self.command and not self.url:
+            raise ValueError("an MCP server needs a command or a url")
+        return self
 
 
 class ProviderConfig(BaseModel):
@@ -211,6 +220,7 @@ class VoiceConfig(BaseModel):
 class SchedulerConfig(BaseModel):
     heartbeat_interval: int = 1800  # seconds (30 minutes)
     max_jobs: int = 50
+    email_poll_seconds: int = 300   # how often Gmail is checked for email-triggered tasks
 
 
 class GoogleConfig(BaseModel):
@@ -380,6 +390,26 @@ def _write_private(data: dict) -> None:
         os.write(fd, json.dumps(data, indent=2).encode())
     finally:
         os.close(fd)
+
+
+def save_mcp_server(name: str, entry: dict) -> None:
+    """Write one mcp_servers entry (replacing any old one). Edits the JSON on disk, like set_allowed_user."""
+    raw: dict = json.loads(CONFIG_FILE.read_text()) if CONFIG_FILE.exists() else {}
+    raw.setdefault("mcp_servers", {})[name] = entry
+    _write_private(raw)
+
+
+def pin_mcp_tools(name: str, digest: str) -> bool:
+    """Store the approved tool-list hash of an existing mcp_servers entry. False if there is no such entry."""
+    if not CONFIG_FILE.exists():
+        return False
+    raw = json.loads(CONFIG_FILE.read_text())
+    entry = raw.get("mcp_servers", {}).get(name)
+    if entry is None:
+        return False
+    entry["tools_hash"] = digest
+    _write_private(raw)
+    return True
 
 
 def set_allowed_user(platform: str, user_id: str, remove: bool = False) -> list[str]:

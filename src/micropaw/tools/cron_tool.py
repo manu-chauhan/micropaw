@@ -24,7 +24,11 @@ class CronTool(Tool):
     name = "cron"
     description = (
         "Schedule tasks. Actions: 'add' (create a recurring or one-shot job), "
-        "'list' (show all jobs), 'remove' (delete a job by ID)."
+        "'list' (show all jobs), 'remove' (delete a job by ID). "
+        "To act on incoming email, add a job with trigger 'email' and the exact sender address in "
+        "from_address. These jobs are unattended: each run reads the email, summarizes it and reports to the "
+        "owner, and anything that would change something is refused. Write the description as "
+        "'read, summarize, report', never as an action to take."
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -46,6 +50,15 @@ class CronTool(Tool):
                 "type": "boolean",
                 "description": "If true, run once after interval_seconds then auto-delete (for add)",
             },
+            "trigger": {
+                "type": "string",
+                "enum": ["time", "email"],
+                "description": "'time' (default) uses interval_seconds. 'email' runs for each new email "
+                               "from from_address and needs no interval (for add)",
+            },
+            "from_address": {"type": "string", "description": "Exact sender address (trigger 'email')"},
+            "subject_contains": {"type": "string", "description": "Optional words the subject must contain"},
+            "label": {"type": "string", "description": "Optional Gmail label to search in"},
             "job_id": {
                 "type": "integer",
                 "description": "Job ID to remove (for remove)",
@@ -53,6 +66,30 @@ class CronTool(Tool):
         },
         "required": ["action"],
     }
+
+    async def _add_email_job(self, description: str, args: dict[str, Any], context: ToolContext) -> str:
+        from micropaw.scheduler import email_rule
+
+        assert _scheduler is not None
+        if not description:
+            return "Error: 'add' requires 'description'."
+        try:
+            rule = email_rule(args.get("from_address", ""), args.get("subject_contains", ""), args.get("label", ""))
+            # Paused until the owner switches it on: a web page or email must not be able to plant a standing task
+            job_id = await _scheduler.add_job(
+                description, 0, context.user_id, context.platform, context.chat_id, enabled=False, match=rule,
+            )
+        except ValueError as e:
+            return f"Error: {e}"
+        await _scheduler.notify(
+            context.platform, context.chat_id,
+            f"New email task #{job_id} is paused until you turn it on:\n"
+            f"\"{description}\" for each new email from {rule['from']}\n"
+            f"It runs unattended and can only read, summarize and report to you.\n"
+            f"To turn it on, reply: /cron enable {job_id}",
+        )
+        return (f"Saved email job #{job_id} for mail from {rule['from']}, paused. "
+                f"The user has been asked to turn it on with /cron enable {job_id}.")
 
     async def execute(self, args: dict[str, Any], context: ToolContext) -> str:
         if _scheduler is None:
@@ -62,6 +99,8 @@ class CronTool(Tool):
 
         if action == "add":
             description = args.get("description", "")
+            if args.get("trigger") == "email":
+                return await self._add_email_job(description, args, context)
             interval = args.get("interval_seconds", 0)
             if not description or interval <= 0:
                 return "Error: 'add' requires 'description' and 'interval_seconds' > 0."
@@ -94,7 +133,10 @@ class CronTool(Tool):
                 return "No scheduled jobs."
             lines = [f"Scheduled jobs ({len(jobs)}):"]
             for j in jobs:
-                kind = "once" if j["one_shot"] else f"every {_fmt_interval(j['interval_seconds'])}"
+                if j["trigger"] == "email":
+                    kind = f"on email from {j['match']['from']}"
+                else:
+                    kind = "once" if j["one_shot"] else f"every {_fmt_interval(j['interval_seconds'])}"
                 state = "" if j["enabled"] else ", paused"
                 lines.append(f"  #{j['id']}: \"{j['description']}\" ({kind}{state})")
             return "\n".join(lines)
