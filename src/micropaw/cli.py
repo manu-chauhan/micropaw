@@ -1137,6 +1137,34 @@ def scan():
         console.print(f"[dim]Memory: {ram / 2**30:.0f} GB. Models up to 60% of that are suggested.[/dim]")
 
 
+@models.command(name="fetch")
+@click.argument("what", type=click.Choice(["embeddings"]))
+@click.option("--model", default="", help="Embedding model name (default: the one this install uses).")
+def models_fetch(what, model):
+    """Download the embedding model into ~/.micropaw/models, for a computer that runs offline.
+
+    Run it on a connected machine, then copy the models folder to the offline one.
+    """
+    import subprocess
+
+    from micropaw import privacy
+    from micropaw.memory.embeddings import choose_local_model, models_dir
+    if privacy.airgapped():
+        _fail(click.ClickException(
+            "Airgapped mode never downloads. Run this on a connected machine and copy "
+            f"{models_dir()} to this one."))
+    name = choose_local_model(DB_FILE, model or load_config().embedding.model)
+    if privacy.local_only():
+        console.print("Local mode: this command connects to huggingface.co. MicroPaw itself still does not.")
+    console.print(f"Downloading {name} ...")
+    env = {k: v for k, v in os.environ.items() if k != "HF_HUB_OFFLINE"}  # a fresh process: the library reads it once
+    code = "import sys; from micropaw.memory.embeddings import fetch_local_model; fetch_local_model(sys.argv[1])"
+    result = subprocess.run([sys.executable, "-c", code, name], env=env)
+    if result.returncode != 0:
+        _fail(click.ClickException("The download failed. fastembed is needed: pip install 'micropaw[embeddings]'."))
+    console.print(f"Saved in {models_dir()}. Copy that folder to ~/.micropaw/models/fastembed on the offline machine.")
+
+
 @models.command(name="test")
 @click.argument("spec", required=False)
 def models_test(spec):

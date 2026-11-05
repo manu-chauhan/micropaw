@@ -99,6 +99,23 @@ def forget_all(db_file: Path, home: Path) -> list[str]:
     return problems
 
 
+def share_local_history(db_file: Path) -> dict[str, int]:
+    """Let a model that is not local see what was said and saved in local or airgapped mode: clear the flag
+    on every row and summary. This is the owner's choice (`paw privacy share-history`), never automatic."""
+    counts: dict[str, int] = {}
+    con = sqlite3.connect(db_file, timeout=10)
+    try:
+        for table in ("messages", "memories", "document_chunks"):
+            cur = con.execute(f"UPDATE {table} SET local_only = 0 WHERE local_only = 1")
+            counts[table] = cur.rowcount
+        cur = con.execute("DELETE FROM kv_meta WHERE key LIKE 'summary_local:%'")
+        counts["summaries"] = cur.rowcount
+        con.commit()
+    finally:
+        con.close()
+    return counts
+
+
 def _has_table(con: sqlite3.Connection, name: str) -> bool:
     return con.execute("SELECT 1 FROM sqlite_master WHERE name = ?", (name,)).fetchone() is not None
 

@@ -307,3 +307,54 @@ def test_ages_parse():
 
 def test_reset_says_it_is_not_a_secure_wipe():
     assert "not a secure wipe" in CliRunner().invoke(cli.main, ["reset", "--help"]).output
+
+
+# --- sharing local history with a cloud model, on purpose ---
+
+async def test_share_history_clears_every_local_flag(tmp_path):
+    db = tmp_path / "data.db"
+    s = MemoryStore(db)
+    await s.init()
+    privacy._reset_for_tests()
+    privacy.freeze("local")
+    await s.save_memory("m", "made locally")
+    await s.save_messages("c", [Message(role="user", content="said locally")])
+    await s.ingest_document("/tmp/a.txt", "local document text", "u")
+    await s.get_or_create_conversation("c", "dm", "u")
+    await s.save_messages("c", [Message(role="user", content="more")])
+    await s.compact_messages("c", "a summary", keep_recent=1)
+    privacy._reset_for_tests()
+    privacy.freeze("normal")
+    assert await s.get_all_memories(include_local=False) == []
+    await s.close()
+    counts = storage.share_local_history(db)
+    assert counts["memories"] == 1 and counts["document_chunks"] == 1 and counts["summaries"] == 1
+    s = MemoryStore(db)
+    await s.init()
+    assert len(await s.get_all_memories(include_local=False)) == 1
+    assert await s.get_summary("c", include_local=False) == "a summary"
+    assert await s.search_documents("local", 5, "u", include_local=False)
+    await s.close()
+
+
+def test_models_fetch_is_refused_in_airgapped_mode(home):
+    privacy._reset_for_tests()
+    privacy.freeze("airgapped")
+    result = CliRunner().invoke(cli.main, ["models", "fetch", "embeddings"])
+    assert result.exit_code != 0 and "Airgapped mode never downloads" in result.output
+
+
+def test_models_fetch_runs_in_a_fresh_process_without_the_offline_variable(home, monkeypatch):
+    import subprocess
+    seen = {}
+
+    def run(cmd, env=None, **kw):
+        seen.update(cmd=cmd, env=env)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setattr(subprocess, "run", run)
+    result = CliRunner().invoke(cli.main, ["models", "fetch", "embeddings"])
+    assert result.exit_code == 0, result.output
+    assert "HF_HUB_OFFLINE" not in seen["env"] and seen["cmd"][-1] == "BAAI/bge-small-en-v1.5"
+    assert "fetch_local_model" in seen["cmd"][2] and "Copy that folder" in result.output

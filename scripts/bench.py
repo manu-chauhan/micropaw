@@ -138,7 +138,7 @@ class _Daemon:
         }))
         env = {k: v for k, v in os.environ.items() if not k.endswith(("_API_KEY", "_TOKEN", "OLLAMA_HOST"))}
         env.update(MICROPAW_HOME=str(self.home), HOME=str(self.home), BENCH_COUNT_FILE=str(self.count_file),
-                   PYTHONPATH=str(shim_dir), PYTHONDONTWRITEBYTECODE="")
+                   PYTHONPATH=os.pathsep.join(filter(None, [str(shim_dir), os.environ.get("PYTHONPATH", "")])))
         cmd = [sys.executable, "-c", "from micropaw.cli import main; main()", "start", "--headless"]
         if pinned and shutil.which("taskset"):
             cmd = ["taskset", "-c", "0", *cmd]
