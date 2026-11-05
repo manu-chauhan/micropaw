@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import fnmatch
 import logging
 from dataclasses import dataclass, field
@@ -126,7 +127,7 @@ def resolve_profiles(config: Config, registry: Registry) -> dict[str, AgentProfi
 
 def agent_config(config: Config, profile: AgentProfile, registry: Registry) -> Config:
     """The config one agent runs with: its own persona and workspace, and no cloud voice services if private."""
-    out = config.model_copy(deep=True)
+    out = copy.deepcopy(config)
     if profile.persona_name:
         out.persona.name = profile.persona_name
     if profile.personality:

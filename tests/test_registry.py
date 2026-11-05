@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 
 import pytest
 
@@ -153,8 +154,8 @@ def test_role_providers_are_metered_around_the_shared_provider():
     assert isinstance(role, MeteredProvider) and role.inner is p
 
 
-def test_registry_model_dump_roundtrip():
-    assert json.loads(Config().model_dump_json())["providers"] == {}
+def test_registry_dump_roundtrip():
+    assert json.loads(json.dumps(asdict(Config())))["providers"] == {}
 
 
 @pytest.mark.parametrize("url,local", [("http://100.101.102.103:11434", True), ("http://100.128.0.1:11434", False)])

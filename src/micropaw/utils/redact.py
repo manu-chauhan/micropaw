@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from dataclasses import asdict
 from typing import Any
 
 # Names that usually hold credentials (env vars and config fields)
@@ -76,7 +77,7 @@ def config_secrets(config: Any) -> dict[str, str]:
                 and not path.endswith("_env"):  # api_key_env holds the NAME of a variable, not a secret
             found[path] = node
 
-    data = config.model_dump()
+    data = asdict(config)
     servers = data.pop("mcp_servers", {})
     walk(data, "")
     for name, server in servers.items():

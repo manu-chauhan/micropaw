@@ -8,6 +8,7 @@ import sys
 import tomllib
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
@@ -431,11 +432,12 @@ def test_doctor_sandbox_row_is_a_warning_on_windows_and_the_report_does_not_fail
     monkeypatch.setattr(sandbox, "resolve", lambda: Sandbox("none", host_asks=True))
     monkeypatch.setattr(sandbox, "configure", lambda p: None)
     monkeypatch.setattr(svc, "running_gateway", lambda: None)  # gateway stopped
-    monkeypatch.setattr(cli.os, "name", "nt")
+    # not os.name itself: pathlib would build WindowsPath
+    monkeypatch.setattr(cli, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
     out = CliRunner().invoke(cli.main, ["doctor"])
     row = next(line for line in out.output.splitlines() if "Shell sandbox" in line)
     assert "warn" in row and "FAIL" not in row
     assert out.exit_code == 0
-    monkeypatch.setattr(cli.os, "name", "posix")
+    monkeypatch.setattr(cli, "os", os)
     row = next(line for line in CliRunner().invoke(cli.main, ["doctor"]).output.splitlines() if "Shell sandbox" in line)
     assert "FAIL" in row

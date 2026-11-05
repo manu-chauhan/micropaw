@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import os
 import shutil
 import sys
 from datetime import UTC
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import click
@@ -18,14 +20,14 @@ from micropaw.config import (
     CONFIG_FILE,
     DB_FILE,
     Config,
-    ConfigError,
+    changed_fields,
     config_exists,
     display_config,
     load_config,
 )
-from micropaw.core.profile import ProfileError, build_runtimes
-from micropaw.providers.registry import Registry
-from micropaw.utils.logger import quiet_console, setup_logging
+
+if TYPE_CHECKING:
+    from micropaw.providers.registry import Registry
 
 
 class _LazyConsole:
@@ -64,6 +66,8 @@ def _privacy_upgrade_notice() -> None:
 
 def _create_runtimes(config: Config) -> tuple[Registry, dict]:
     """The model registry and one runtime (profile, providers) per agent. Exits with a plain message on failure."""
+    from micropaw.core.profile import ProfileError, build_runtimes
+    from micropaw.providers.registry import Registry
     registry = Registry(config)
     try:
         runtimes = build_runtimes(config, registry)
@@ -143,7 +147,10 @@ class PawGroup(click.Group):
     def invoke(self, ctx):
         try:
             return super().invoke(ctx)
-        except ConfigError as e:
+        except ValueError as e:
+            from micropaw.config import ConfigError
+            if not isinstance(e, ConfigError):
+                raise
             raise click.ClickException(str(e)) from None
 
 
@@ -151,6 +158,7 @@ class PawGroup(click.Group):
 @click.version_option(version=__version__, prog_name="MicroPaw")
 def main():
     """MicroPaw — Your AI. Your machine. Your keys."""
+    from micropaw.utils.logger import setup_logging
     setup_logging()
 
 
@@ -165,6 +173,7 @@ def setup(reset):
 @main.command()
 def chat():
     """Start a terminal-only chat session."""
+    from micropaw.utils.logger import quiet_console
     quiet_console()  # suppress INFO logs — details go to ~/.micropaw/logs/
     _privacy_upgrade_notice()
     config = load_config()
@@ -201,6 +210,7 @@ def goal(task, check, max_rounds, budget, agent_name):
             line += f" {flag} {value}"
     if isinstance(error := parse_args(line.removeprefix("/goal ")), str):
         _fail(click.UsageError(error))
+    from micropaw.utils.logger import quiet_console
     quiet_console()
     config = load_config()
     config.channels.terminal.enabled = True
@@ -215,6 +225,7 @@ def goal(task, check, max_rounds, budget, agent_name):
 @click.option("--headless", is_flag=True, help="No terminal channel; restart after a crash. For services and Docker.")
 def start(headless):
     """Start the gateway with all enabled channels."""
+    from micropaw.utils.logger import quiet_console
     quiet_console()  # suppress INFO logs — details go to ~/.micropaw/logs/
     if headless or not _interactive():
         sys.exit(_start_headless())
@@ -925,7 +936,7 @@ def mcp_add(name, command, url, headers):
         if any(w in key.lower() for w in _SECRET_HEADER) and "${" not in value:
             raise click.BadParameter(f"{key}: put the secret in an environment variable and write ${{ENV_NAME}}")
         entry.setdefault("headers", {})[key] = value
-    cfg = MCPServerConfig(**entry)
+    cfg = MCPServerConfig.from_dict(entry)
     if cfg.url:
         console.print(f"This will connect to: {cfg.url}")
         console.print("Its tools can return anything, so every call asks you first and counts as outside content.")
@@ -935,7 +946,7 @@ def mcp_add(name, command, url, headers):
     if not click.confirm(f"Add '{name}'?", default=False):
         console.print("Nothing was written.")
         return
-    save_mcp_server(name, {**cfg.model_dump(exclude_defaults=True), "enabled": True})
+    save_mcp_server(name, {**changed_fields(cfg), "enabled": True})
     console.print(f"[green]Added '{name}'.[/green] Tools are pinned at first start. Try: paw mcp test {name}")
 
 
@@ -989,7 +1000,7 @@ def mcp_trust(name):
     from micropaw.config import pin_mcp_tools
     from micropaw.mcp import MCPError, start_server
 
-    cfg = _mcp_server(name).model_copy(update={"tools_hash": ""})
+    cfg = dataclasses.replace(_mcp_server(name), tools_hash="")
 
     async def _run():
         server, tools = await start_server(name, cfg, timeout=180.0, pin=False)
@@ -1199,7 +1210,8 @@ def models():
 @models.command(name="list")
 def models_list():
     """Show each agent's models and the built-in providers."""
-    from micropaw.core.profile import resolve_profiles
+    from micropaw.core.profile import ProfileError, resolve_profiles
+    from micropaw.providers.registry import Registry
     config = load_config()
     registry = Registry(config)
     try:
@@ -1418,6 +1430,7 @@ def models_fetch(what, model):
 def models_test(spec):
     """Send one small chat and one tool call to a model (default: every model in your agents)."""
     from micropaw.core.profile import resolve_profiles
+    from micropaw.providers.registry import Registry
     config = load_config()
     registry = Registry(config)
     if spec:
@@ -1485,6 +1498,7 @@ def docs_add(folder):
 
     from micropaw import docsearch
     from micropaw.memory.store import MemoryStore
+    from micropaw.utils.logger import quiet_console
     quiet_console()
 
     async def run() -> tuple[int, int, list[str]]:
@@ -1545,7 +1559,8 @@ def agent_add(name, model, fast, vision, fallbacks, strict, persona, allow, deny
               separate_history, allow_cloud, routes):
     """Add an agent to the config after checking it. Restart `paw start` to use it."""
     from micropaw.config import update_config_file
-    from micropaw.core.profile import resolve_profiles, unknown_tool_names
+    from micropaw.core.profile import ProfileError, resolve_profiles, unknown_tool_names
+    from micropaw.providers.registry import Registry
 
     entry: dict = {"model": model}
     if fast is not None:

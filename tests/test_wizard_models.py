@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
@@ -59,7 +60,7 @@ def test_apply_plan_uses_agents_main_for_other_local_servers():
     c = Config()
     wiz.apply_plan(c, wiz.ModelPlan(main="lmstudio:qwen"))
     assert c.agents["main"].model == "lmstudio:qwen"
-    assert Config(**json.loads(c.model_dump_json())).agents["main"].model == "lmstudio:qwen"  # round-trips
+    assert Config.from_dict(json.loads(json.dumps(asdict(c)))).agents["main"].model == "lmstudio:qwen"  # round-trips
 
 
 class Answer:

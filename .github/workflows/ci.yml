@@ -96,3 +96,31 @@ jobs:
         with:
           context: .
           push: false
+
+  image-arm:
+    name: docker build (${{ matrix.platform }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/arm64
+            extras: telegram,discord,slack,whatsapp,pdf
+          # No linux/arm/v7 entry: the Dockerfile copies uv from its image, which has only amd64 and arm64 builds.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          build-args: EXTRAS=${{ matrix.extras }}
+          tags: micropaw:arm-check
+          load: true
+          push: false
+      # Build and import only. The test suite under QEMU would take far too long.
+      - name: Import smoke test
+        run: |
+          docker run --rm --platform ${{ matrix.platform }} micropaw:arm-check paw --version
+          docker run --rm --platform ${{ matrix.platform }} micropaw:arm-check python -c "import micropaw.cli, micropaw.memory.store, micropaw.gateway"

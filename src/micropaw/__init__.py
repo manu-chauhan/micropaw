@@ -6,4 +6,4 @@ import sys
 # Blocking the module makes httpx fall back to its own no-op main(). The `httpx` command runs in its own process.
 sys.modules.setdefault("httpx._main", None)  # type: ignore[arg-type]
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

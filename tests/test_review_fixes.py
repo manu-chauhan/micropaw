@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import asdict
 from types import SimpleNamespace
 
 from click.testing import CliRunner
@@ -60,7 +61,7 @@ def test_a_mistyped_ollama_host_is_never_saved(monkeypatch, capsys):
     monkeypatch.setattr(wiz, "Config", lambda: c)
     wiz.run_setup()
     assert saved and saved[0].provider_config.ollama.host == "http://localhost:11434"
-    Config(**json.loads(saved[0].model_dump_json()))  # what was saved loads again
+    Config.from_dict(json.loads(json.dumps(asdict(saved[0]))))  # what was saved loads again
     assert "not an address" in capsys.readouterr().out
 
 

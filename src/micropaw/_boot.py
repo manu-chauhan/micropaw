@@ -53,6 +53,12 @@ def prepare(install_guard: bool = True) -> str:
 
 
 def main() -> None:
-    prepare()
+    args = sys.argv[1:]
+    if args == ["--version"]:  # no config, no network: answer before importing anything else
+        from micropaw import __version__
+        print(f"MicroPaw, version {__version__}")
+        return
+    if args != ["--help"]:  # help only lists commands, so it needs neither the privacy mode nor the guard
+        prepare()
     from micropaw.cli import main as cli_main
     cli_main()
