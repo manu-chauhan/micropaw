@@ -303,8 +303,8 @@ def status():
 def privacy_cmd(ctx):
     """Show where your data goes: the mode, every model, search, channel and server, and file permissions."""
     if ctx.invoked_subcommand is None:
-        from micropaw import privacy_report
-        click.echo(privacy_report.render(load_config()))
+        from micropaw import privacy_report, storage
+        click.echo(privacy_report.render(load_config(), hidden=storage.local_row_count(DB_FILE)))
 
 
 @privacy_cmd.command(name="allow")

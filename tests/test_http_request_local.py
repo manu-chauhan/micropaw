@@ -99,3 +99,18 @@ async def test_a_redirect_to_another_host_is_refused(monkeypatch):
     answers(monkeypatch, PUBLIC)
     out = await run("http://one.test/")
     assert out.startswith("Error:") and "other.test" in out
+
+
+async def test_headers_in_local_mode_are_ignored_and_the_result_says_so(monkeypatch):
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, text="ok")
+    monkeypatch.setattr("micropaw.tools.http_request._inner_transport", lambda: httpx.MockTransport(handler))
+    answers(monkeypatch, PUBLIC)
+    ctx = ToolContext("c", "u", "terminal")
+    out = await HttpRequestTool().execute({"url": "http://a.test/", "headers": {"Authorization": "x"}}, ctx)
+    assert out.startswith("Note: headers are ignored in local mode.\nHTTP 200")
+    assert "authorization" not in seen[0].headers
+    assert (await HttpRequestTool().execute({"url": "http://a.test/"}, ctx)).startswith("HTTP 200")

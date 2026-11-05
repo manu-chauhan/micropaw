@@ -149,7 +149,7 @@ class HttpRequestTool(Tool):
         if privacy.local_only() and method != "GET":
             return "Error: Local mode allows web fetches with GET only."
         if privacy.local_only():
-            return await self._fetch_local(url)
+            return await self._fetch_local(url, bool(headers))
 
         if error := await validate_url(url):
             return f"Error: {error}"
@@ -195,7 +195,7 @@ class HttpRequestTool(Tool):
         except Exception as e:
             return f"HTTP request error: {e}"
 
-    async def _fetch_local(self, url: str) -> str:
+    async def _fetch_local(self, url: str, headers_given: bool = False) -> str:
         """Local mode: the cleaned address the owner approved, no cookies, no referrer, every hop checked.
         A redirect to a host that was not approved is refused by the privacy guard."""
         url = webfetch.clean_url(url)
@@ -208,4 +208,5 @@ class HttpRequestTool(Tool):
         except webfetch.FetchError as e:
             blocked = privacy.blocked(e)
             return f"Error: {blocked or e}"
-        return _format(response, final, data, len(data) > MAX_DOWNLOAD)
+        note = "Note: headers are ignored in local mode.\n" if headers_given else ""
+        return note + _format(response, final, data, len(data) > MAX_DOWNLOAD)

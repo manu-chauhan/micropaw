@@ -372,3 +372,47 @@ async def test_the_privacy_command_on_a_channel_hides_lan_addresses(mode):
     gw = Gateway(c, MagicMock(), MagicMock(), [])
     assert "192.168.1.50" not in await gw._owner_command("/privacy", "telegram", "u")
     assert "192.168.1.50" in await gw._owner_command("/privacy", "terminal", "u")
+
+
+def test_normal_mode_says_how_many_saved_items_cloud_models_cannot_see(mode, tmp_path):
+    import sqlite3
+
+    from micropaw import storage
+    db = tmp_path / "data.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE messages (id INTEGER, local_only INTEGER)")
+    con.executemany("INSERT INTO messages VALUES (?, ?)", [(1, 1), (2, 1), (3, 0)])
+    con.execute("CREATE TABLE memories (id INTEGER)")  # an older table with no flag counts as 0
+    con.commit()
+    con.close()
+    n = storage.local_row_count(db)
+    assert n == 2
+    assert storage.local_row_count(tmp_path / "none.db") == 0
+    (tmp_path / "empty.db").write_bytes(b"")
+    assert storage.local_row_count(tmp_path / "empty.db") == 0
+    mode("normal")
+    text = privacy_report.render(cfg(), hidden=n)
+    assert "2 saved items from local or air-gapped mode are hidden from cloud models" in text
+    assert "paw privacy share-history" in text
+    assert "hidden from cloud models" not in privacy_report.render(cfg())
+    mode("local")
+    assert "hidden from cloud models" not in privacy_report.render(cfg(), hidden=n)
+    assert privacy_report.hidden_note(1).startswith("1 saved item from local or air-gapped mode is hidden")
+
+
+def test_paw_privacy_command_prints_the_hidden_note_in_normal_mode(mode, monkeypatch, tmp_path):
+    import sqlite3
+
+    import micropaw.cli as cli
+    import micropaw.config as config_mod
+    db = tmp_path / "data.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE messages (id INTEGER, local_only INTEGER)")
+    con.execute("INSERT INTO messages VALUES (1, 1)")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(cli, "DB_FILE", db)
+    monkeypatch.setattr(config_mod, "CONFIG_FILE", tmp_path / "config.json")
+    mode("normal")
+    r = CliRunner().invoke(main, ["privacy"])
+    assert r.exit_code == 0 and "1 saved item from local or air-gapped mode is hidden from cloud models" in r.output

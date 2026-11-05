@@ -7,6 +7,7 @@ import dataclasses
 import logging
 from typing import Any
 
+from micropaw import privacy
 from micropaw.bus import MessageBus, OutboundMessage
 from micropaw.core.subagent import SubAgent
 from micropaw.providers.base import AIProvider
@@ -69,6 +70,18 @@ class DelegateTool(Tool):
     def bound(self, provider: AIProvider, registry: ToolRegistry) -> DelegateTool:
         """A copy that uses this agent's fast model and its tool view."""
         return DelegateTool(provider, registry)
+
+    def needs_approval(self, args: dict[str, Any], context: ToolContext) -> str | None:
+        """A local model may write local-only text into the task. If the helper is a cloud model (the owner
+        allowed that with privacy.allow_cloud_helpers), the owner sees the task before it goes."""
+        provider = self._provider or _provider
+        if provider is None or not context.local_data or is_local_provider(provider):
+            return None
+        if not (privacy.local_only() or context.tainted):  # nothing saved in local mode could be in the task
+            return None
+        name = getattr(provider, "name", "a cloud model")
+        task = str(args.get("task", ""))[:500]
+        return f"Send this task to {name}, which is not local? Its text may repeat private data.\n{task}"
 
     async def execute(self, args: dict[str, Any], context: ToolContext) -> str:
         provider = self._provider or _provider

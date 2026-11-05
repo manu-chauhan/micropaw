@@ -361,3 +361,19 @@ async def test_retention_leaves_no_old_document_words_in_the_search_index(tmp_pa
     await store.close()
     raw = _raw(db)
     assert not any(w in raw for w in WORDS)
+
+
+def test_delegate_asks_before_a_cloud_helper_gets_a_task_from_a_local_model():
+    from micropaw.tools.base import ToolContext, ToolRegistry
+    from micropaw.tools.delegate import DelegateTool
+    cloud = DelegateTool().bound(Echo("https://api.anthropic.com", []), ToolRegistry())
+    local = DelegateTool().bound(Echo("http://127.0.0.1:11434", []), ToolRegistry())
+    args = {"task": "Summarise: memory diag = secret diagnosis lymphoma"}
+    go_local()
+    asked = cloud.needs_approval(args, ToolContext("c", "u", "terminal"))
+    assert asked and "lymphoma" in asked
+    assert local.needs_approval(args, ToolContext("c", "u", "terminal")) is None
+    assert cloud.needs_approval(args, ToolContext("c", "u", "terminal", local_data=False)) is None
+    go_normal()
+    assert cloud.needs_approval(args, ToolContext("c", "u", "terminal")) is None  # no local data was seen
+    assert "lymphoma" in cloud.needs_approval(args, ToolContext("c", "u", "terminal", tainted=True))

@@ -574,7 +574,8 @@ async def test_http_request_in_local_mode_shows_the_cleaned_address_and_fetches_
     assert privacy.permit("example.com") is None  # what the owner's yes does, with the real guard
     out = await tool.execute({"url": "https://example.com/p?utm_source=a&id=7",
                               "headers": {"Authorization": "secret"}}, ctx)
-    assert out.startswith("HTTP 200") and "URL: https://example.com/p?id=7" in out and out.endswith("hello")
+    assert out.startswith("Note: headers are ignored in local mode.\nHTTP 200") and out.endswith("hello")
+    assert "URL: https://example.com/p?id=7" in out
     assert seen[0].url.path == "/p" and seen[0].url.query == b"id=7"
     assert seen[0].url.host == "93.184.216.34" and seen[0].headers["host"] == "example.com"
     assert "authorization" not in seen[0].headers and "referer" not in seen[0].headers

@@ -9,8 +9,9 @@ from dataclasses import dataclass, field
 from rich.console import Console
 from rich.panel import Panel
 
-from micropaw import privacy
+from micropaw import privacy, privacy_report, storage
 from micropaw.config import (
+    DB_FILE,
     AgentConfig,
     Config,
     CustomProviderConfig,
@@ -439,6 +440,8 @@ def run_setup(reset: bool = False) -> None:
     config = _load_existing(questionary) if config_exists() and not reset else Config()
 
     privacy_mode = _choose_privacy(questionary, config)
+    if privacy_mode == "normal" and (note := privacy_report.hidden_note(storage.local_row_count(DB_FILE))):
+        console.print(f"[dim]{note}[/dim]")
 
     # Provider selection. Local and air-gapped modes only use models on this computer or your network.
     if privacy_mode == "normal":

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Awaitable, Callable
 from http.cookiejar import DefaultCookiePolicy
-from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
+from urllib.parse import parse_qsl, unquote_plus, urljoin, urlparse, urlunparse
 
 import httpx
 
@@ -58,16 +58,17 @@ class FetchError(Exception):
 
 
 def clean_url(url: str) -> str:
-    """The URL without tracking parameters and without the fragment."""
+    """The URL without tracking parameters and without the fragment. The rest of the query is left as written."""
     p = urlparse(url)
-    query = urlencode([(k, v) for k, v in parse_qsl(p.query, keep_blank_values=True) if not _TRACKING.match(k)])
-    return urlunparse(p._replace(query=query, fragment=""))
+    kept = [pair for pair in p.query.split("&") if pair and not _TRACKING.match(unquote_plus(pair.partition("=")[0]))]
+    return urlunparse(p._replace(query="&".join(kept), fragment=""))
 
 
 def odd_segments(url: str) -> list[str]:
-    """Long path or query pieces that could carry data out. For the approval text, not blocked."""
+    """Long host, path or query pieces (names and values) that could carry data out. For the approval text."""
     p = urlparse(url)
-    pieces = [s for s in p.path.split("/") if s] + [v for _, v in parse_qsl(p.query)]
+    pieces = ((p.hostname or "").split(".") + [s for s in p.path.split("/") if s]
+              + [x for kv in parse_qsl(p.query, keep_blank_values=True) for x in kv])
     return [s[:40] + "..." for s in pieces if len(s) >= 40]
 
 

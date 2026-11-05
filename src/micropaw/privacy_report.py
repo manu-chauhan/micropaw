@@ -162,12 +162,23 @@ def facts(config: Config) -> list[tuple[str, str]]:
     return out
 
 
-def render(config: Config, platform: str = "terminal") -> str:
-    """Plain text for /privacy and `paw privacy`. On a vendor chat channel no address on your network is shown."""
+def hidden_note(count: int) -> str:
+    """What the owner needs to know after moving from local to normal mode, or "" when nothing is hidden."""
+    if not count:
+        return ""
+    return (f"{count} saved item{'s' if count != 1 else ''} from local or air-gapped mode "
+            f"{'are' if count != 1 else 'is'} hidden from cloud models. Run paw privacy share-history to show them.")
+
+
+def render(config: Config, platform: str = "terminal", hidden: int = 0) -> str:
+    """Plain text for /privacy and `paw privacy`. On a vendor chat channel no address on your network is shown.
+    `hidden` is the number of saved items that cloud models cannot see; it is said in normal mode only."""
     lines = [status_line(config), ""]
     lines += [f"{k}: {v}" for k, v in facts(config)]
     lines += ["", "Where data goes:"]
     lines += [f"- {what}: {to} ({where})" for what, to, where, _ in rows(config, platform in _VENDOR_CHANNELS)]
+    if (note := hidden_note(hidden)) and privacy.mode() == "normal":
+        lines += ["", note]
     lines += ["", "A local address is not proof that a server keeps data local: a proxy such as LiteLLM or "
                   "Open WebUI can forward to the cloud. MicroPaw cannot check that."]
     return "\n".join(lines)

@@ -132,6 +132,25 @@ def _columns(con: sqlite3.Connection, table: str) -> set[str]:
     return {row[1] for row in con.execute(f"PRAGMA table_info({table})")}
 
 
+def local_row_count(db_file: Path) -> int:
+    """How many saved messages, memories, document pieces, contacts and jobs are hidden from cloud models.
+    0 for a database that is missing, empty or from an older version."""
+    if not db_file.exists() or not db_file.stat().st_size:
+        return 0
+    try:
+        con = sqlite3.connect(f"file:{db_file}?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error:
+        return 0
+    try:
+        return sum(con.execute(f"SELECT COUNT(*) FROM {t} WHERE local_only = 1").fetchone()[0]
+                   for t in ("messages", "memories", "document_chunks", "contacts", "cron_jobs")
+                   if "local_only" in _columns(con, t))
+    except sqlite3.Error:
+        return 0
+    finally:
+        con.close()
+
+
 def _move_all(src: Path, dst: Path) -> int:
     """Move every file under `src` to the same place under `dst`, then drop `src`. Returns the count."""
     moved = 0
