@@ -30,7 +30,7 @@ from micropaw.memory.store import MemoryStore
 from micropaw.providers.base import AIProvider
 from micropaw.providers.ollama import ram_bytes
 from micropaw.providers.registry import Registry
-from micropaw.scheduler import AgentGoneError
+from micropaw.scheduler import AgentGoneError, LocalJobError
 from micropaw.tools.base import ToolRegistry
 from micropaw.utils.logger import allow_content, short_hash
 from micropaw.utils.redact import add_known_secret, config_secrets, redact, secret_env_names, set_known_secrets
@@ -671,9 +671,10 @@ class Gateway:
 
     async def _handle_message(
         self, text: str, user_id: str, platform: str, channel_id: str | None, media: list | None = None,
-        agent: str = "",
+        agent: str = "", local_only: bool = False,
     ) -> str:
-        return await self._handle(text, user_id, platform, channel_id, media, streaming=False, agent_name=agent)
+        return await self._handle(text, user_id, platform, channel_id, media, streaming=False, agent_name=agent,
+                                  local_only=local_only)
 
     async def _handle_message_stream(
         self, text: str, user_id: str, platform: str, channel_id: str | None,
@@ -684,7 +685,7 @@ class Gateway:
 
     async def _handle(
         self, text: str, user_id: str, platform: str, channel_id: str | None, media: list | None,
-        *, streaming: bool, on_chunk=None, agent_name: str = "",
+        *, streaming: bool, on_chunk=None, agent_name: str = "", local_only: bool = False,
     ) -> str:
         if (answer := self._approval_answer(text, user_id, platform, channel_id)) is not None:
             return answer
@@ -704,6 +705,9 @@ class Gateway:
                                 "Remove the job, or add the agent back.")
         else:
             agent = self._route(platform, user_id, channel_id)
+        if local_only and not privacy.is_local_provider(agent.provider):
+            raise LocalJobError("this job was made in local or air-gapped mode and the model that would run it is not "
+                                "local, so its text was not sent. Run it on a local model, or remove the job.")
         async with self._chat_lock(platform, user_id, channel_id):
             await self._mark_outside_media(agent, platform, user_id, channel_id, media)
             if streaming:

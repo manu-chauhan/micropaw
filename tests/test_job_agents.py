@@ -143,3 +143,35 @@ def test_cli_cron_add_takes_an_agent(tmp_path, monkeypatch):
     good = runner.invoke(cli.main, ["cron", "add", "x", "--every", "1h", "--agent", "family"])
     assert "Created recurring job #1" in good.output
     assert "family" in runner.invoke(cli.main, ["cron", "list"]).output
+
+
+async def test_a_job_made_in_local_mode_says_so_to_the_handler(sched, monkeypatch):
+    from micropaw import privacy
+
+    monkeypatch.setattr(privacy, "local_only", lambda: True)
+    local = await sched.add_job("check", 3600, platform="telegram", chat_id="telegram:1")
+    monkeypatch.setattr(privacy, "local_only", lambda: False)
+    plain = await sched.add_job("other", 3600, platform="telegram", chat_id="telegram:1")
+    for job in (local, plain):
+        await _due(sched, job)
+    await sched._tick()
+    by_job = {args[3]: kw for args, kw in sched.calls}
+    assert by_job[f"cron-{local}"] == {"local_only": True}
+    assert by_job[f"cron-{plain}"] == {}
+
+
+async def test_gateway_never_runs_a_local_job_on_a_cloud_model(monkeypatch):
+    from micropaw import privacy
+    from micropaw.scheduler import LocalJobError
+
+    gw = Gateway(Config(), MagicMock(), MagicMock(), [])
+    main = MagicMock()
+    main.handle_message = AsyncMock(return_value="from main")
+    gw.agent, gw.agents = main, {"main": main}
+    monkeypatch.setattr(privacy, "is_local_provider", lambda p: False)
+    with pytest.raises(LocalJobError):
+        await gw._handle_message("task", "cron", "system", "cron-1", local_only=True)
+    main.handle_message.assert_not_called()  # the job's text never reached the model
+    assert await gw._handle_message("task", "cron", "system", "cron-2") == "from main"
+    monkeypatch.setattr(privacy, "is_local_provider", lambda p: True)
+    assert await gw._handle_message("task", "cron", "system", "cron-3", local_only=True) == "from main"

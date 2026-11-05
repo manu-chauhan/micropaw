@@ -89,9 +89,17 @@ class AgentGoneError(LookupError):
     """The agent a job belongs to is not configured any more. The job is skipped, never run elsewhere."""
 
 
-def _on(agent: str) -> dict:
-    """Handler keyword for a job pinned to an agent. Older jobs and plain handlers get nothing."""
-    return {"agent": agent} if agent else {}
+class LocalJobError(AgentGoneError):
+    """A job made in local or air-gapped mode would run on a model that is not local. It is skipped."""
+
+
+def _on(agent: str, local_only: bool = False) -> dict:
+    """Handler keywords for a job pinned to an agent, or made in local mode. Older jobs and plain handlers get
+    nothing."""
+    kw: dict = {"agent": agent} if agent else {}
+    if local_only:
+        kw["local_only"] = True
+    return kw
 
 
 class _Gmail:
@@ -186,13 +194,13 @@ class Scheduler:
 
         # Process due cron jobs
         async with self.db.execute(
-            "SELECT id, description, interval_seconds, one_shot, user_id, platform, chat_id, agent "
+            "SELECT id, description, interval_seconds, one_shot, user_id, platform, chat_id, agent, local_only "
             "FROM cron_jobs WHERE enabled = 1 AND trigger = 'time' AND next_run_at <= ?",
             (now,),
         ) as cur:
             jobs = await cur.fetchall()
 
-        for job_id, description, interval, one_shot, user_id, platform, chat_id, agent in jobs:
+        for job_id, description, interval, one_shot, user_id, platform, chat_id, agent, local_only in jobs:
             try:
                 if one_shot:
                     # One-shot jobs are reminders — deliver directly to ALL active channels
@@ -203,7 +211,7 @@ class Scheduler:
                     # so posting its result to a group can't leak private chat.
                     response = await self._handler(
                         f"You have a scheduled task to perform. Do it now and report the result: {description}",
-                        "cron", "system", f"cron-{job_id}", **_on(agent),
+                        "cron", "system", f"cron-{job_id}", **_on(agent, bool(local_only)),
                     )
                     await self._deliver(platform, chat_id, f"[Cron #{job_id}] {response}")
             except AgentGoneError as e:
@@ -233,7 +241,7 @@ class Scheduler:
     async def _poll_email(self, now: float) -> None:
         """Check Gmail for the enabled email jobs. Does nothing, not even a network call, when there are none."""
         async with self.db.execute(
-            "SELECT id, description, platform, chat_id, match, since, agent "
+            "SELECT id, description, platform, chat_id, match, since, agent, local_only "
             "FROM cron_jobs WHERE enabled = 1 AND trigger = 'email'",
         ) as cur:
             jobs = await cur.fetchall()
@@ -251,7 +259,7 @@ class Scheduler:
 
     async def _check_mail(
         self, job_id: int, description: str, platform: str, chat_id: str, match: str, since: float,
-        agent: str,
+        agent: str, local_only: int = 0,
     ) -> None:
         rule = json.loads(match)
         where = f'label:"{rule["label"]}"' if rule["label"] else "in:inbox"
@@ -274,7 +282,8 @@ class Scheduler:
             if reason:
                 logger.info("Email job #%d skipped message %s: %s", job_id, message_id, reason)
             else:
-                await self._run_for_email(job_id, description, platform, chat_id, message, header, agent)
+                await self._run_for_email(job_id, description, platform, chat_id, message, header, agent,
+                                          bool(local_only))
             await self.db.execute(
                 "INSERT OR IGNORE INTO email_seen (job_id, msg_id, ts) VALUES (?, ?, ?)",
                 (job_id, message_id, time.time()))
@@ -305,6 +314,7 @@ class Scheduler:
 
     async def _run_for_email(
         self, job_id: int, description: str, platform: str, chat_id: str, message: dict, header: dict, agent: str,
+        local_only: bool = False,
     ) -> None:
         from micropaw.tools.email_tool import _extract_body
 
@@ -324,7 +334,7 @@ class Scheduler:
         await self._store.get_or_create_conversation(conv_id, "system", "system")
         await self._store.set_marked(conv_id)
         try:
-            response = await self._handler(prompt, "system", "system", f"email-{job_id}", **_on(agent))
+            response = await self._handler(prompt, "system", "system", f"email-{job_id}", **_on(agent, local_only))
         except AgentGoneError as e:
             logger.warning("Email job #%d skipped: %s", job_id, e)
             await self._deliver(platform, chat_id, f"[Email job #{job_id}] Skipped: {e}")
