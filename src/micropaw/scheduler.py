@@ -61,13 +61,24 @@ def email_rule(from_address: str, subject_contains: str = "", label: str = "") -
 
 
 def _authenticated(headers: list[dict]) -> bool:
-    """Did Gmail itself record a DMARC pass (or SPF and DKIM passes when there is no DMARC result)?"""
+    """Did Gmail itself record a DMARC pass for the domain in the From header?
+
+    Only the first Authentication-Results header written by mx.google.com counts. Its clauses are
+    split on ';' and read by their first word, so text an attacker puts into another clause
+    (an envelope address like "dmarc=pass@evil.net") cannot pass for a result.
+    """
+    from_domain = ""
+    for h in headers:
+        if h.get("name", "").lower() == "from":
+            from_domain = parseaddr(h.get("value", ""))[1].rpartition("@")[2].lower()
     for h in headers:
         value = h.get("value", "").strip().lower()
         if h.get("name", "").lower() == "authentication-results" and value.startswith("mx.google.com"):
-            if "dmarc=" in value:
-                return "dmarc=pass" in value
-            return "spf=pass" in value and "dkim=pass" in value
+            for clause in value.split(";")[1:]:
+                words = clause.split()
+                if words and words[0] == "dmarc=pass":
+                    return bool(from_domain) and f"header.from={from_domain}" in words
+            return False
     return False
 
 
@@ -263,7 +274,7 @@ class Scheduler:
         if rule["subject_contains"] and rule["subject_contains"].lower() not in header.get("subject", "").lower():
             return "the subject does not match"
         if not _authenticated(headers):
-            return "Gmail did not record a DMARC pass (or SPF and DKIM passes)"
+            return "Gmail did not record a DMARC pass for the From domain"
         return ""
 
     async def _room_for_run(self, job_id: int) -> bool:
