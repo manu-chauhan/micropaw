@@ -46,3 +46,25 @@ def local_only() -> bool:
 def _reset_for_tests() -> None:
     global _mode
     _mode = None
+
+
+# ---------------------------------------------------------------------------
+# Shared interface (round 3). Stream A replaces these bodies with the full policy;
+# the signatures stay so other modules can rely on them.
+# ---------------------------------------------------------------------------
+
+def is_local_url(url: str) -> bool:
+    """True when the URL's host is this machine or (if allowed) the LAN or tailnet."""
+    from micropaw.providers.registry import is_local_url as _registry_local
+    return _registry_local(url)
+
+
+def is_local_provider(provider: object) -> bool:
+    """True when every model behind this provider (chains and wrappers included) is local."""
+    from micropaw.utils.prices import is_local_provider as _prices_local
+    return _prices_local(provider)
+
+
+def check_role(spec: str, role: str) -> str | None:
+    """A plain refusal when this model spec is not allowed for the role in the current mode, else None."""
+    return None
