@@ -309,3 +309,20 @@ async def test_blocking_reads_and_writes_use_a_thread(tmp_path, monkeypatch):
     (tmp_path / "b.txt").write_text("y")
     await fr.FileReadTool().execute({"path": str(tmp_path / "b.txt")}, ctx)
     assert calls.count("write_text") == 1 and calls.count("read_text") == 2
+
+
+async def test_a_reload_works_after_the_token_left_the_address(chat):
+    ch, port = chat
+    head, _ = await _http(port, f"GET /?token=tok123 HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n")
+    cookie = next(line for line in head.splitlines() if line.lower().startswith("set-cookie"))
+    assert "HttpOnly" in cookie and "SameSite=Strict" in cookie
+    pair = cookie.split(":", 1)[1].split(";")[0].strip()
+    head, body = await _http(port, f"GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: a=b; {pair}\r\n\r\n")
+    assert head.startswith("HTTP/1.1 200") and b"MicroPaw" in body
+    assert "set-cookie" not in head.lower()  # only the tokenised link sets it
+    head, _ = await _http(port, f"GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: micropaw_chat=wrong\r\n\r\n")
+    assert head.startswith("HTTP/1.1 401")
+    head, _ = await _http(port, f"GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n")
+    assert head.startswith("HTTP/1.1 401")
+    head, _ = await _http(port, f"GET /api/status HTTP/1.1\r\nHost: x\r\nCookie: {pair}\r\n\r\n")
+    assert head.startswith("HTTP/1.1 401")  # the cookie opens the page, not the status endpoint

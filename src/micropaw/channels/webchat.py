@@ -14,6 +14,7 @@ import re
 import secrets
 import struct
 import uuid
+from urllib.parse import quote, unquote
 
 from micropaw.channels.base import Channel
 
@@ -23,6 +24,7 @@ MAX_CONNECTIONS = 50
 MAX_MSG_LENGTH = 10_000
 MAX_FRAME_SIZE = 1_048_576  # 1MB max WebSocket frame
 MAX_HEADERS = 50
+_COOKIE = "micropaw_chat"
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 
@@ -191,7 +193,7 @@ class WebChatChannel(Channel):
         if headers.get("upgrade", "").lower() == "websocket":
             await self._handle_websocket(reader, writer, headers, path)
         elif path == "/" or path.startswith("/?"):
-            await self._serve_ui(writer, path, headers.get("host", ""))
+            await self._serve_ui(writer, path, headers.get("host", ""), headers.get("cookie", ""))
         elif path.startswith("/api/status"):
             await self._serve_status(writer, path)
         else:
@@ -207,17 +209,28 @@ class WebChatChannel(Channel):
                     return secrets.compare_digest(param[6:], self.auth_token)
         return False
 
-    async def _serve_ui(self, writer: asyncio.StreamWriter, path: str, host: str = "") -> None:
-        if not self._check_token(path):
-            body = b"Access denied. Append ?token=YOUR_TOKEN to the URL."
+    def _check_cookie(self, cookie: str) -> bool:
+        """The page takes its token out of the address, so a reload brings it back in this cookie."""
+        for part in cookie.split(";"):
+            name, _, value = part.strip().partition("=")
+            if name == _COOKIE and secrets.compare_digest(unquote(value).encode(), self.auth_token.encode()):
+                return True
+        return False
+
+    async def _serve_ui(self, writer: asyncio.StreamWriter, path: str, host: str = "", cookie: str = "") -> None:
+        by_address = self._check_token(path)
+        if not (by_address or self._check_cookie(cookie)):
+            body = b"Access denied. Open the link MicroPaw printed, which ends in ?token=..."
             writer.write(f"HTTP/1.1 401 Unauthorized\r\nCache-Control: no-store\r\nContent-Length: {len(body)}\r\n\r\n"
                          .encode() + body)
         else:
             html = CHAT_HTML.replace('"__AUTH_TOKEN__"', json.dumps(self.auth_token))
             html = html.replace("<!--WARN-->", "" if _is_loopback(self.host) else _LAN_WARNING)
             body = html.encode()
+            remember = (f"Set-Cookie: {_COOKIE}={quote(self.auth_token, safe='')}; Path=/; HttpOnly; SameSite=Strict\r\n"
+                        if by_address else "")
             writer.write(f"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n{_page_headers(html, host)}"
-                         f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
+                         f"{remember}Content-Length: {len(body)}\r\n\r\n".encode() + body)
         await writer.drain()
         writer.close()
 
