@@ -73,11 +73,15 @@ class ChannelSendTool(Tool):
 
     def needs_approval(self, args: dict[str, Any], context: ToolContext) -> str | None:
         message = args.get("message", "")
-        more = f"\n... ({len(message) - 500:,} more characters)" if len(message) > 500 else ""
-        return f"Send to your {args.get('channel', '')} chat:\n{message[:500]}{more}"
+        if len(message) > _MAX_MSG_LENGTH:
+            return None  # execute() refuses: the owner must see the whole message
+        return f"Send to your {args.get('channel', '')} chat:\n{message}"
 
     async def execute(self, args: dict[str, Any], context: ToolContext) -> str:
         global _send_count
+
+        if len(args.get("message", "")) > _MAX_MSG_LENGTH:
+            return f"Error: Message too long ({len(args['message']):,} characters, max {_MAX_MSG_LENGTH:,}). Not sent."
 
         if _bus is None or _bus.closed:
             return "Error: Message bus not available."
@@ -91,8 +95,6 @@ class ChannelSendTool(Tool):
         if not message:
             return "Error: Message cannot be empty."
 
-        if len(message) > _MAX_MSG_LENGTH:
-            message = message[:_MAX_MSG_LENGTH]
 
         # Terminal needs no chat_id
         if channel == "terminal":

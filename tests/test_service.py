@@ -274,6 +274,24 @@ def test_supervisor_stops_on_stop_file():
     assert code == 0 and made[0].stopped and not svc.stop_file().exists()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX signal handlers")
+def test_signal_during_the_backoff_still_stops_the_supervisor():
+    import signal
+
+    class Crashing(FakeGateway):
+        async def start(self):
+            asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, lambda: None)  # what the gateway does
+            raise RuntimeError("boom")
+
+    async def go():
+        task = asyncio.create_task(svc.supervise(lambda: Crashing([]), first_delay=30, poll=0.01))
+        await asyncio.sleep(0.3)
+        os.kill(os.getpid(), signal.SIGTERM)
+        return await asyncio.wait_for(task, 5)
+
+    assert asyncio.run(go()) == 0
+
+
 def test_backoff_doubles_up_to_cap(monkeypatch):
     delays = []
 
@@ -380,3 +398,44 @@ def test_start_without_tty_goes_headless(monkeypatch):
 def test_headless_refuses_second_instance(monkeypatch):
     monkeypatch.setattr(svc, "running_gateway", lambda: 77)
     assert cli._start_headless() == 1
+
+
+def test_private_writers_open_in_binary_mode(tmp_path, monkeypatch):
+    """Windows turns every 0x0A into 0D 0A without O_BINARY, which corrupts UTF-16 task XML."""
+    from micropaw.tools import google_auth
+
+    binary = getattr(os, "O_BINARY", 0x8000)  # the real flag on Windows, a stand-in elsewhere
+    monkeypatch.setattr(os, "O_BINARY", binary, raising=False)
+    flags = []
+    real_open = os.open
+
+    def spy(path, f, *a, **k):
+        flags.append(f)
+        return real_open(path, f if os.name == "nt" else f & ~binary, *a, **k)
+
+    monkeypatch.setattr(os, "open", spy)
+    data = "<Task>\n<a/>\n</Task>\n".encode("utf-16")
+    svc._write_private(tmp_path / "t.xml", data)
+    config._write_bytes(tmp_path / "c.json", b"{}\n")
+    monkeypatch.setattr(google_auth, "_TOKEN_FILE", tmp_path / "tok.json")
+    monkeypatch.setattr(google_auth, "CONFIG_DIR", tmp_path)
+    google_auth._save_tokens({"a": 1})
+    assert len(flags) == 3 and all(f & binary for f in flags)
+    assert (tmp_path / "t.xml").read_bytes().decode("utf-16").count("\n") == 3
+
+
+def test_doctor_sandbox_row_is_a_warning_on_windows_and_the_report_does_not_fail(monkeypatch, tmp_path):
+    from micropaw.tools import sandbox
+    from micropaw.tools.sandbox import Sandbox
+
+    monkeypatch.setattr(sandbox, "resolve", lambda: Sandbox("none", host_asks=True))
+    monkeypatch.setattr(sandbox, "configure", lambda p: None)
+    monkeypatch.setattr(svc, "running_gateway", lambda: None)  # gateway stopped
+    monkeypatch.setattr(cli.os, "name", "nt")
+    out = CliRunner().invoke(cli.main, ["doctor"])
+    row = next(line for line in out.output.splitlines() if "Shell sandbox" in line)
+    assert "warn" in row and "FAIL" not in row
+    assert out.exit_code == 0
+    monkeypatch.setattr(cli.os, "name", "posix")
+    row = next(line for line in CliRunner().invoke(cli.main, ["doctor"]).output.splitlines() if "Shell sandbox" in line)
+    assert "FAIL" in row

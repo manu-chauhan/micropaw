@@ -200,3 +200,40 @@ class TestSaveLoad:
 
         # The warning should mention world-readable or chmod
         assert mock_logger.warning.called
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
+def test_config_dir_and_log_files_are_owner_only(tmp_path, monkeypatch):
+    import logging
+
+    from micropaw import config as cfg
+    from micropaw.utils import logger
+
+    home = tmp_path / "home" / ".micropaw"
+    monkeypatch.setattr(cfg, "CONFIG_DIR", home)
+    monkeypatch.setattr(cfg, "CONFIG_FILE", home / "config.json")
+    cfg.save_config(cfg.Config())
+    assert home.stat().st_mode & 0o777 == 0o700
+    old = home / "logs" / "chat.log"
+    old.parent.mkdir()
+    old.write_text("old\n")
+    old.chmod(0o644)
+    handler = logger._PrivateFileHandler(str(old), maxBytes=100, backupCount=2)
+    private_logs = home / "logs"
+    cfg.private_dir(private_logs)
+    log = logging.getLogger("perm-test")
+    log.addHandler(handler)
+    try:
+        for _ in range(20):
+            log.warning("x" * 30)  # forces a rotation
+    finally:
+        log.removeHandler(handler)
+        handler.close()
+    assert private_logs.stat().st_mode & 0o777 == 0o700
+    assert {p.stat().st_mode & 0o777 for p in private_logs.iterdir()} == {0o600}
+    assert len(list(private_logs.iterdir())) >= 2  # it did rotate
+    outside = tmp_path / "elsewhere" / "logs"
+    outside.parent.mkdir()
+    outside.parent.chmod(0o755)
+    cfg.private_dir(outside)
+    assert outside.parent.stat().st_mode & 0o777 == 0o755  # folders outside ~/.micropaw are left as they are

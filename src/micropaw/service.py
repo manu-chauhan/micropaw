@@ -212,7 +212,7 @@ def _check(cmd: list[str]) -> str:
 
 def _write_private(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o600)
     try:
         if hasattr(os, "fchmod"):
             os.fchmod(fd, 0o600)
@@ -275,7 +275,7 @@ def install(argv: list[str] | None = None) -> list[str]:
                 "Put API keys in ~/.micropaw/.env or config.json. 'paw service stop' stops it."]
     if sys.platform == "darwin":
         log = config.CONFIG_DIR / "logs" / "service.log"
-        log.parent.mkdir(parents=True, exist_ok=True)
+        config.private_dir(log.parent)
         _write_private(plist_path(), launchd_plist(argv, str(log), path_env))
         _run(["launchctl", "bootout", f"{_uid_domain()}/{LABEL}"])  # fails when not loaded; fine
         _check(["launchctl", "bootstrap", _uid_domain(), str(plist_path())])
@@ -546,6 +546,7 @@ async def supervise(
             err = task.exception()
             if err is None:
                 return 0  # the gateway stopped itself after a signal
+            _stop_on_signals(loop, stop)  # the gateway replaced the handlers; the back-off must still stop on a signal
             logger.error("Gateway stopped unexpectedly: %r", err, exc_info=err)
             now = time.monotonic()
             if now - started > 300:

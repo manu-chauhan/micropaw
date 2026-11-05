@@ -10,6 +10,7 @@ import os
 import re
 import secrets
 import signal
+import sys
 import time
 from collections.abc import Awaitable, Callable
 from functools import partial
@@ -25,8 +26,9 @@ from micropaw.memory.ledger import Ledger
 from micropaw.memory.store import MemoryStore
 from micropaw.providers.base import AIProvider
 from micropaw.providers.registry import Registry
+from micropaw.scheduler import AgentGoneError
 from micropaw.tools.base import ToolRegistry
-from micropaw.utils.redact import config_secrets, redact, set_known_secrets
+from micropaw.utils.redact import add_known_secret, config_secrets, redact, secret_env_names, set_known_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +188,10 @@ class _Approvals:
             self._remember(rule)
         return reply in ("yes", "always")
 
+    def waiting(self, chat: str) -> str | None:
+        """The id of the approval this chat is waiting on, if any."""
+        return next((i for i, (c, fut, _) in self._pending.items() if c == chat and not fut.done()), None)
+
     def answer(self, chat: str, text: str) -> str | None:
         """Handle "yes/no/always <id>" from the owner. None if the message isn't an answer."""
         m = self._REPLY.match(text.strip())
@@ -250,8 +256,16 @@ class Gateway:
     async def start(self) -> None:
         """Initialize everything and start all channels."""
         set_known_secrets(config_secrets(self.config))
+        from micropaw.tools import shell
+        shell.EXTRA_SECRET_ENV.update(n.upper() for n in secret_env_names(self.config))
+        for name in secret_env_names(self.config):  # keys read from env vars the config names
+            if os.environ.get(name):
+                add_known_secret(name, os.environ[name])
         from micropaw.tools import sandbox
         sandbox.configure(self.config.permissions)
+        sb = await asyncio.to_thread(sandbox.resolve)  # probe now, off the event loop
+        if sb.host_asks and sys.platform != "win32":
+            logger.warning("No sandbox found; shell commands run on this computer and always ask.")
         # Create embedding provider (auto-detect or explicit)
         embedding_provider = await self._create_embedding_provider()
 
@@ -608,29 +622,21 @@ class Gateway:
 
     async def _handle_message(
         self, text: str, user_id: str, platform: str, channel_id: str | None, media: list | None = None,
+        agent: str = "",
     ) -> str:
-        if (answer := self._approval_answer(text, user_id, platform, channel_id)) is not None:
-            return answer
-        err = self._validate(text, user_id, platform, bool(media))
-        if err is not None:
-            return err
-        if (reply := await self._owner_command(text, platform, user_id, channel_id)) is not None:
-            return reply
-        self._record_channel_activity(platform, user_id, channel_id)
-        logger.debug("[%s] %s: %s", platform, user_id, text[:80])
-        agent = self._route(platform, user_id, channel_id)
-        async with self._chat_lock(platform, user_id, channel_id):
-            await self._mark_outside_media(agent, platform, user_id, channel_id, media)
-            response = await agent.handle_message(text, user_id, platform, channel_id, media=media)
-        self._track_usage(agent)
-        logger.debug("[%s] MicroPaw: %s", platform, response[:80])
-        return redact(response)
+        return await self._handle(text, user_id, platform, channel_id, media, streaming=False, agent_name=agent)
 
     async def _handle_message_stream(
         self, text: str, user_id: str, platform: str, channel_id: str | None,
         on_chunk=None,
         media: list | None = None,
     ) -> str:
+        return await self._handle(text, user_id, platform, channel_id, media, streaming=True, on_chunk=on_chunk)
+
+    async def _handle(
+        self, text: str, user_id: str, platform: str, channel_id: str | None, media: list | None,
+        *, streaming: bool, on_chunk=None, agent_name: str = "",
+    ) -> str:
         if (answer := self._approval_answer(text, user_id, platform, channel_id)) is not None:
             return answer
         err = self._validate(text, user_id, platform, bool(media))
@@ -638,14 +644,25 @@ class Gateway:
             return err
         if (reply := await self._owner_command(text, platform, user_id, channel_id)) is not None:
             return reply
+        if (waiting := self._approvals.waiting(f"{platform}:{channel_id or user_id}")) is not None:
+            return f"Waiting for your answer to [{waiting}]: reply yes {waiting} or no {waiting}."
         self._record_channel_activity(platform, user_id, channel_id)
         logger.debug("[%s] %s: %s", platform, user_id, text[:80])
-        agent = self._route(platform, user_id, channel_id)
+        if agent_name:  # a scheduled job runs on the agent that made it, never on another one
+            agent = self.agents.get(agent_name)
+            if agent is None:
+                raise AgentGoneError(f"agent '{agent_name}' is not configured any more, so the job did not run. "
+                                "Remove the job, or add the agent back.")
+        else:
+            agent = self._route(platform, user_id, channel_id)
         async with self._chat_lock(platform, user_id, channel_id):
             await self._mark_outside_media(agent, platform, user_id, channel_id, media)
-            response = await agent.handle_message_stream(
-                text, user_id, platform, channel_id, on_chunk=_redacting(on_chunk), media=media,
-            )
+            if streaming:
+                response = await agent.handle_message_stream(
+                    text, user_id, platform, channel_id, on_chunk=_redacting(on_chunk), media=media,
+                )
+            else:
+                response = await agent.handle_message(text, user_id, platform, channel_id, media=media)
         self._track_usage(agent)
         logger.debug("[%s] MicroPaw: %s", platform, response[:80])
         return redact(response)
@@ -732,14 +749,15 @@ class Gateway:
         if cfg.enabled == "false":
             return NullEmbedding()
 
-        # Every message is embedded, so a private (all-local) agent rules out a cloud embedding service
-        cloud_ok = not any(name != "main" and rt.profile.private for name, rt in self._runtimes.items())
+        # Every message is embedded, so a private (all-local) agent, main included, rules out a cloud embedding service
+        cloud_ok = not any(rt.profile.private for rt in self._runtimes.values())
         if not cloud_ok:
             logger.warning("An agent is private (local models only), so cloud embeddings are off.")
 
         # Explicit provider (user set provider != auto, or enabled == "true")
         if cfg.provider != "auto":
             if cfg.provider == "openai" and not cloud_ok:
+                logger.warning("embedding.provider is openai, but an agent is private: embeddings are off.")
                 return NullEmbedding()
             return self._create_explicit_provider(cfg)
 

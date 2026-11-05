@@ -99,6 +99,7 @@ class MemoryStore:
         self._db: aiosqlite.Connection | None = None
         self.embedder: EmbeddingProvider = embedding_provider or NullEmbedding()
         self._compact_locks: dict[str, asyncio.Lock] = {}  # per-conversation compaction locks
+        self._ingest_lock = asyncio.Lock()
         self._has_vec: bool = False
         self._vec_dims: int = 0
         self.has_fts: bool = False
@@ -580,48 +581,54 @@ class MemoryStore:
         if not chunks:
             return 0
 
-        # Cascade delete: remove from vec index first, then main table
-        if self._has_vec:
-            async with self.db.execute(
-                "SELECT id FROM document_chunks WHERE source = ? AND user_id = ?",
-                (source, user_id),
-            ) as cursor:
-                old_ids = [r[0] for r in await cursor.fetchall()]
-            if old_ids:
-                placeholders = ",".join("?" * len(old_ids))
-                try:
-                    await self.db.execute(
-                        f"DELETE FROM vec_chunks WHERE chunk_id IN ({placeholders})", old_ids
+        # Embed everything first (one network call per chunk), so the write below is short and never half-done
+        blobs = [serialize_embedding_blob(await self.embedder.embed(text)) for text in chunks]
+
+        async with self._ingest_lock:  # two ingests of one source must not interleave
+            try:
+                # Cascade delete: remove from vec index first, then main table
+                if self._has_vec:
+                    async with self.db.execute(
+                        "SELECT id FROM document_chunks WHERE source = ? AND user_id = ?",
+                        (source, user_id),
+                    ) as cursor:
+                        old_ids = [r[0] for r in await cursor.fetchall()]
+                    if old_ids:
+                        placeholders = ",".join("?" * len(old_ids))
+                        try:
+                            await self.db.execute(
+                                f"DELETE FROM vec_chunks WHERE chunk_id IN ({placeholders})", old_ids
+                            )
+                        except Exception:
+                            pass
+
+                await self.db.execute(
+                    "DELETE FROM document_chunks WHERE source = ? AND user_id = ?",
+                    (source, user_id),
+                )
+
+                for i, (text, blob) in enumerate(zip(chunks, blobs)):
+                    cursor = await self.db.execute(
+                        "INSERT INTO document_chunks (source, chunk_index, content, embedding, user_id) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (source, i, text, blob, user_id),
                     )
-                except Exception:
-                    pass
+                    chunk_id = cursor.lastrowid
 
-        await self.db.execute(
-            "DELETE FROM document_chunks WHERE source = ? AND user_id = ?",
-            (source, user_id),
-        )
+                    # Dual-write to sqlite-vec index
+                    if self._has_vec and blob and chunk_id:
+                        try:
+                            await self.db.execute(
+                                "INSERT INTO vec_chunks(chunk_id, embedding) VALUES (?, ?)",
+                                (chunk_id, blob),
+                            )
+                        except Exception as e:
+                            logger.debug("vec insert for chunk %d: %s", chunk_id, e)
 
-        for i, text in enumerate(chunks):
-            embedding = await self.embedder.embed(text)
-            blob = serialize_embedding_blob(embedding)
-            cursor = await self.db.execute(
-                "INSERT INTO document_chunks (source, chunk_index, content, embedding, user_id) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (source, i, text, blob, user_id),
-            )
-            chunk_id = cursor.lastrowid
-
-            # Dual-write to sqlite-vec index
-            if self._has_vec and blob and chunk_id:
-                try:
-                    await self.db.execute(
-                        "INSERT INTO vec_chunks(chunk_id, embedding) VALUES (?, ?)",
-                        (chunk_id, blob),
-                    )
-                except Exception as e:
-                    logger.debug("vec insert for chunk %d: %s", chunk_id, e)
-
-        await self.db.commit()
+                await self.db.commit()
+            except Exception:
+                await self.db.rollback()
+                raise
         logger.info("RAG: ingested %d chunks from %s", len(chunks), source)
         return len(chunks)
 

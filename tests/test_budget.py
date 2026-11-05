@@ -274,7 +274,8 @@ class TestRegistryMetering:
         fake = MagicMock()
         fake.name, fake.model, fake.max_tokens = "ollama", "gemma4:e4b", 1000
         fake.chat = AsyncMock(return_value=AIResponse(content="hi", tool_calls=[], usage={"input": 5, "output": 2}))
-        wrapped = reg._wrap(fake, "main", "chat")
+        reg._cache["ollama:gemma4:e4b"] = fake
+        wrapped = reg.role("main", "chat", ["ollama:gemma4:e4b"])
         assert isinstance(wrapped, MeteredProvider)
         msgs = [Message(role="user", content="hello")]
         await wrapped.chat(msgs)  # unbound: passes straight through
@@ -288,3 +289,99 @@ class TestRegistryMetering:
             assert sum(t.calls for *_, t in rows) == 1
         finally:
             await db.close()
+
+
+class TestChainMetering:
+    """Each provider in a chain is metered on its own, so prices, caps and the ledger follow the one that answered."""
+
+    @staticmethod
+    def _registry(ledger, providers, **budget):
+        from micropaw.providers.registry import Registry
+
+        reg = Registry(Config(budget=BudgetConfig(**budget)))
+        reg.ledger.bind(ledger)
+        specs = []
+        for p in providers:
+            key = f"{p.name}:{p.model}"
+            reg._cache[key] = p
+            specs.append(key)
+        return reg, specs
+
+    async def test_claude_first_chain_is_priced_as_claude(self, ledger):
+        claude = FakeProvider("claude", "claude-sonnet-5-5", usage={"input": 1_000_000, "output": 0})
+        reg, specs = self._registry(ledger, [claude, FakeProvider("ollama", "q")], daily_usd=100)
+        await reg.role("main", "chat", specs).chat(MSG)
+        (total,) = await ledger.breakdown(1)
+        *_, t = total
+        assert t.usd == pytest.approx(2.0, abs=0.001) and t.unpriced_tokens == 0
+
+    async def test_fallback_answer_is_booked_to_the_fallback(self, ledger):
+        import httpx
+
+        err = httpx.HTTPStatusError("x", request=httpx.Request("POST", "http://x"),
+                                    response=httpx.Response(429, request=httpx.Request("POST", "http://x")))
+        down = FakeProvider("claude", "claude-sonnet-5-5")
+        down.chat = AsyncMock(side_effect=err)
+        up = FakeProvider("ollama", "qwen3:8b", usage={"input": 500, "output": 100})
+        reg, specs = self._registry(ledger, [down, up])
+        await reg.role("main", "chat", specs).chat(MSG)
+        async with ledger.db.execute("SELECT provider, model FROM usage") as cur:
+            assert await cur.fetchall() == [("ollama", "qwen3:8b")]
+
+    async def test_usd_cap_is_enforced_for_a_chain(self, ledger):
+        claude = FakeProvider("claude", "claude-sonnet-5-5", usage={"input": 1_000_000, "output": 0})
+        reg, specs = self._registry(ledger, [claude, FakeProvider("ollama", "q")], daily_usd=1.0)
+        chain = reg.role("main", "chat", specs)
+        await chain.chat(MSG)  # spends $2, over the cap
+        again = await chain.chat(MSG)  # claude is refused, the free local model answers
+        assert claude.calls == 1 and "daily budget" in again.note
+
+    async def test_usd_cap_refuses_a_chain_of_cloud_models(self, ledger):
+        claude = FakeProvider("claude", "claude-sonnet-5-5", usage={"input": 1_000_000, "output": 0})
+        reg, specs = self._registry(ledger, [claude, FakeProvider("openai", "gpt-5.4")], daily_usd=1.0)
+        chain = reg.role("main", "chat", specs)
+        await chain.chat(MSG)
+        with pytest.raises(BudgetExceeded):
+            await chain.chat(MSG)
+
+    async def test_local_first_chain_never_counts_toward_daily_tokens(self, ledger):
+        local = FakeProvider("ollama", "q", usage={"input": 900_000, "output": 900_000})
+        reg, specs = self._registry(ledger, [local, FakeProvider("claude", "claude-sonnet-5-5")],
+                                    daily_usd=5, daily_tokens=1000)
+        chain = reg.role("main", "chat", specs)
+        for _ in range(3):
+            await chain.chat(MSG)
+        assert local.calls == 3
+        assert all(t.unpriced_tokens == 0 for t in (await ledger.today()).values())
+
+    async def test_single_provider_is_metered_once(self, ledger):
+        from micropaw.providers.metered import MeteredProvider
+
+        reg, specs = self._registry(ledger, [FakeProvider("claude", "claude-sonnet-5-5")])
+        one = reg.role("main", "chat", specs)
+        assert isinstance(one, MeteredProvider) and not isinstance(one.inner, MeteredProvider)
+
+
+def test_price_and_registry_agree_on_what_is_local():
+    from micropaw.providers.registry import is_local_url
+
+    for where in ("http://100.101.102.103:11434", "http://169.254.1.1", "192.168.1.5:80", "http://8.8.8.8",
+                  "http://100.128.0.1", "http://[::1]:1"):
+        assert is_local(where) == is_local_url(where), where
+    assert is_local("http://100.101.102.103:11434") and not is_local("http://100.128.0.1")
+
+
+def test_a_custom_server_named_like_a_local_one_is_judged_by_its_address():
+    from types import SimpleNamespace
+
+    from micropaw.providers.metered import MeteredProvider
+    from micropaw.utils.prices import is_local_provider
+
+    cloud = SimpleNamespace(name="vllm", model="m", _api_url="https://api.example.com/v1/chat/completions")
+    lan = SimpleNamespace(name="vllm", model="m", _api_url="http://10.0.0.5:8000/v1/chat/completions")
+    named_only = SimpleNamespace(name="ollama", model="m")
+    assert not is_local_provider(cloud) and is_local_provider(lan) and is_local_provider(named_only)
+    use = {"input": 1000, "output": 1000}
+    meter = {"agent": "main", "role": "chat", "ledger": None, "budget": BudgetConfig()}
+    assert MeteredProvider(cloud, **meter)._price(use) is None  # unpriced, never free
+    assert MeteredProvider(lan, **meter)._price(use) == 0.0

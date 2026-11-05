@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import base64
+import functools
 import logging
 import os
+import subprocess
+import sys
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass
@@ -24,6 +27,16 @@ from micropaw.providers.base import (
 logger = logging.getLogger(__name__)
 
 _GIB = 2**30
+
+
+@functools.cache
+def _mac_ram() -> int | None:
+    """macOS has no SC_PHYS_PAGES; ask sysctl once."""
+    try:
+        out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=2).stdout
+        return int(out.strip())
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
 
 
 def ram_bytes() -> int | None:
@@ -46,6 +59,8 @@ def ram_bytes() -> int | None:
             if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):  # type: ignore[attr-defined]
                 return None
             return int(status.ullTotalPhys)
+        if sys.platform == "darwin":
+            return _mac_ram()
         return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
     except (AttributeError, ValueError, OSError):
         return None
@@ -170,7 +185,8 @@ class OllamaProvider(AIProvider):
             "messages": api_messages,
             "stream": stream,
             "options": {"num_predict": self.max_tokens, "num_ctx": self._ctx()},
-            "keep_alive": self.keep_alive,
+            # "-1" must go as the number -1: Ollama rejects it as a string without a unit
+            "keep_alive": int(self.keep_alive) if str(self.keep_alive).lstrip("-").isdigit() else self.keep_alive,
         }
         if tools:
             body["tools"] = [
@@ -242,6 +258,8 @@ class OllamaProvider(AIProvider):
                 chunk = parse_sse(line, prefix="")
                 if chunk is None:
                     continue
+                if chunk.get("error"):
+                    raise RuntimeError(f"Ollama error: {chunk['error']}")  # lets a fallback take over
 
                 msg = chunk.get("message", {})
                 if msg.get("content"):

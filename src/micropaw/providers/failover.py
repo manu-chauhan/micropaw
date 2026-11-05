@@ -9,13 +9,16 @@ from collections.abc import AsyncGenerator
 import httpx
 
 from micropaw.providers.base import NO_RETRY, AIProvider, AIResponse, Message, ToolDef
+from micropaw.providers.metered import BudgetExceeded
 
 logger = logging.getLogger(__name__)
 
 COOLDOWN = 60.0  # seconds a failed provider is skipped (flat)
 # Bad key, out of credit, model gone and similar: the next provider has its own key and model.
 _FALL_THROUGH = frozenset({401, 402, 403, 404, 408, 409, 425, 429})
-# A 400 or 413 is the request itself: it would fail everywhere
+# A 400 or 413 is the request itself and would fail everywhere, unless the body blames the key or the account
+# (Gemini answers 400 for a bad key, and some providers 400 for no credit).
+_ACCOUNT_WORDS = ("api key", "credit", "billing", "quota")
 _CONTEXT_WORDS = (
     "context length", "context_length", "context window", "maximum context", "context size",
     "too many tokens", "prompt is too long", "exceeds the available context",
@@ -47,9 +50,11 @@ def unwrap(e: Exception) -> Exception:
 def classify(e: Exception) -> str | None:
     """Short reason when another provider could help ("timed out"), None when the request itself is bad."""
     e = unwrap(e)
+    if isinstance(e, BudgetExceeded):
+        return "has reached its daily budget"
     if isinstance(e, httpx.HTTPStatusError):
         status = e.response.status_code
-        if status in _FALL_THROUGH or status >= 500:
+        if status in _FALL_THROUGH or status >= 500 or _account_problem(e):
             return f"returned HTTP {status}"
         return None
     if isinstance(e, httpx.TimeoutException):
@@ -59,15 +64,25 @@ def classify(e: Exception) -> str | None:
     return "failed"
 
 
+def _body(e: httpx.HTTPStatusError) -> str:
+    try:
+        return e.response.text.lower()
+    except httpx.ResponseNotRead:
+        return ""
+
+
+def _account_problem(e: httpx.HTTPStatusError) -> bool:
+    if e.response.status_code != 400:
+        return False
+    text = _body(e)
+    return any(w in text for w in _ACCOUNT_WORDS) and not is_context_error(e)
+
+
 def is_context_error(e: Exception) -> bool:
     e = unwrap(e)
     if not isinstance(e, httpx.HTTPStatusError) or e.response.status_code != 400:
         return False
-    try:
-        text = e.response.text.lower()
-    except httpx.ResponseNotRead:
-        return False
-    return any(w in text for w in _CONTEXT_WORDS)
+    return any(w in _body(e) for w in _CONTEXT_WORDS)
 
 
 def trim_messages(messages: list[Message]) -> list[Message] | None:
@@ -87,11 +102,19 @@ def _label(p: AIProvider) -> str:
     return f"{p.name}:{model}" if model else p.name
 
 
+def _shared(p: AIProvider) -> AIProvider:
+    """The provider under a metering wrapper, so every agent that uses it shares one cooldown."""
+    return p.__dict__.get("inner", p)
+
+
 def _cooling(p: AIProvider) -> bool:
-    return getattr(p, "_down_until", 0.0) > _now()
+    return getattr(_shared(p), "_down_until", 0.0) > _now()
 
 
 def _mark_down(p: AIProvider, why: str) -> None:
+    if why.endswith("budget"):
+        return  # the cap is checked on every call, no cooldown needed
+    p = _shared(p)
     p._down_until = _now() + COOLDOWN  # type: ignore[attr-defined]
     p._down_why = why  # type: ignore[attr-defined]
 
@@ -117,7 +140,7 @@ class FallbackProvider(AIProvider):
         first = self.providers[0]
         if answered is first:
             return ""
-        why = failed.get(id(first)) or getattr(first, "_down_why", "failed")
+        why = failed.get(id(first)) or getattr(_shared(first), "_down_why", "failed")
         return f"\n\n[answered by {_label(answered)} because {_label(first)} {why}]"
 
     async def chat(self, messages: list[Message], tools: list[ToolDef] | None = None) -> AIResponse:
@@ -140,8 +163,10 @@ class FallbackProvider(AIProvider):
             finally:
                 NO_RETRY.reset(token)
             if not response.tool_calls:
-                response.content += self._note(provider, failed)
+                response.note = self._note(provider, failed)
             return response
+        if isinstance(last, BudgetExceeded):
+            raise last  # the chat gets the plain budget message
         raise AllProvidersFailedError(f"All providers failed: {last}") from last
 
     async def chat_stream(
@@ -169,7 +194,7 @@ class FallbackProvider(AIProvider):
                     note = "" if item.tool_calls else self._note(provider, failed)
                     if note:
                         yield note
-                        item.content += note
+                        item.note = note
                     yield item
                     return
             except Exception as e:
@@ -183,10 +208,12 @@ class FallbackProvider(AIProvider):
                 if text:  # the user has seen part of a reply: end it here, do not start another one
                     note = f"\n\n[reply cut short: {_label(provider)} {why}]"
                     yield note
-                    yield AIResponse(content=text + note, tool_calls=[], usage={}, stop_reason="error")
+                    yield AIResponse(content=text, tool_calls=[], usage={}, stop_reason="error", note=note)
                     return
             finally:
                 await stream.aclose()
+        if isinstance(last, BudgetExceeded):
+            raise last  # the chat gets the plain budget message
         raise AllProvidersFailedError(f"All providers failed: {last}") from last
 
     async def close(self) -> None:

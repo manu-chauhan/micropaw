@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 
 import httpx
 
-from micropaw.config import OPENAI_COMPATIBLE, Config
+from micropaw.config import Config
+from micropaw.providers.registry import PRESETS
 
 logger = logging.getLogger(__name__)
 
 
-def _resolve(spec: str, local_url: str, config: Config, hosted: dict) -> tuple[str, str, str] | None:
+def _resolve(spec: str, local_url: str, config: Config, hosted: bool) -> tuple[str, str, str] | None:
     name, _, model = spec.partition(":")
     name, model = name.strip().lower(), model.strip()
     if not model:
@@ -21,22 +23,28 @@ def _resolve(spec: str, local_url: str, config: Config, hosted: dict) -> tuple[s
         return local_url, "", model
     if name == "openai" and config.provider_config.openai.api_key:
         return config.provider_config.openai.base_url, config.provider_config.openai.api_key, model
-    if name in hosted:
-        base_url, key_env = hosted[name]
+    if hosted and name in PRESETS:
+        key_env = PRESETS[name].key_env
         key = os.environ.get(key_env, "") if key_env else ""
         if key or not key_env:
-            return base_url, key, model
+            return PRESETS[name].base_url, key, model
     return None
 
 
 def _endpoint(config: Config) -> tuple[str, str, str] | None:
     """(base_url, api_key, model) for config.voice.stt, or None when unset or unusable."""
-    return _resolve(config.voice.stt, config.voice.stt_url, config, OPENAI_COMPATIBLE)
+    return _resolve(config.voice.stt, config.voice.stt_url, config, hosted=True)
 
 
 def tts_endpoint(config: Config) -> tuple[str, str, str] | None:
     """(base_url, api_key, model) for config.voice.tts: OpenAI or a local server only."""
-    return _resolve(config.voice.tts, config.voice.tts_url, config, {})
+    return _resolve(config.voice.tts, config.voice.tts_url, config, hosted=False)
+
+
+def _audio_url(base_url: str, path: str = "audio/transcriptions") -> str:
+    """The endpoint URL. A base URL that already ends in a version ("/v1") is not given a second one."""
+    base = base_url.rstrip("/")
+    return f"{base}/{path}" if re.search(r"/v\d+$", base) else f"{base}/v1/{path}"
 
 
 async def transcribe(data: bytes, mime_type: str, config: Config) -> str | None:
@@ -50,7 +58,7 @@ async def transcribe(data: bytes, mime_type: str, config: Config) -> str | None:
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(
-                f"{base_url.rstrip('/')}/v1/audio/transcriptions",
+                _audio_url(base_url),
                 headers=headers, data={"model": model}, files={"file": (f"voice.{ext}", data, mime_type)},
             )
             resp.raise_for_status()
@@ -88,7 +96,7 @@ async def synthesize(text: str, config: Config) -> tuple[bytes, str] | None:
     body = {"model": model, "input": text[:TTS_MAX_CHARS], "voice": voice, "response_format": "opus"}
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(f"{base_url.rstrip('/')}/v1/audio/speech", headers=headers, json=body)
+            resp = await client.post(_audio_url(base_url, "audio/speech"), headers=headers, json=body)
             resp.raise_for_status()
             data = resp.content
     except httpx.HTTPError as e:

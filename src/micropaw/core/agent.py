@@ -15,7 +15,7 @@ from micropaw import skills
 from micropaw.config import Config
 from micropaw.core.context import ContextManager
 from micropaw.core.conversation import MAX_HISTORY, ConversationManager, sanitize_history
-from micropaw.core.profile import AgentProfile
+from micropaw.core.profile import AgentProfile, primary_provider
 from micropaw.memory.store import MemoryStore
 from micropaw.providers.base import AIProvider, AIResponse, MediaItem, Message, ToolCall
 from micropaw.providers.failover import AllProvidersFailedError, FriendlyError
@@ -119,6 +119,7 @@ class Agent:
             confirm_dangerous=self.config.permissions.confirm_dangerous,
             workspace=str(Path(self.config.permissions.workspace).expanduser()),
             memory_user=self._memory_user,
+            agent=self.name,
         )
         if self.approver and platform not in _INTERNAL_PLATFORMS:
             approver = self.approver
@@ -268,8 +269,15 @@ class Agent:
         return conv_id, [system, *history, user_msg], marked
 
     def _window_tokens(self) -> int:
-        """The model's context size: the config value, else 8192 for local servers and 100000 for cloud."""
-        return self.config.context.window_tokens or (8192 if is_local_provider(self.provider) else 100_000)
+        """The model's context size: the config value, else the first provider's own (a local server's
+        num_ctx, 8192 by default) or 100000 for cloud. A chain is sized for its first provider."""
+        if self.config.context.window_tokens:
+            return self.config.context.window_tokens
+        first = primary_provider(self.provider)
+        if not is_local_provider(first):
+            return 100_000
+        n = getattr(first, "num_ctx", 0)
+        return n if isinstance(n, int) and n > 0 else 8192
 
     def _schedule_compaction(self, conv_id: str, messages: list[Message]) -> None:
         """After the reply: summarize old messages in the background, one task per conversation."""
@@ -278,6 +286,10 @@ class Agent:
         task = self._compact_tasks.get(conv_id)
         if task and not task.done():
             return
+        first = self.fast_provider or self.provider
+        first = (getattr(first, "__dict__", {}).get("providers") or [first])[0]
+        if getattr(first, "busy", False) is True:
+            return  # a local server is busy: do not hold it ahead of the next user turn, try after a later one
         task = asyncio.create_task(self._compact(conv_id))
         self._compact_tasks[conv_id] = task
 
@@ -409,6 +421,7 @@ class Agent:
         ctx.marked = was_marked
 
         response: AIResponse | None = None
+        note = ""  # which fallback answered: shown, not saved
         try:
             for _ in range(self.max_tool_iterations):
                 try:
@@ -427,6 +440,7 @@ class Agent:
                         reply = response.content or "The model declined this request."
                     else:
                         reply = response.content or "I'm not sure how to respond to that."
+                    note = response.note
                     break
 
                 messages = await self._execute_tools(messages, response, ctx, conv_id, cache, pending)
@@ -435,6 +449,7 @@ class Agent:
                 reply = (response.content if response and response.content
                          else "I've been working on this for a while. Here's what I have so far.")
             pending.append(Message(role="assistant", content=reply))
+            reply += note
             if self.ledger is not None and (note := self.ledger.take_warning()):
                 if on_chunk:
                     await on_chunk(f"\n\n{note}")
@@ -458,7 +473,7 @@ class Agent:
         tool = self.registry.get(tc.name)
         if tool is None:
             return False
-        if tc.name not in _READ_ONLY_TOOLS and tc.arguments.get("action") not in _READ_ONLY_ACTIONS.get(tc.name, ()):
+        if not _read_only(tc):
             return False
         try:
             return not tool.needs_approval(tc.arguments, ctx)
@@ -561,8 +576,15 @@ class Agent:
 
         if pending is None:
             await self.conversations.save_messages(conv_id, new)
-        else:
-            pending.extend(new)
+            return messages
+        pending.extend(new)
+        if not all(_read_only(tc) for tc in response.tool_calls):
+            # A side effect has run: keep it in history even if the process dies before the turn ends
+            try:
+                await self.conversations.save_messages(conv_id, list(pending))
+                pending.clear()
+            except Exception as e:
+                logger.error("Could not save the turn so far for %s: %s", conv_id, e)
         return messages
 
     async def _auto_ingest(self, source: str, content: str, user_id: str) -> None:
@@ -572,6 +594,10 @@ class Agent:
             logger.info("RAG: auto-ingested %d chunks from %s", count, source)
         except Exception as e:
             logger.error("RAG: auto-ingest failed for %s: %s", source, e)
+
+
+def _read_only(tc: ToolCall) -> bool:
+    return tc.name in _READ_ONLY_TOOLS or tc.arguments.get("action") in _READ_ONLY_ACTIONS.get(tc.name, ())
 
 
 async def _no_chunk(_: str) -> None:

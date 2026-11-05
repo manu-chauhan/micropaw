@@ -35,6 +35,7 @@ _BACKGROUND_START_TIMEOUT = 180.0  # first runs of npx -y or uvx download the pa
 _MAX_OUTPUT = 50_000
 _MAX_TOOLS = 128           # per server
 _MAX_DESCRIPTION = 1000    # characters, per tool
+_MAX_ARGS = 4000           # characters of JSON; the owner sees all of it in the approval, so there is a limit
 
 
 # `paw mcp add <preset>` entries: {"command": ..., "args": [...pinned version...]}.
@@ -57,6 +58,7 @@ class MCPServer:
         self._pending: dict[int, asyncio.Future[Any]] = {}
         self._next_id = 0
         self._reader: asyncio.Task | None = None
+        self._dead = ""  # why the reader stopped; every later call fails at once with this
         self.digest = ""  # hash of the tool list, set by start_server
 
     async def _launch(self) -> None:
@@ -91,6 +93,10 @@ class MCPServer:
         cursor = None
         while True:
             page = await self.request("tools/list", {"cursor": cursor} if cursor else {}, timeout=timeout)
+            if not isinstance(page, dict) or not isinstance(page.get("tools", []), list) or not all(
+                isinstance(t, dict) and isinstance(t.get("name"), str) for t in page.get("tools", [])
+            ):
+                raise MCPError("its tool list is malformed")
             tools.extend(page.get("tools", []))
             cursor = page.get("nextCursor")
             if not cursor or len(tools) >= _MAX_TOOLS:
@@ -102,6 +108,8 @@ class MCPServer:
         await self._proc.stdin.drain()
 
     async def request(self, method: str, params: dict, timeout: float | None = None) -> Any:
+        if self._dead:
+            raise MCPError(self._dead)
         if not self._proc or self._proc.returncode is not None:
             raise MCPError(f"server {self.name} is not running")
         self._next_id += 1
@@ -118,23 +126,35 @@ class MCPServer:
 
     async def _read(self) -> None:
         assert self._proc and self._proc.stdout
-        async for raw in self._proc.stdout:
-            try:
-                msg = json.loads(raw)
-            except ValueError:
-                continue  # log lines some servers print on stdout
-            if "id" in msg and "method" in msg:
-                # The server asks us something (sampling, roots, elicitation): not offered
-                await self._send({"jsonrpc": "2.0", "id": msg["id"],
-                                  "error": {"code": -32601, "message": "not supported by this client"}})
-            elif (answer := self._pending.get(msg.get("id"))) and not answer.done():
-                if "error" in msg:
-                    answer.set_exception(MCPError(msg["error"].get("message", "error")))
-                else:
-                    answer.set_result(msg.get("result", {}))
+        reason = f"server {self.name} exited"
+        try:
+            async for raw in self._proc.stdout:
+                try:
+                    msg = json.loads(raw)
+                except ValueError:
+                    continue  # log lines some servers print on stdout
+                if not isinstance(msg, dict):
+                    continue
+                if "id" in msg and "method" in msg:
+                    # The server asks us something (sampling, roots, elicitation): not offered
+                    await self._send({"jsonrpc": "2.0", "id": msg["id"],
+                                      "error": {"code": -32601, "message": "not supported by this client"}})
+                elif (answer := self._pending.get(msg.get("id"))) and not answer.done():
+                    if "error" in msg:
+                        err = msg["error"]
+                        text = err.get("message", "error") if isinstance(err, dict) else err
+                        answer.set_exception(MCPError(str(text)))
+                    else:
+                        answer.set_result(msg.get("result", {}))
+        except Exception as e:  # e.g. a line over the size limit: stop now instead of letting calls time out
+            reason = f"server {self.name} sent output this client cannot read ({type(e).__name__})"
+            logger.error("MCP [%s] %s; stopping it", self.name, reason)
+            if self._proc.returncode is None:
+                self._proc.kill()
+        self._dead = reason
         for answer in self._pending.values():
             if not answer.done():
-                answer.set_exception(MCPError(f"server {self.name} exited"))
+                answer.set_exception(MCPError(reason))
 
     async def _drain_stderr(self) -> None:
         assert self._proc and self._proc.stderr
@@ -266,6 +286,8 @@ class HTTPMCPServer(MCPServer):
                 except ValueError:
                     continue
                 for msg in parsed if isinstance(parsed, list) else [parsed]:
+                    if not isinstance(msg, dict):
+                        continue
                     if "method" in msg:
                         if "id" in msg:  # the server asks us something: not offered
                             error = {"code": -32601, "message": "not supported by this client"}
@@ -310,17 +332,24 @@ class MCPTool(Tool):
         if self.remote_name in self.server.config.allow and not context.marked:
             return None
         shown = json.dumps(args, ensure_ascii=False)
-        shown = shown if len(shown) <= 800 else shown[:800] + " ..."
+        if len(shown) > _MAX_ARGS:
+            return None  # execute() refuses
         return f"Use {self.remote_name} from MCP server '{self.server.name}':\n{shown}"
 
     async def execute(self, args: dict[str, Any], context: ToolContext) -> str | ToolResult:
+        if len(json.dumps(args, ensure_ascii=False)) > _MAX_ARGS:
+            return f"Error: The arguments are too long to show you in full (max {_MAX_ARGS:,} characters). Not run."
         try:
             result = await self.server.request("tools/call", {"name": self.remote_name, "arguments": args})
         except MCPError as e:
             return f"Error: {e}"
+        if not isinstance(result, dict):
+            return "Error: The server sent an invalid result."
         texts: list[str] = []
         media: list[MediaItem] = []
         for part in result.get("content", []):
+            if not isinstance(part, dict):
+                continue
             if part.get("type") == "text":
                 texts.append(part.get("text", ""))
             elif part.get("type") == "image" and part.get("data"):

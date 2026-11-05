@@ -406,3 +406,68 @@ def test_pin_only_touches_existing_entries(tmp_path):
     save_mcp_server("a", {"command": "x"})
     assert config.pin_mcp_tools("nope", "h") is False and config.pin_mcp_tools("a", "h") is True
     assert load_config().mcp_servers["a"].tools_hash == "h"
+
+
+def _script_server(tmp_path, body: str, **cfg) -> MCPServerConfig:
+    script = tmp_path / "s.py"
+    script.write_text(textwrap.dedent('''
+        import json, sys
+        def send(m): sys.stdout.write(json.dumps(m) + "\\n"); sys.stdout.flush()
+        for line in sys.stdin:
+            m = json.loads(line)
+            if "id" not in m or "method" not in m:
+                continue
+            i, method = m["id"], m["method"]
+            if method == "initialize":
+                send({"jsonrpc": "2.0", "id": i, "result": {}})
+            elif method == "tools/list":
+                send({"jsonrpc": "2.0", "id": i, "result": {"tools": TOOLS}})
+            else:
+                CALL
+    ''').replace("CALL", body.strip()).replace("TOOLS", cfg.pop("tools", '[{"name": "t"}]')))
+    return MCPServerConfig(command=sys.executable, args=["-I", str(script)], **cfg)
+
+
+@pytest.mark.asyncio
+async def test_a_reader_crash_fails_pending_and_later_calls_at_once(tmp_path):
+    import time
+
+    big = 'sys.stdout.write("x" * (17 * 1024 * 1024) + "\\\\n"); sys.stdout.flush()'  # over the 16 MB line limit
+    cfg = _script_server(tmp_path, big, timeout=60.0)
+    servers, tools = await start_servers({"s": cfg})
+    start = time.monotonic()
+    try:
+        out = await tools[0].execute({}, _ctx())
+        assert out.startswith("Error:") and "cannot read" in out
+        assert "cannot read" in await tools[0].execute({}, _ctx())  # a later call does not wait either
+        assert time.monotonic() - start < 20
+    finally:
+        for s in servers:
+            await s.close()
+
+
+@pytest.mark.asyncio
+async def test_malformed_tool_lists_and_results_are_mcp_errors(tmp_path):
+    for tools in ('[{"name": 5}]', '"nope"', '[1, 2]'):
+        servers, found = await start_servers({"s": _script_server(tmp_path, "pass", tools=tools)})
+        assert servers == [] and found == []
+    servers, found = await start_servers({"s": _script_server(
+        tmp_path, 'send({"jsonrpc": "2.0", "id": i, "result": "oops"})')})
+    try:
+        assert await found[0].execute({}, _ctx()) == "Error: The server sent an invalid result."
+    finally:
+        for s in servers:
+            await s.close()
+
+
+def test_approval_shows_all_arguments_and_big_ones_are_refused():
+    import asyncio
+
+    from micropaw.mcp import MCPTool
+
+    tool = MCPTool(MCPServer("s", MCPServerConfig(command="x")), {"name": "t"})
+    ok = {"data": "y" * 3900}
+    assert json.dumps(ok) in tool.needs_approval(ok, _ctx())  # nothing cut
+    big = {"data": "y" * 4100}
+    assert tool.needs_approval(big, _ctx()) is None
+    assert asyncio.run(tool.execute(big, _ctx())).endswith("Not run.")

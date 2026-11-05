@@ -101,6 +101,48 @@ class TestGatewayHandleMessage:
         assert "too long" in result.lower()
 
 
+class TestPendingApproval:
+    @pytest.mark.asyncio
+    async def test_other_messages_get_an_instant_reply_while_an_answer_is_awaited(self, tmp_path):
+        import asyncio
+
+        from micropaw.gateway import _Approvals
+
+        gw = TestGatewayHandleMessage()._make_gateway()
+        gw._approvals = _Approvals(tmp_path / "rules.json")
+        sent: list[str] = []
+
+        async def send(msg, ask_id, allow_always):
+            sent.append(ask_id)
+
+        task = asyncio.create_task(gw._approvals.ask(send, "terminal:user1", "shell", "ls", True))
+        await asyncio.sleep(0)
+        ask_id = sent[0]
+        async with gw._chat_lock("terminal", "user1", None):  # the turn that asked still holds the lock
+            for handle in (gw._handle_message, gw._handle_message_stream):
+                reply = await asyncio.wait_for(handle("never mind", "user1", "terminal", None), 1)
+                assert reply == f"Waiting for your answer to [{ask_id}]: reply yes {ask_id} or no {ask_id}."
+            # answers still go straight through, lock or not
+            answer = await asyncio.wait_for(gw._handle_message(f"yes {ask_id}", "user1", "terminal", None), 1)
+            assert answer == "Approved."
+        assert await task is True
+        gw.agent.handle_message.assert_not_called()
+        assert await gw._handle_message("hello", "user1", "terminal", None) == "AI response"  # normal again
+
+    @pytest.mark.asyncio
+    async def test_another_chat_is_not_held_up(self, tmp_path):
+        import asyncio
+
+        from micropaw.gateway import _Approvals
+
+        gw = TestGatewayHandleMessage()._make_gateway()
+        gw._approvals = _Approvals(tmp_path / "rules.json")
+        task = asyncio.create_task(gw._approvals.ask(AsyncMock(), "terminal:user1", "shell", "ls", True))
+        await asyncio.sleep(0)
+        assert await gw._handle_message("hello", "user2", "terminal", None) == "AI response"
+        task.cancel()
+
+
 class TestGatewayTerminalConversation:
     def _make_gw(self):
         config = Config()

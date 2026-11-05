@@ -72,8 +72,10 @@ def apply_plan(config: Config, plan: ModelPlan) -> None:
             getattr(config.provider_config, name).model = model
         else:
             config.agents["main"] = AgentConfig(model=plan.main)
-    config.models.fast = plan.fast
-    config.models.vision = plan.vision
+    if plan.fast:  # an empty plan value must not wipe what the user already set
+        config.models.fast = plan.fast
+    if plan.vision:
+        config.models.vision = plan.vision
     if plan.fallbacks:
         config.fallback_providers = plan.fallbacks
 

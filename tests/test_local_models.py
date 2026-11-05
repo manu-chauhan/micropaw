@@ -150,6 +150,28 @@ def test_ram_probe_returns_a_number_or_none():
     assert r is None or r > 0
 
 
+def test_macos_ram_comes_from_sysctl_once(monkeypatch):
+    import subprocess as sp
+
+    calls = []
+
+    def fake_run(argv, **kw):
+        calls.append(argv)
+        return sp.CompletedProcess(argv, 0, stdout="17179869184\n")
+
+    ollama._mac_ram.cache_clear()
+    monkeypatch.setattr(ollama.sys, "platform", "darwin")
+    monkeypatch.setattr(ollama.os, "name", "posix")
+    monkeypatch.setattr(ollama.subprocess, "run", fake_run)
+    monkeypatch.setattr(ollama.os, "sysconf", lambda name: (_ for _ in ()).throw(ValueError(name)), raising=False)
+    assert ollama.ram_bytes() == 16 * GIB and ollama.ram_bytes() == 16 * GIB
+    assert calls == [["sysctl", "-n", "hw.memsize"]]
+    ollama._mac_ram.cache_clear()
+    monkeypatch.setattr(ollama.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
+    assert ollama.ram_bytes() is None
+    ollama._mac_ram.cache_clear()
+
+
 def test_every_chat_sends_num_ctx_and_keep_alive():
     p = OllamaProvider(model="m", num_ctx=4096, keep_alive="10m")
     body = p._build_body([Message(role="user", content="hi")])

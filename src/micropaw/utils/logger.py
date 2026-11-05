@@ -11,6 +11,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.logging import RichHandler
 
+from micropaw.config import private_dir
 from micropaw.utils.redact import redact
 
 _configured = False
@@ -20,6 +21,17 @@ _LOG_DIR = Path(os.environ.get("MICROPAW_HOME") or Path.home() / ".micropaw") / 
 _LOG_FILE = _LOG_DIR / ("gateway.log" if sys.argv[1:2] == ["start"] else "chat.log")
 _MAX_LOG_SIZE = 5 * 1024 * 1024  # 5 MB
 _BACKUP_COUNT = 3
+
+
+class _PrivateFileHandler(RotatingFileHandler):
+    """A log file only its owner can read, also after a rotation creates a new one (POSIX)."""
+
+    def _open(self):  # type: ignore[no-untyped-def]
+        if os.name == "nt":
+            return super()._open()
+        fd = os.open(self.baseFilename, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        os.fchmod(fd, 0o600)  # an older log made with the default mode
+        return os.fdopen(fd, self.mode, encoding=self.encoding, errors=self.errors)
 
 
 class RedactFilter(logging.Filter):
@@ -63,8 +75,8 @@ def setup_logging(level: str = "INFO") -> None:
     # File logging: always enabled (users need it for debugging)
     log_file = os.getenv("MICROPAW_LOG_FILE")
     log_path = Path(log_file) if log_file else _LOG_FILE
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    file_handler = RotatingFileHandler(
+    private_dir(log_path.parent)
+    file_handler = _PrivateFileHandler(
         str(log_path),
         maxBytes=_MAX_LOG_SIZE,
         backupCount=_BACKUP_COUNT,

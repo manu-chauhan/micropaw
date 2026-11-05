@@ -217,3 +217,13 @@ def providers_in(provider: AIProvider | None) -> list[AIProvider]:
         for p in inner if isinstance(inner, list) else [] if inner is None else [inner]:
             out += providers_in(p)
     return out
+
+
+def primary_provider(provider: AIProvider) -> AIProvider:
+    """The first real provider of a chain, under any metering or gate wrappers."""
+    while True:
+        attrs = getattr(provider, "__dict__", {})
+        inner = (attrs.get("providers") or [None])[0] or attrs.get("_inner") or attrs.get("inner")
+        if inner is None:
+            return provider
+        provider = inner

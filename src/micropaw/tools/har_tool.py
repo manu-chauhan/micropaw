@@ -19,6 +19,7 @@ from micropaw.tools.path_security import resolve_path, validate_file_path
 _MAX_HAR = 50 * 1024 * 1024
 _MAX_OUT = 30_000
 _ID = re.compile(r"\d+|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{16,}")
+_PLACEHOLDER = re.compile(r"\{((?:[A-Za-z_]+_)?(?:id|token)\d*)\}")  # only the names _template makes
 _SECRET_HEADERS = {"cookie", "set-cookie", "authorization", "proxy-authorization", "x-api-key"}
 
 
@@ -51,7 +52,7 @@ def summarize_har(text: str) -> str:
     for e in entries:
         req, resp = e.get("request", {}), e.get("response", {})
         url = urlsplit(req.get("url", ""))
-        if not url.hostname:
+        if not url.hostname or not re.fullmatch(r"[A-Za-z]{3,10}", str(req.get("method", "GET"))):
             continue
         hosts[url.hostname] += 1
         for h in req.get("headers", []):
@@ -88,7 +89,7 @@ def summarize_har(text: str) -> str:
             "servers": [{"url": f"https://{main}"}], "paths": {}}
     for method, path, g in mine:
         params = [{"name": n, "in": "path", "required": True, "schema": {"type": "string"}}
-                  for n in re.findall(r"{(\w+)}", path)]
+                  for n in _PLACEHOLDER.findall(path)]
         params += [{"name": q, "in": "query", "schema": {"type": "string"}} for q in sorted(g["query"])]
         op: dict[str, Any] = {"parameters": params, "responses": {
             str(s): {"description": "seen in capture",
@@ -97,18 +98,24 @@ def summarize_har(text: str) -> str:
         if g["body"]:
             op["requestBody"] = {"content": {t: {} for t in sorted(g["body"])}}
         spec["paths"].setdefault(path, {})[method.lower()] = op
-    stub = ["import httpx", "", f'BASE = "https://{main}"', "", "",
+    # Everything from the capture goes into the stub through json.dumps, so it stays text, never code
+    stub = ["import httpx", "", f"BASE = {json.dumps(f'https://{main}')}", "", "",
             "class Client:", "    def __init__(self, headers: dict[str, str] | None = None) -> None:",
             "        self.http = httpx.Client(base_url=BASE, headers=headers or {})"]
     names: Counter = Counter()
     for method, path, g in mine[:40]:
-        base = method.lower() + "_" + (re.sub(r"\W+", "_", re.sub(r"{\w+}", "", path)).strip("_") or "root")
+        words = re.sub(r"[^A-Za-z0-9]+", "_", _PLACEHOLDER.sub("", path)).strip("_")
+        base = method.lower() + "_" + (words or "root")
         names[base] += 1
         fn = base if names[base] == 1 else f"{base}{names[base]}"
-        args = "".join(f", {a}" for a in re.findall(r"{(\w+)}", path))
-        safe = re.sub(r'["\\]', "", path)
+        args = "".join(f", {a}" for a in _PLACEHOLDER.findall(path))
+        # other braces in the path are literal text: double them so the f-string cannot run them
+        literal = "".join(
+            part.replace("{", "{{").replace("}", "}}") if i % 2 == 0 else "{" + part + "}"
+            for i, part in enumerate(_PLACEHOLDER.split(path))
+        )
         stub += ["", f"    def {fn}(self{args}, **params) -> httpx.Response:",
-                 f'        return self.http.request("{method}", f"{safe}", params=params)']
+                 f"        return self.http.request({json.dumps(method)}, f{json.dumps(literal)}, params=params)"]
     out = "\n".join(lines + ["", f"OpenAPI 3.1 sketch for {main}:", json.dumps(spec, indent=1), "",
                              "Python client stub (add your own auth headers):", *stub])
     return out if len(out) <= _MAX_OUT else out[:_MAX_OUT] + "\n... (output cut)"

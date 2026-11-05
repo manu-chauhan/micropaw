@@ -16,7 +16,8 @@ from micropaw.scheduler import Scheduler, _authenticated, email_rule
 from micropaw.tools.base import ToolContext
 
 OWNER = "boss@example.com"
-GOOD = "mx.google.com; dkim=pass header.i=@example.com; spf=pass smtp.mailfrom=example.com; dmarc=pass (p=NONE)"
+GOOD = ("mx.google.com; dkim=pass header.i=@example.com; spf=pass smtp.mailfrom=example.com; "
+        "dmarc=pass (p=NONE sp=NONE dis=NONE) header.from=example.com")
 
 
 def _msg(mid, sender=OWNER, subject="Invoice 7", body="Please pay 10 euros", auth=GOOD, extra_headers=()):
@@ -89,17 +90,34 @@ def test_rule_needs_one_exact_address():
     assert '"' not in email_rule(OWNER, subject_contains='a"b')["subject_contains"]
 
 
-def test_authentication_needs_gmails_own_dmarc_or_spf_and_dkim():
-    def h(value):
-        return [{"name": "Authentication-Results", "value": value}]
+def test_authentication_needs_gmails_own_dmarc_pass_for_the_from_domain():
+    def h(value, sender="Boss <boss@example.com>"):
+        return [{"name": "From", "value": sender}, {"name": "Authentication-Results", "value": value}]
     assert _authenticated(h(GOOD))
-    assert not _authenticated(h("mx.google.com; dmarc=fail; spf=pass; dkim=pass"))
-    assert _authenticated(h("mx.google.com; spf=pass; dkim=pass"))
-    assert not _authenticated(h("mx.google.com; spf=pass; dkim=fail"))
-    assert not _authenticated(h("evil.example.org; dmarc=pass"))  # a header the sender wrote
+    assert _authenticated(h(GOOD.replace("header.from=example.com", "header.from=Example.COM"),
+                            "Boss <BOSS@Example.COM>"))
+    assert not _authenticated(h("mx.google.com; dmarc=fail header.from=example.com; spf=pass; dkim=pass"))
+    assert not _authenticated(h("mx.google.com; spf=pass; dkim=pass"))  # no DMARC record: not enough
+    assert not _authenticated(h("mx.google.com; dmarc=pass (p=NONE)"))  # no header.from to compare
+    assert not _authenticated(h("mx.google.com; dmarc=pass header.from=other.org"))  # not the From domain
+    assert not _authenticated(h("mx.google.com; dmarc=passed header.from=example.com"))  # exact tokens only
+    assert not _authenticated(h("evil.example.org; dmarc=pass header.from=example.com"))  # sender-written header
+    assert not _authenticated([{"name": "Authentication-Results", "value": GOOD}])  # no From header
     assert not _authenticated([])
     # the first mx.google.com result decides; a forged later one cannot rescue a failure
-    assert not _authenticated(h("mx.google.com; dmarc=fail") + h("mx.google.com; dmarc=pass"))
+    assert not _authenticated(h("mx.google.com; dmarc=fail") + h(GOOD))
+
+
+def test_text_in_another_clause_cannot_pass_for_a_dmarc_result():
+    echoed = ("mx.google.com; dkim=fail header.i=@evil.net; spf=pass (google.com: domain of dmarc=pass@evil.net "
+              "designates 1.2.3.4 as permitted sender) smtp.mailfrom=dmarc=pass@evil.net; "
+              "dmarc=fail (p=REJECT sp=REJECT dis=NONE) header.from=example.com")
+    headers = [{"name": "From", "value": "x <boss@example.com>"}, {"name": "Authentication-Results", "value": echoed}]
+    assert not _authenticated(headers)
+    spoof = ("mx.google.com; dkim=pass header.i=@evil.net; "
+             "spf=pass smtp.mailfrom=bounce@evil.net")  # vendor has no DMARC record: Gmail prints no dmarc clause
+    assert not _authenticated([{"name": "From", "value": "billing@vendor.com"},
+                               {"name": "Authentication-Results", "value": spoof}])
 
 
 @pytest.mark.asyncio
@@ -129,8 +147,8 @@ async def test_last_seen_id_is_stored_and_each_message_runs_once(env):
     await s._poll_email(time.time())
     assert [e[3] for e in env.log if e[0] == "run"] == [f"email-{job_id}"] * 2
     assert "Please" in env.log[2][4] and s.gmail.gets == ["m1", "m2"]  # oldest first
-    async with s.db.execute("SELECT last_msg_id FROM cron_jobs WHERE id = ?", (job_id,)) as cur:
-        assert (await cur.fetchone())[0] == "m2"
+    async with s.db.execute("SELECT msg_id FROM email_seen WHERE job_id = ?", (job_id,)) as cur:
+        assert {r[0] for r in await cur.fetchall()} == {"m1", "m2"}
     s._last_email_poll = 0
     s.gmail.messages = {"m3": _msg("m3"), **s.gmail.messages}
     s.gmail.gets.clear()
@@ -155,9 +173,9 @@ async def test_unauthenticated_wrong_sender_and_subject_are_skipped(env, caplog)
         await s._poll_email(time.time())
     runs = [e for e in env.log if e[0] == "run"]
     assert len(runs) == 1 and "INVOICE 9" in runs[0][4]
-    assert "DMARC" in caplog.text and "From address" in caplog.text and "subject does not match" in caplog.text
-    async with s.db.execute("SELECT last_msg_id FROM cron_jobs") as cur:
-        assert (await cur.fetchone())[0] == "spoof"  # skipped mail is consumed, not retried forever
+    assert "DMARC pass" in caplog.text and "From address" in caplog.text and "subject does not match" in caplog.text
+    async with s.db.execute("SELECT COUNT(*) FROM email_seen") as cur:
+        assert (await cur.fetchone())[0] == 5  # skipped mail is consumed, not retried forever
 
 
 @pytest.mark.asyncio
@@ -302,3 +320,41 @@ def test_cli_cron_add_on_email(tmp_path, monkeypatch):
     assert "on email from" in listed and "boss@example.com" in listed and "on" in listed
     job = json.loads(sqlite3.connect(tmp_path / "cli.db").execute("SELECT match FROM cron_jobs").fetchone()[0])
     assert job["from"] == OWNER
+
+
+@pytest.mark.asyncio
+async def test_archiving_the_last_handled_mail_does_not_rerun_older_mail(env):
+    s = env.sched
+    job_id = await _job(s)
+    await s.set_enabled(job_id, True)
+    s.gmail = FakeGmail(_msg("m2"), _msg("m1"))
+    await s._poll_email(time.time())
+    assert s.gmail.gets == ["m1", "m2"]
+    del s.gmail.messages["m2"]  # the owner archived the newest one: it leaves in:inbox
+    s.gmail.gets.clear()
+    s._last_email_poll = 0
+    await s._poll_email(time.time())
+    assert s.gmail.gets == []
+    s.gmail.messages = {"m3": _msg("m3"), **s.gmail.messages}
+    s._last_email_poll = 0
+    await s._poll_email(time.time())
+    assert s.gmail.gets == ["m3"]
+
+
+@pytest.mark.asyncio
+async def test_only_the_last_500_ids_are_kept_per_job(env):
+    s = env.sched
+    job_id = await _job(s)
+    await s.set_enabled(job_id, True)
+    await s.db.executemany("INSERT INTO email_seen VALUES (?, ?, 0)", [(job_id, f"old{i}") for i in range(500)])
+    await s.db.execute("INSERT INTO email_seen VALUES (99, 'other', 0)")
+    s.gmail = FakeGmail(_msg("new"))
+    await s._poll_email(time.time())
+    async with s.db.execute("SELECT COUNT(*), MIN(msg_id) FROM email_seen WHERE job_id = ?", (job_id,)) as cur:
+        count, _ = await cur.fetchone()
+    assert count == 500
+    sql = "SELECT msg_id FROM email_seen WHERE job_id = ? AND msg_id IN ('new', 'old0')"
+    async with s.db.execute(sql, (job_id,)) as cur:
+        assert [r[0] for r in await cur.fetchall()] == ["new"]
+    async with s.db.execute("SELECT COUNT(*) FROM email_seen WHERE job_id = 99") as cur:
+        assert (await cur.fetchone())[0] == 1

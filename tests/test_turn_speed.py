@@ -224,6 +224,8 @@ class TestCompaction:
     def test_window_default_local_vs_cloud(self):
         local = MagicMock()
         local.name = "ollama"
+        local.host = "http://localhost:11434"
+        local.num_ctx = 8192
         cloud = MagicMock()
         cloud.name = "claude"
         cloud.host = ""
