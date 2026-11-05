@@ -190,3 +190,48 @@ class TestDangerousPatterns:
         assert not self._is_dangerous("python3 script.py")
         assert not self._is_dangerous("git status")
         assert not self._is_dangerous("git diff")
+
+
+# --- Two policies, one list: a model server may live on the LAN or tailnet, the agent's tools may not ---
+
+LAN_URLS = [
+    ("http://192.168.1.50:11434", None),
+    ("http://10.0.0.7:8000/v1", None),
+    ("http://172.20.0.5:1234", None),
+    ("http://100.101.102.103:11434", None),
+    ("http://[fd7a:115c:a1e0::1]:11434", None),
+    ("http://gpu-box.local:11434", "192.168.1.60"),
+    ("http://gpu.tail1234.ts.net:11434", "100.101.102.103"),
+]
+
+
+def _lan_dns(monkeypatch, answer):
+    import socket
+
+    def fake(host, *a, **k):
+        if answer is None:
+            raise socket.gaierror(host)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (answer, 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake)
+
+
+@pytest.mark.parametrize("url,dns", LAN_URLS)
+async def test_lan_and_tailnet_urls_are_local_for_models_and_blocked_for_tools(url, dns, monkeypatch):
+    from micropaw.providers.registry import is_local_url
+    _lan_dns(monkeypatch, dns)
+    assert is_local_url(url) is True
+    assert await validate_url(url)  # a block message, never None
+
+
+@pytest.mark.parametrize("url,dns", LAN_URLS)
+async def test_a_configured_provider_url_stays_closed_to_http_request_and_web_browse(url, dns, monkeypatch):
+    from micropaw.config import Config
+    from micropaw.tools.base import ToolContext
+    from micropaw.tools.http_request import HttpRequestTool
+    from micropaw.tools.web_browse import WebBrowseTool
+    _lan_dns(monkeypatch, dns)
+    Config(providers={"desktop": {"base_url": url}})  # configuring it as a model server changes nothing below
+    ctx = ToolContext(conversation_id="c", user_id="u", platform="terminal")
+    assert (await HttpRequestTool().execute({"url": url}, ctx)).startswith("Error:")
+    assert (await WebBrowseTool().execute({"action": "browse", "url": url}, ctx)).startswith("Error:")

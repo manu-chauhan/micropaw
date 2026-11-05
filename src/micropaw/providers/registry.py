@@ -109,6 +109,12 @@ def _private_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return ip.is_loopback or any(ip in net for net in _PRIVATE_NETS)
 
 
+def _server_key(url: str) -> tuple[str, int]:
+    """(host, port) with the scheme's default port filled in, so two spellings of one server share a gate."""
+    parsed = urlparse(url if "://" in url else f"http://{url}")
+    return (parsed.hostname or "").lower(), parsed.port or (443 if parsed.scheme == "https" else 80)
+
+
 def is_local_url(url: str) -> bool:
     """Loopback or a private network address. Derived from the host, never declared.
 
@@ -233,7 +239,7 @@ class Registry:
         self.config = config
         self.problems: list[str] = []  # why a spec could not be built, for the caller to show
         self._cache: dict[str, AIProvider] = {}
-        self._sems: dict[str, asyncio.Semaphore] = {}
+        self._sems: dict[str | tuple[str, int], asyncio.Semaphore] = {}
         from micropaw.memory.ledger import LateLedger
         self.ledger = LateLedger()  # bound by the gateway once the database is open
         self.presets = {**PRESETS, **self._custom()}
@@ -275,7 +281,7 @@ class Registry:
         return ep is not None and ep.local
 
     def _sem(self, ep: Endpoint) -> asyncio.Semaphore:
-        key = urlparse(ep.base_url if "://" in ep.base_url else f"http://{ep.base_url}").netloc if ep.local else ep.name
+        key = _server_key(ep.base_url) if ep.local else ep.name
         if key not in self._sems:
             self._sems[key] = asyncio.Semaphore(LOCAL_CONCURRENCY if ep.local else CLOUD_CONCURRENCY)
         return self._sems[key]
