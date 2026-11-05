@@ -217,12 +217,13 @@ class Guard:
         return os.path.normcase(exe) in self.trusted
 
     def _spawn(self, event: str, args: tuple) -> str | None:
+        target = None  # the program that really runs, which argv[0] need not name
         if event == "subprocess.Popen":
-            argv = args[1]
+            target, argv = args[0], args[1]
         elif event in ("os.exec", "os.posix_spawn"):
-            argv = args[1]
+            target, argv = args[0], args[1]
         elif event == "os.spawn":
-            argv = args[2]
+            target, argv = args[1], args[2]
         elif event == "pty.spawn":
             argv = args[0]
         elif event == "_winapi.CreateProcess":
@@ -239,8 +240,15 @@ class Guard:
         if not argv:
             return self._refuse("an empty command", event)
         self.spawn_log.append(argv[:1])
-        exe = os.path.normcase(argv[0])
-        if self._trusted(argv[0]):
+        if target is not None and os.fsdecode(target) != argv[0]:
+            if self._spawn_ok(os.fsdecode(target), argv) is not None:
+                return self._refuse("a new program", os.fsdecode(target))
+        return self._spawn_ok(argv[0], argv)
+
+    def _spawn_ok(self, program: str, argv: list[str]) -> str | None:
+        """None when `program` may run with this argv: a trusted system tool, or a wrapper that cuts it off."""
+        exe = os.path.normcase(program)
+        if self._trusted(program):
             return None
         if exe in self.wrappers:
             head = argv[1:argv.index("--")] if "--" in argv else argv[1:]  # only the flags before the first --
@@ -249,7 +257,7 @@ class Guard:
                     return None
             elif os.path.basename(exe).startswith("sandbox-exec") and "-p" in head:
                 return None
-        return self._refuse("a new program", argv[0])
+        return self._refuse("a new program", program)
 
 
 _installed: Guard | None = None

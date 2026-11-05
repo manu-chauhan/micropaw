@@ -151,6 +151,22 @@ def test_spawn_wrapper_needs_the_flags_before_the_first_separator():
                                           None, None)) is not None
 
 
+def test_spawn_checks_the_program_that_runs_not_only_argv0():
+    g = guard()
+    g.wrappers.add("/usr/bin/bwrap")
+    g.trusted.add("/usr/bin/systemctl")
+    wrapped = ["/usr/bin/bwrap", "--unshare-all", "--", "x"]
+    assert g.decide("subprocess.Popen", ("/bin/sh", ["/usr/bin/systemctl", "-c", "curl x"], None, None)) is not None
+    assert g.decide("subprocess.Popen", ("/bin/sh", wrapped, None, None)) is not None
+    assert g.decide("os.exec", ("/bin/sh", ["/usr/bin/systemctl", "status"], None)) is not None
+    assert g.decide("os.posix_spawn", ("/bin/sh", ["/usr/bin/systemctl", "status"], None)) is not None
+    assert g.decide("os.spawn", (0, "/bin/sh", ["/usr/bin/systemctl", "status"], None)) is not None
+    # when both name an allowed program the call still passes
+    assert g.decide("subprocess.Popen", ("/usr/bin/bwrap", wrapped, None, None)) is None
+    assert g.decide("os.posix_spawn", ("/usr/bin/systemctl", ["/usr/bin/systemctl", "status"], None)) is None
+    assert g.decide("subprocess.Popen", (None, ["/usr/bin/systemctl", "status"], None, None)) is None
+
+
 def test_spawn_is_not_restricted_in_local_mode_but_workers_are():
     g = guard(mode="local")
     assert g.decide("subprocess.Popen", ("/bin/ls", ["ls"], None, None)) is None
