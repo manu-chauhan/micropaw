@@ -74,6 +74,9 @@ class CustomProviderConfig(BaseModel):
 
     base_url: str
     api_key_env: str = ""  # name of the environment variable that holds the key; "" = no key
+    kind: Literal["openai", "ollama"] = "openai"  # ollama: the native Ollama API, so num_ctx and keep_alive work
+    num_ctx: int = 0       # kind ollama: context size; 0 = 8192 for a server on another machine
+    keep_alive: str = ""   # kind ollama: how long the model stays loaded; "" = the ollama.keep_alive setting
 
 
 class AgentPersona(BaseModel):
@@ -122,6 +125,9 @@ class MCPServerConfig(BaseModel):
     timeout: float = 300.0    # seconds per call; decompiling can be slow
     enabled: bool = True
     tools_hash: str = ""      # sha256 of the tool list the owner approved; a change blocks the server
+    network: bool = False     # local mode only: the child may use the network (ignored in airgapped)
+    paths: list[str] = []     # folders the child may read when it is isolated (privacy local or airgapped)
+    write_paths: list[str] = []  # folders it may also write
 
     @model_validator(mode="after")
     def _needs_command_or_url(self) -> MCPServerConfig:
@@ -250,6 +256,11 @@ class PrivacyConfig(BaseModel):
     allow_lan: bool = True          # private ranges and Tailscale count as "this side" in airgapped and local
     lan_hosts: list[str] = []       # extra host names or CIDRs that count as local (names are never resolved to decide)
     allow_cloud_fallback: bool = False  # a local main model may fail over to a cloud model
+    allow_cloud_helpers: bool = False   # a local main model may use a cloud fast or vision model (normal mode)
+    # Local-mode exceptions: telegram, discord, slack, whatsapp, google, web_fetch, web_browse, shell_network
+    allow: list[str] = []
+    # Airgapped: MCP servers over HTTP that you vouch for. MicroPaw cannot see where they send data.
+    trusted_local_services: list[str] = []
 
 
 class VoiceConfig(BaseModel):

@@ -9,8 +9,7 @@ import re
 from collections.abc import AsyncGenerator
 from urllib.parse import urlparse
 
-import httpx
-
+from micropaw import net
 from micropaw.providers.base import (
     AIProvider,
     AIResponse,
@@ -52,7 +51,7 @@ class OpenAIProvider(AIProvider):
         versioned = re.search(r"/v\d+$", urlparse(base).path)
         self._api_url = f"{base}{'' if versioned else '/v1'}/chat/completions"
         self._is_openai = urlparse(base_url).hostname == "api.openai.com"
-        self._client = httpx.AsyncClient(timeout=http_timeout(read_timeout))
+        self._client = net.client(base_url, timeout=http_timeout(read_timeout), limits=net.LIMITS)
 
     def _headers(self) -> dict[str, str]:
         return {

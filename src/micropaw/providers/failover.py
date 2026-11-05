@@ -49,6 +49,9 @@ def unwrap(e: Exception) -> Exception:
 
 def classify(e: Exception) -> str | None:
     """Short reason when another provider could help ("timed out"), None when the request itself is bad."""
+    from micropaw import privacy
+    if privacy.blocked(e):
+        return None  # the privacy mode refused it: the next provider would be refused or is a cloud one
     e = unwrap(e)
     if isinstance(e, BudgetExceeded):
         return "has reached its daily budget"
@@ -125,10 +128,11 @@ class FallbackProvider(AIProvider):
 
     name = "failover"
 
-    def __init__(self, providers: list[AIProvider]) -> None:
+    def __init__(self, providers: list[AIProvider], withheld: list[str] | None = None) -> None:
         if not providers:
             raise ValueError("FailoverProvider requires at least one provider")
         self.providers = providers
+        self.withheld = withheld or []  # cloud providers left out because privacy.allow_cloud_fallback is off
         self.name = f"failover({','.join(p.name for p in providers)})"
         self.model = providers[0].model if hasattr(providers[0], "model") else ""
 
@@ -167,7 +171,14 @@ class FallbackProvider(AIProvider):
             return response
         if isinstance(last, BudgetExceeded):
             raise last  # the chat gets the plain budget message
-        raise AllProvidersFailedError(f"All providers failed: {last}") from last
+        raise self._failed(last) from last
+
+    def _failed(self, last: Exception | None) -> AllProvidersFailedError:
+        if self.withheld:
+            return AllProvidersFailedError(
+                f"Local model is down. Not sending this chat to {', '.join(self.withheld)} "
+                "(privacy.allow_cloud_fallback is off).")
+        return AllProvidersFailedError(f"All providers failed: {last}")
 
     async def chat_stream(
         self, messages: list[Message], tools: list[ToolDef] | None = None,
@@ -214,7 +225,7 @@ class FallbackProvider(AIProvider):
                 await stream.aclose()
         if isinstance(last, BudgetExceeded):
             raise last  # the chat gets the plain budget message
-        raise AllProvidersFailedError(f"All providers failed: {last}") from last
+        raise self._failed(last) from last
 
     async def close(self) -> None:
         for provider in self.providers:
