@@ -15,13 +15,13 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-import httpx
-
 from micropaw.channels.base import Channel
 from micropaw.config import CONFIG_DIR, CONFIG_FILE, DB_FILE, Config, load_config
 from micropaw.core.agent import Agent
+from micropaw.core.profile import AgentProfile, AgentRuntime, build_view, providers_in, unknown_tool_names
 from micropaw.memory.store import MemoryStore
 from micropaw.providers.base import AIProvider
+from micropaw.providers.registry import Registry
 from micropaw.tools.base import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -194,6 +194,7 @@ class _Approvals:
 
 _CRON_CMD = re.compile(r"^/cron\s+(enable|disable)\s+#?(\d+)$", re.IGNORECASE)
 _FORGET_CMD = re.compile(r"^/forget\s+(.+)$", re.IGNORECASE)
+_AGENT_CMD = re.compile(r"^/agent(?:\s+(\S+))?$", re.IGNORECASE)
 
 
 class Gateway:
@@ -207,6 +208,9 @@ class Gateway:
         channels: list[Channel],
         fast_provider: AIProvider | None = None,
         vision_provider: AIProvider | None = None,
+        *,
+        runtimes: dict[str, AgentRuntime] | None = None,
+        models: Registry | None = None,
     ) -> None:
         self.config = config
         self.provider = provider
@@ -215,7 +219,11 @@ class Gateway:
         self.registry = registry
         self.channels = channels
         self.store: MemoryStore | None = None
-        self.agent: Agent | None = None
+        self.agent: Agent | None = None  # the main agent
+        self.agents: dict[str, Agent] = {}
+        self._runtimes = runtimes or {}
+        self.models = models
+        self._chat_agent: dict[str, str] = {}  # chat -> agent chosen with /agent, kept in data.db
         self._rate_limiter = _RateLimiter(config.rate_limit.messages_per_minute, config.rate_limit.burst_limit)
         self._access = _AccessGuard(config)
         self._approvals = _Approvals(CONFIG_DIR / "approved_actions.json")
@@ -228,11 +236,6 @@ class Gateway:
         # Pre-load embedding model (downloads from HF on first run)
         if hasattr(embedding_provider, "warmup"):
             await embedding_provider.warmup()
-
-        # Verify Ollama model is available and check tool support
-        if self.provider.name == "ollama":
-            await self._check_ollama_model()
-            await self.provider.check_tool_support()
 
         # Init database
         self.store = MemoryStore(str(DB_FILE), embedding_provider=embedding_provider)
@@ -279,11 +282,18 @@ class Gateway:
             if tool.name not in disabled:
                 self.registry.register(tool)
 
-        # Init agent
-        self.agent = Agent(self.config, self.provider, self.registry, self.store)
-        self.agent.approver = self._approve
-        self.agent.fast_provider = self.fast_provider
-        self.agent.vision_provider = self.vision_provider
+        # Init agents: "main" from the top-level fields unless the config names more
+        runtimes = self._runtimes or {"main": self._main_runtime()}
+        for name, rt in runtimes.items():
+            self._warn_unknown_tools(rt.profile)
+            agent = Agent(rt.config, rt.provider, build_view(self.registry, rt), self.store, rt.profile)
+            agent.approver = self._approve
+            agent.fast_provider = rt.fast
+            agent.vision_provider = rt.vision
+            self.agents[name] = agent
+        self.agent = self.agents["main"]
+        await self._load_chat_agents()
+        self._probe_task = asyncio.create_task(self._probe_models(runtimes))
 
         # Wire handler callbacks to all channels
         terminal_coro = None
@@ -415,9 +425,60 @@ class Gateway:
             return None
         return self._approvals.answer(f"{platform}:{channel_id or user_id}", text)
 
-    async def _owner_command(self, text: str) -> str | None:
+    # -- agents: routing and the commands that change it ---------------------------------
+
+    async def _load_chat_agents(self) -> None:
+        try:
+            await self.store.db.execute("CREATE TABLE IF NOT EXISTS chat_agent (chat TEXT PRIMARY KEY, agent TEXT)")
+            await self.store.db.commit()
+            async with self.store.db.execute("SELECT chat, agent FROM chat_agent") as cur:
+                self._chat_agent = {chat: agent for chat, agent in await cur.fetchall() if agent in self.agents}
+        except Exception as e:
+            logger.warning("Could not read per-chat agent choices: %s", e)
+
+    def _route(self, platform: str, user_id: str, channel_id: str | None) -> Agent | None:
+        """Per-chat /agent choice, then an exact route, then a platform route, then main."""
+        if len(self.agents) <= 1 or platform in self._INTERNAL_PLATFORMS or platform == "cron":
+            return self.agent
+        chat = f"{platform}:{channel_id or user_id}"
+        routes = self.config.routes
+        name = self._chat_agent.get(chat) or routes.get(chat) or routes.get(f"{platform}:*") or "main"
+        return self.agents.get(name) or self.agent
+
+    def _describe(self, agent: Agent) -> str:
+        p = agent.profile
+        kind = "local only" if p and p.private else "cloud or mixed"
+        extras = [f"fast {p.fast}"] if p and p.fast else []
+        extras += [f"falls back to {', '.join(p.fallbacks)}"] if p and p.fallbacks else []
+        return f"{agent.name}: {p.main if p else agent.provider.name} ({kind}{''.join(', ' + e for e in extras)})"
+
+    async def _agent_command(self, name: str | None, platform: str, user_id: str, channel_id: str | None) -> str:
+        current = self._route(platform, user_id, channel_id)
+        if name is None:
+            return f"This chat talks to: {self._describe(current)}\nSwitch with /agent <name>; list with /agents."
+        name = name.lower()
+        if name not in self.agents:
+            return f"No agent called '{name}'. Available: {', '.join(self.agents)}."
+        chat = f"{platform}:{channel_id or user_id}"
+        self._chat_agent[chat] = name
+        await self.store.db.execute("INSERT OR REPLACE INTO chat_agent (chat, agent) VALUES (?, ?)", (chat, name))
+        await self.store.db.commit()
+        return f"This chat now talks to {self._describe(self.agents[name])}."
+
+    async def _owner_command(
+        self, text: str, platform: str = "", user_id: str = "", channel_id: str | None = None,
+    ) -> str | None:
         """Commands the owner types that must not go through the model."""
         text = text.strip()
+        if text.lower() == "/whoami":
+            where = f"{platform}:{channel_id or user_id}"
+            return (f"Platform: {platform}\nYour user ID: {user_id}\nThis chat: {where}\n"
+                    f"Agent here: {self._route(platform, user_id, channel_id).name}\n"
+                    "Use the chat ID in routes, for example paw agent add coder --model ... --route " + where)
+        if text.lower() == "/agents":
+            return "Agents:\n" + "\n".join(self._describe(a) for a in self.agents.values())
+        if m := _AGENT_CMD.match(text):
+            return await self._agent_command(m.group(1), platform, user_id, channel_id)
         if text.lower() == "/memory" and self.store:
             memories = await self.store.get_all_memories()
             if not memories:
@@ -445,12 +506,13 @@ class Gateway:
         err = self._validate(text, user_id, platform, bool(media))
         if err is not None:
             return err
-        if (reply := await self._owner_command(text)) is not None:
+        if (reply := await self._owner_command(text, platform, user_id, channel_id)) is not None:
             return reply
         self._record_channel_activity(platform, user_id, channel_id)
         logger.debug("[%s] %s: %s", platform, user_id, text[:80])
-        response = await self.agent.handle_message(text, user_id, platform, channel_id, media=media)
-        self._track_usage()
+        agent = self._route(platform, user_id, channel_id)
+        response = await agent.handle_message(text, user_id, platform, channel_id, media=media)
+        self._track_usage(agent)
         logger.debug("[%s] MicroPaw: %s", platform, response[:80])
         return response
 
@@ -464,14 +526,15 @@ class Gateway:
         err = self._validate(text, user_id, platform, bool(media))
         if err is not None:
             return err
-        if (reply := await self._owner_command(text)) is not None:
+        if (reply := await self._owner_command(text, platform, user_id, channel_id)) is not None:
             return reply
         self._record_channel_activity(platform, user_id, channel_id)
         logger.debug("[%s] %s: %s", platform, user_id, text[:80])
-        response = await self.agent.handle_message_stream(
+        agent = self._route(platform, user_id, channel_id)
+        response = await agent.handle_message_stream(
             text, user_id, platform, channel_id, on_chunk=on_chunk, media=media,
         )
-        self._track_usage()
+        self._track_usage(agent)
         logger.debug("[%s] MicroPaw: %s", platform, response[:80])
         return response
 
@@ -488,33 +551,37 @@ class Gateway:
         from micropaw.tools.channel_send import update_channel_chat_id
         update_channel_chat_id(platform, effective_chat_id)
 
-    def _track_usage(self) -> None:
+    def _track_usage(self, agent: Agent | None = None) -> None:
         """Pass accumulated usage from agent to terminal channel."""
-        if self.agent:
+        agent = agent or self.agent
+        if agent:
             terminal = self._get_terminal_channel()
             if terminal and hasattr(terminal, "track_usage"):
-                terminal.track_usage(self.agent.last_usage)
+                terminal.track_usage(agent.last_usage)
+
+    def _all_agents(self) -> list[Agent]:
+        return list(self.agents.values()) or ([self.agent] if self.agent else [])
 
     async def _on_new(self) -> None:
         """Branch terminal into a fresh conversation (/new)."""
-        if self.agent:
-            import uuid
-            new_id = f"dm:terminal:{uuid.uuid4().hex[:8]}"
-            self.agent.conversations.new_channel_session("terminal", new_id)
+        import uuid
+        new_id = f"dm:terminal:{uuid.uuid4().hex[:8]}"
+        for agent in self._all_agents():
+            agent.conversations.new_channel_session("terminal", new_id)
 
     async def _on_rejoin(self) -> None:
         """Return terminal to the shared conversation (/rejoin)."""
-        if self.agent:
-            self.agent.conversations.rejoin_channel("terminal")
+        for agent in self._all_agents():
+            agent.conversations.rejoin_channel("terminal")
 
     async def _on_newall(self) -> None:
         """Start a fresh conversation for all channels (/newall)."""
-        if self.agent:
-            import uuid
-            new_id = f"dm:owner:{uuid.uuid4().hex[:8]}"
-            self.agent.conversations.new_all_sessions(new_id)
-            self.agent.session_usage = {"input": 0, "output": 0}
-            self.agent.message_count = 0
+        import uuid
+        new_id = f"dm:owner:{uuid.uuid4().hex[:8]}"
+        for agent in self._all_agents():
+            agent.conversations.new_all_sessions(new_id)
+            agent.session_usage = {"input": 0, "output": 0}
+            agent.message_count = 0
 
     async def _bus_consumer(self) -> None:
         """Consume outbound bus messages and route to channels."""
@@ -553,8 +620,15 @@ class Gateway:
         if cfg.enabled == "false":
             return NullEmbedding()
 
+        # Every message is embedded, so a private (all-local) agent rules out a cloud embedding service
+        cloud_ok = not any(name != "main" and rt.profile.private for name, rt in self._runtimes.items())
+        if not cloud_ok:
+            logger.warning("An agent is private (local models only), so cloud embeddings are off.")
+
         # Explicit provider (user set provider != auto, or enabled == "true")
         if cfg.provider != "auto":
+            if cfg.provider == "openai" and not cloud_ok:
+                return NullEmbedding()
             return self._create_explicit_provider(cfg)
 
         # Auto-detect: probe available providers
@@ -574,7 +648,7 @@ class Gateway:
 
         # 2. OpenAI — zero extra deps, uses existing key
         openai_key = self.config.provider_config.openai.api_key
-        if openai_key:
+        if openai_key and cloud_ok:
             logger.info("Embeddings: auto-detected OpenAI (text-embedding-3-small)")
             return OpenAIEmbedding(openai_key, "text-embedding-3-small")
 
@@ -620,22 +694,39 @@ class Gateway:
             return OllamaEmbedding(host, cfg.model or _DEFAULT_OLLAMA_MODEL)
         return NullEmbedding()
 
-    async def _check_ollama_model(self) -> None:
-        """Warn at startup if the configured Ollama chat model isn't pulled."""
-        host = self.config.provider_config.ollama.host.rstrip("/")
-        model = self.config.provider_config.ollama.model
-        try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
-                resp = await client.get(f"{host}/api/tags")
-                resp.raise_for_status()
-                models = [m.get("name", "") for m in resp.json().get("models", [])]
-                if not any(m.startswith(model) for m in models):
-                    logger.warning(
-                        "Ollama model '%s' not found. Run: ollama pull %s  "
-                        "(available: %s)", model, model, ", ".join(models) or "none",
-                    )
-        except Exception:
-            logger.warning("Cannot reach Ollama at %s — is it running?", host)
+    def _main_runtime(self) -> AgentRuntime:
+        profile = AgentProfile(name="main", main=self.config.provider)
+        return AgentRuntime(profile, self.config, self.provider, self.fast_provider, self.vision_provider)
+
+    def _warn_unknown_tools(self, profile: AgentProfile) -> None:
+        for rule in unknown_tool_names([*profile.allow, *profile.deny], self.registry.names):
+            logger.warning(
+                "Agent '%s': tool '%s' is not a known tool name. Use * for patterns such as mcp_<server>_*.",
+                profile.name, rule)
+
+    async def _probe_models(self, runtimes: dict[str, AgentRuntime]) -> None:
+        """Read /api/show for every Ollama model in use, in the background: it never loads a model."""
+        seen: dict[tuple[str, str], Any] = {}
+        for rt in runtimes.values():
+            for provider in (rt.provider, rt.fast, rt.vision):
+                for p in providers_in(provider):
+                    if hasattr(p, "load_capabilities"):
+                        seen.setdefault((p.host, p.model), p)
+        for (host, model), p in seen.items():
+            try:
+                info = await p.load_capabilities()
+            except Exception as e:
+                logger.warning("Could not check Ollama model %s: %s", model, e)
+                continue
+            if info is None:
+                logger.warning("Ollama model '%s' is not available at %s. Is Ollama running? Run: ollama pull %s",
+                               model, host, model)
+            elif not info.tools:
+                logger.warning(
+                    "Ollama model '%s' cannot use tools, so it can chat but not search, read files or run "
+                    "anything. Pick a model with tools (paw models scan).", model)
+            else:
+                logger.info("Ollama model %s: tools ok%s", model, ", vision ok" if info.vision else "")
 
     @staticmethod
     async def _cancel_task(task: asyncio.Task | None) -> None:
@@ -677,7 +768,12 @@ class Gateway:
         except Exception:
             pass
 
-        # Close AI provider HTTP clients
+        probe = getattr(self, "_probe_task", None)
+        await self._cancel_task(probe)
+
+        # Close AI provider HTTP clients (the registry owns the shared ones)
+        if self.models:
+            await self.models.close()
         for provider in filter(None, (self.provider, self.fast_provider, self.vision_provider)):
             try:
                 await asyncio.wait_for(provider.close(), timeout=5.0)
