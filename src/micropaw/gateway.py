@@ -24,6 +24,7 @@ from micropaw.memory.ledger import Ledger
 from micropaw.memory.store import MemoryStore
 from micropaw.providers.base import AIProvider
 from micropaw.providers.registry import Registry
+from micropaw.scheduler import AgentGoneError
 from micropaw.tools.base import ToolRegistry
 from micropaw.utils.redact import config_secrets, redact, set_known_secrets
 
@@ -558,8 +559,9 @@ class Gateway:
 
     async def _handle_message(
         self, text: str, user_id: str, platform: str, channel_id: str | None, media: list | None = None,
+        agent: str = "",
     ) -> str:
-        return await self._handle(text, user_id, platform, channel_id, media, streaming=False)
+        return await self._handle(text, user_id, platform, channel_id, media, streaming=False, agent_name=agent)
 
     async def _handle_message_stream(
         self, text: str, user_id: str, platform: str, channel_id: str | None,
@@ -570,7 +572,7 @@ class Gateway:
 
     async def _handle(
         self, text: str, user_id: str, platform: str, channel_id: str | None, media: list | None,
-        *, streaming: bool, on_chunk=None,
+        *, streaming: bool, on_chunk=None, agent_name: str = "",
     ) -> str:
         if (answer := self._approval_answer(text, user_id, platform, channel_id)) is not None:
             return answer
@@ -583,7 +585,13 @@ class Gateway:
             return f"Waiting for your answer to [{waiting}]: reply yes {waiting} or no {waiting}."
         self._record_channel_activity(platform, user_id, channel_id)
         logger.debug("[%s] %s: %s", platform, user_id, text[:80])
-        agent = self._route(platform, user_id, channel_id)
+        if agent_name:  # a scheduled job runs on the agent that made it, never on another one
+            agent = self.agents.get(agent_name)
+            if agent is None:
+                raise AgentGoneError(f"agent '{agent_name}' is not configured any more, so the job did not run. "
+                                "Remove the job, or add the agent back.")
+        else:
+            agent = self._route(platform, user_id, channel_id)
         async with self._chat_lock(platform, user_id, channel_id):
             if streaming:
                 response = await agent.handle_message_stream(

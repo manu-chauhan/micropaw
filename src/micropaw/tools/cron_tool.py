@@ -78,6 +78,7 @@ class CronTool(Tool):
             # Paused until the owner switches it on: a web page or email must not be able to plant a standing task
             job_id = await _scheduler.add_job(
                 description, 0, context.user_id, context.platform, context.chat_id, enabled=False, match=rule,
+                agent=context.agent,
             )
         except ValueError as e:
             return f"Error: {e}"
@@ -112,7 +113,7 @@ class CronTool(Tool):
                 # owner must switch them on; otherwise a web page could plant a standing task.
                 job_id = await _scheduler.add_job(
                     description, interval, context.user_id, context.platform,
-                    context.chat_id, one_shot=one_shot, enabled=one_shot,
+                    context.chat_id, one_shot=one_shot, enabled=one_shot, agent=context.agent,
                 )
             except ValueError as e:
                 return f"Error: {e}"

@@ -40,6 +40,7 @@ _NEW_COLUMNS = {
     "trigger": "TEXT DEFAULT 'time'",   # 'time' or 'email'
     "match": "TEXT DEFAULT ''",         # JSON rule for email jobs
     "since": "REAL DEFAULT 0",          # only mail after this moment counts (set when the job is switched on)
+    "agent": "TEXT DEFAULT ''",         # the agent that runs the job; '' (older jobs) = main
 }
 
 _ADDRESS = re.compile(r"[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
@@ -80,6 +81,15 @@ def _authenticated(headers: list[dict]) -> bool:
                     return bool(from_domain) and f"header.from={from_domain}" in words
             return False
     return False
+
+
+class AgentGoneError(LookupError):
+    """The agent a job belongs to is not configured any more. The job is skipped, never run elsewhere."""
+
+
+def _on(agent: str) -> dict:
+    """Handler keyword for a job pinned to an agent. Older jobs and plain handlers get nothing."""
+    return {"agent": agent} if agent else {}
 
 
 class _Gmail:
@@ -173,13 +183,13 @@ class Scheduler:
 
         # Process due cron jobs
         async with self.db.execute(
-            "SELECT id, description, interval_seconds, one_shot, user_id, platform, chat_id "
+            "SELECT id, description, interval_seconds, one_shot, user_id, platform, chat_id, agent "
             "FROM cron_jobs WHERE enabled = 1 AND trigger = 'time' AND next_run_at <= ?",
             (now,),
         ) as cur:
             jobs = await cur.fetchall()
 
-        for job_id, description, interval, one_shot, user_id, platform, chat_id in jobs:
+        for job_id, description, interval, one_shot, user_id, platform, chat_id, agent in jobs:
             try:
                 if one_shot:
                     # One-shot jobs are reminders — deliver directly to ALL active channels
@@ -190,9 +200,12 @@ class Scheduler:
                     # so posting its result to a group can't leak private chat.
                     response = await self._handler(
                         f"You have a scheduled task to perform. Do it now and report the result: {description}",
-                        "cron", "system", f"cron-{job_id}",
+                        "cron", "system", f"cron-{job_id}", **_on(agent),
                     )
                     await self._deliver(platform, chat_id, f"[Cron #{job_id}] {response}")
+            except AgentGoneError as e:
+                logger.warning("Cron job #%d skipped: %s", job_id, e)
+                await self._deliver(platform, chat_id, f"[Cron #{job_id}] Skipped: {e}")
             except Exception as e:
                 logger.error("Cron job #%d failed: %s", job_id, e)
 
@@ -217,7 +230,7 @@ class Scheduler:
     async def _poll_email(self, now: float) -> None:
         """Check Gmail for the enabled email jobs. Does nothing, not even a network call, when there are none."""
         async with self.db.execute(
-            "SELECT id, description, platform, chat_id, match, since "
+            "SELECT id, description, platform, chat_id, match, since, agent "
             "FROM cron_jobs WHERE enabled = 1 AND trigger = 'email'",
         ) as cur:
             jobs = await cur.fetchall()
@@ -235,6 +248,7 @@ class Scheduler:
 
     async def _check_mail(
         self, job_id: int, description: str, platform: str, chat_id: str, match: str, since: float,
+        agent: str,
     ) -> None:
         rule = json.loads(match)
         where = f'label:"{rule["label"]}"' if rule["label"] else "in:inbox"
@@ -257,7 +271,7 @@ class Scheduler:
             if reason:
                 logger.info("Email job #%d skipped message %s: %s", job_id, message_id, reason)
             else:
-                await self._run_for_email(job_id, description, platform, chat_id, message, header)
+                await self._run_for_email(job_id, description, platform, chat_id, message, header, agent)
             await self.db.execute(
                 "INSERT OR IGNORE INTO email_seen (job_id, msg_id, ts) VALUES (?, ?, ?)",
                 (job_id, message_id, time.time()))
@@ -287,7 +301,7 @@ class Scheduler:
         return hour < _RUNS_PER_HOUR and day < _RUNS_PER_DAY
 
     async def _run_for_email(
-        self, job_id: int, description: str, platform: str, chat_id: str, message: dict, header: dict,
+        self, job_id: int, description: str, platform: str, chat_id: str, message: dict, header: dict, agent: str,
     ) -> None:
         from micropaw.tools.email_tool import _extract_body
 
@@ -306,7 +320,12 @@ class Scheduler:
         conv_id = f"system:email-{job_id}"
         await self._store.get_or_create_conversation(conv_id, "system", "system")
         await self._store.set_marked(conv_id)
-        response = await self._handler(prompt, "system", "system", f"email-{job_id}")
+        try:
+            response = await self._handler(prompt, "system", "system", f"email-{job_id}", **_on(agent))
+        except AgentGoneError as e:
+            logger.warning("Email job #%d skipped: %s", job_id, e)
+            await self._deliver(platform, chat_id, f"[Email job #{job_id}] Skipped: {e}")
+            return
         await self._deliver(platform, chat_id, f"[Email job #{job_id}] {response}")
 
     async def notify(self, channel: str, chat_id: str, content: str) -> None:
@@ -402,7 +421,7 @@ class Scheduler:
     async def add_job(
         self, description: str, interval_seconds: int,
         user_id: str = "terminal-user", platform: str = "terminal", chat_id: str = "",
-        one_shot: bool = False, enabled: bool = True, match: dict | None = None,
+        one_shot: bool = False, enabled: bool = True, match: dict | None = None, agent: str = "",
     ) -> int:
         """Add a job. With `match` (see email_rule) it fires on matching email instead of on a timer."""
         now = time.time()
@@ -412,25 +431,27 @@ class Scheduler:
 
         cur = await self.db.execute(
             "INSERT INTO cron_jobs (description, interval_seconds, next_run_at, one_shot, "
-            "user_id, platform, chat_id, enabled, created_at, trigger, match, since) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "user_id, platform, chat_id, enabled, created_at, trigger, match, since, agent) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (description, interval_seconds, now + interval_seconds, int(one_shot),
              user_id, platform, chat_id, int(enabled), now,
-             "email" if match else "time", json.dumps(match) if match else "", now),
+             "email" if match else "time", json.dumps(match) if match else "", now, agent),
         )
         await self.db.commit()
         return cur.lastrowid  # type: ignore[return-value]
 
     async def list_jobs(self) -> list[dict]:
         async with self.db.execute(
-            "SELECT id, description, interval_seconds, next_run_at, one_shot, enabled, created_at, trigger, match "
+            "SELECT id, description, interval_seconds, next_run_at, one_shot, enabled, created_at, trigger, match, "
+            "agent "
             "FROM cron_jobs ORDER BY id",
         ) as cur:
             rows = await cur.fetchall()
         return [
             {"id": r[0], "description": r[1], "interval_seconds": r[2],
              "next_run_at": r[3], "one_shot": bool(r[4]), "enabled": bool(r[5]),
-             "created_at": r[6], "trigger": r[7], "match": json.loads(r[8]) if r[8] else None}
+             "created_at": r[6], "trigger": r[7], "match": json.loads(r[8]) if r[8] else None,
+             "agent": r[9] or "main"}
             for r in rows
         ]
 

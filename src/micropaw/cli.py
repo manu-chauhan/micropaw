@@ -911,56 +911,50 @@ def cron():
 @click.option("--from", "from_address", default="", help="Exact sender address (with --on-email).")
 @click.option("--subject-contains", default="", help="Words the subject must contain (with --on-email).")
 @click.option("--label", default="", help="Gmail label to search in (with --on-email).")
-def add(description, interval, once_delay, on_email, from_address, subject_contains, label):
+@click.option("--agent", "agent_name", default="main", help="The agent that runs the task (default: main).")
+def add(description, interval, once_delay, on_email, from_address, subject_contains, label, agent_name):
     """Add a scheduled task."""
+    agent_name = agent_name.lower()
+    if agent_name != "main" and agent_name not in load_config().agents:
+        console.print(f"[red]No agent called '{agent_name}'. See: paw agent list[/red]")
+        return
     if on_email:
-        return _add_email_job(description, interval, once_delay, from_address, subject_contains, label)
-    if not interval and not once_delay:
-        console.print("[red]Provide --every (recurring) or --once (one-shot).[/red]")
-        return
-    if interval and once_delay:
-        console.print("[red]Use either --every or --once, not both.[/red]")
-        return
+        from micropaw.scheduler import email_rule
 
-    one_shot = once_delay is not None
-    seconds = _parse_interval(once_delay if one_shot else interval)  # type: ignore[arg-type]
+        if interval or once_delay:
+            console.print("[red]--on-email does not take --every or --once.[/red]")
+            return
+        try:
+            rule = email_rule(from_address, subject_contains, label)
+        except ValueError as e:
+            console.print(f"[red]{e}[/red]")
+            return
+        seconds, one_shot = 0, False
+    else:
+        if not interval and not once_delay:
+            console.print("[red]Provide --every (recurring) or --once (one-shot).[/red]")
+            return
+        if interval and once_delay:
+            console.print("[red]Use either --every or --once, not both.[/red]")
+            return
+        rule = None
+        one_shot = once_delay is not None
+        seconds = _parse_interval(once_delay if one_shot else interval)  # type: ignore[arg-type]
 
     async def _add():
         from micropaw.scheduler import Scheduler
         sched = Scheduler(str(DB_FILE), handler=None, bus=None, channels=[])
         await sched.init()
         try:
-            job_id = await sched.add_job(description, seconds, one_shot=one_shot)
-            kind = "one-shot" if one_shot else "recurring"
-            console.print(f"[green]Created {kind} job #{job_id}: \"{description}\"[/green]")
-        except ValueError as e:
-            console.print(f"[red]{e}[/red]")
-        finally:
-            await sched.close()
-
-    asyncio.run(_add())
-
-
-def _add_email_job(description, interval, once_delay, from_address, subject_contains, label):
-    from micropaw.scheduler import Scheduler, email_rule
-
-    if interval or once_delay:
-        console.print("[red]--on-email does not take --every or --once.[/red]")
-        return
-    try:
-        rule = email_rule(from_address, subject_contains, label)
-    except ValueError as e:
-        console.print(f"[red]{e}[/red]")
-        return
-
-    async def _add():
-        sched = Scheduler(str(DB_FILE), handler=None, bus=None, channels=[])
-        await sched.init()
-        try:
-            job_id = await sched.add_job(description, 0, match=rule)
-            console.print(f"[green]Created email job #{job_id}: \"{description}\" for mail from {rule['from']}[/green]")
-            console.print("It runs unattended: it reads the email, summarizes it and reports to you. "
-                          "Anything that would change something is refused.")
+            job_id = await sched.add_job(description, seconds, one_shot=one_shot, match=rule, agent=agent_name)
+            if rule:
+                console.print(f"[green]Created email job #{job_id}: \"{description}\" for mail from "
+                              f"{rule['from']}[/green]")
+                console.print("It runs unattended: it reads the email, summarizes it and reports to you. "
+                              "Anything that would change something is refused.")
+            else:
+                kind = "one-shot" if one_shot else "recurring"
+                console.print(f"[green]Created {kind} job #{job_id}: \"{description}\"[/green]")
         except ValueError as e:
             console.print(f"[red]{e}[/red]")
         finally:
@@ -989,6 +983,7 @@ def list_jobs():
             table.add_column("Schedule")
             table.add_column("Next Run")
             table.add_column("State")
+            table.add_column("Agent")
             for j in jobs:
                 email = j["trigger"] == "email"
                 kind = ("on email from " + j["match"]["from"] if email
@@ -996,7 +991,7 @@ def list_jobs():
                 next_dt = ("-" if email
                            else datetime.fromtimestamp(j["next_run_at"], tz=UTC).strftime("%Y-%m-%d %H:%M UTC"))
                 state = "on" if j["enabled"] else f"paused (paw cron enable {j['id']})"
-                table.add_row(str(j["id"]), j["description"], kind, next_dt, state)
+                table.add_row(str(j["id"]), j["description"], kind, next_dt, state, j["agent"])
             console.print(table)
         finally:
             await sched.close()

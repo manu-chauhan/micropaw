@@ -115,6 +115,7 @@ class Agent:
             confirm_dangerous=self.config.permissions.confirm_dangerous,
             workspace=str(Path(self.config.permissions.workspace).expanduser()),
             memory_user=self._memory_user,
+            agent=self.name,
         )
         if self.approver and platform not in _INTERNAL_PLATFORMS:
             approver = self.approver
