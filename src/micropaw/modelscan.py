@@ -31,7 +31,7 @@ KNOWN_PORTS: tuple[tuple[int, str, str], ...] = (
 )
 PORT_LIST = ", ".join(str(p) for p, _, _ in KNOWN_PORTS)
 _LAN_RANGES = [ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10")]
-MAX_RANGE = 1024
+MAX_RANGE = 512  # 512 hosts x 7 ports at 128 at once and 0.5 s each is about 14 s, inside SCAN_DEADLINE
 SCAN_CONNECT_TIMEOUT = 0.5
 SCAN_CONCURRENCY = 128
 SCAN_DEADLINE = 25.0
@@ -411,6 +411,13 @@ def lan_range(cidr: str | None = None) -> tuple[ipaddress.IPv4Network, list[str]
     return net, [str(h) for h in net.hosts()]
 
 
+class LanHits(list):
+    """The hits, plus how many connection attempts the deadline cut off (0 when the scan finished)."""
+
+    unfinished = 0
+    attempts = 0
+
+
 @dataclass
 class LanHit:
     host: str
@@ -425,7 +432,7 @@ class LanHit:
 
 
 async def scan_lan(hosts: list[str], *, timeout: float = SCAN_CONNECT_TIMEOUT, limit: int = SCAN_CONCURRENCY,
-                   deadline: float = SCAN_DEADLINE) -> list[LanHit]:
+                   deadline: float = SCAN_DEADLINE) -> LanHits:
     """Stage 1: a TCP connect to each known port. Stage 2: a model-list GET, only to the ports that opened,
     with no key. At most `limit` connects at once and `deadline` seconds in all."""
     gate = asyncio.Semaphore(limit)
@@ -457,7 +464,9 @@ async def scan_lan(hosts: list[str], *, timeout: float = SCAN_CONNECT_TIMEOUT, l
         return LanHit(host, port, label, kind, found) if found and found.problem != "other" else None
 
     hits = await asyncio.gather(*(ask(*o) for o in sorted(open_ports)))
-    return [h for h in hits if h]
+    out = LanHits(h for h in hits if h)
+    out.unfinished, out.attempts = len(pending), len(tasks)
+    return out
 
 
 # ---------------------------------------------------------------------------

@@ -1213,7 +1213,7 @@ def scan(hosts, lan, net_range, yes):
         click.echo(f"{target.label or target.name} at {target.url}: not answering (asleep, off, or a firewall)")
     for target in skipped:
         click.echo(f"{target.label or target.name} at {target.url}: skipped: not on this computer or your network")
-    if not found and not silent:
+    if not found and not silent and not network:
         console.print("[yellow]No local model server found.[/yellow] Install Ollama from https://ollama.com/download, "
                       "or start LM Studio's server (Developer tab).")
     elif ram and any(modelscan.is_loopback(s.url) for _, s in found):
@@ -1229,8 +1229,11 @@ def _scan_network(net, addresses: list[str], yes: bool) -> None:
             f"{modelscan.PORT_LIST}. Only scan a network you own or may scan. Continue?"):
         return
     hits = asyncio.run(modelscan.scan_lan(addresses))
+    if unfinished := getattr(hits, "unfinished", 0):
+        click.echo(f"The scan stopped after {modelscan.SCAN_DEADLINE:.0f} s: {hits.attempts - unfinished} of "
+                   f"{hits.attempts} connection attempts were checked. Run it again on a smaller range.")
     if not hits:
-        click.echo(f"No model server found on {net}.")
+        click.echo(f"No model server found on {net}" + (" in the part that was checked." if unfinished else "."))
         return
     click.echo("Address               Port   Looks like   Models")
     for h in hits:

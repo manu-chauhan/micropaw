@@ -364,6 +364,9 @@ def _offer_lan_scan(questionary, config: Config, provider: str) -> None:
             default=False).ask():
         return
     hits = asyncio.run(modelscan.scan_lan(addresses))
+    if unfinished := getattr(hits, "unfinished", 0):
+        console.print(f"[yellow]The scan stopped early: {hits.attempts - unfinished} of {hits.attempts} connection "
+                      "attempts were checked. Run paw models scan --range on a smaller range.[/yellow]")
     for h in hits:
         console.print(f"Found {h.label} at {h.url}: {len(h.server.models)} model(s). "
                       f"Add it with: paw models add {modelscan.suggested_name(h.url)} {h.url}")

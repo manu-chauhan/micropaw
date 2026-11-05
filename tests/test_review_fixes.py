@@ -259,3 +259,41 @@ def test_an_ollama_server_saved_by_add_resolves_to_something_that_talks_to_it(la
         assert ep.kind == "ollama" and ep.base_url == box.url
     else:  # no `kind` on entries yet: the /v1 address is the one an OpenAI-style client can use on Ollama
         assert ep.kind == "compat" and ep.base_url == box.url + "/v1"
+
+
+# --- a network scan that is cut off says so ---------------------------------------------------------
+
+def test_a_range_too_big_to_finish_inside_the_deadline_is_refused_up_front():
+    import ipaddress
+    assert ms.lan_range("10.0.0.0/23")[0].num_addresses == 512
+    with pytest.raises(ValueError, match="most that can be scanned at once is 512"):
+        ms.lan_range("10.0.0.0/22")
+    # 512 hosts x 7 ports, 128 at once, 0.5 s each: it has to fit the deadline with room to spare
+    rounds = -(-ms.MAX_RANGE * len(ms.KNOWN_PORTS) // ms.SCAN_CONCURRENCY)
+    assert rounds * ms.SCAN_CONNECT_TIMEOUT < ms.SCAN_DEADLINE * 0.75
+    assert ipaddress.ip_network("10.0.0.0/23").num_addresses == ms.MAX_RANGE
+
+
+async def test_scan_lan_counts_the_attempts_the_deadline_cut_off(monkeypatch):
+    import asyncio
+
+    async def hang(host, port):
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(asyncio, "open_connection", hang)
+    hits = await ms.scan_lan(["10.0.0.1", "10.0.0.2"], timeout=60, deadline=0.1)
+    assert hits == [] and hits.unfinished == 14 and hits.attempts == 14
+
+
+def test_the_cli_reports_a_cut_off_scan_and_skips_the_install_hint(lan_home, monkeypatch):
+    async def fake_scan(hosts, **k):
+        out = ms.LanHits()
+        out.unfinished, out.attempts = 300, 700
+        return out
+
+    monkeypatch.setattr(ms, "scan_lan", fake_scan)
+    r = CliRunner().invoke(main, ["models", "scan", "--range", "10.0.0.0/23", "--yes"])
+    assert r.exit_code == 0, r.output
+    assert "400 of 700 connection attempts were checked" in r.output
+    assert "in the part that was checked" in r.output and "No model server found on 10.0.0.0/23." not in r.output
+    assert "Install Ollama" not in r.output
