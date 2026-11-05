@@ -43,3 +43,31 @@ def _privacy_normal(monkeypatch):
             os.environ.pop(key, None)
         else:
             os.environ[key] = value
+
+
+@pytest.fixture(autouse=True)
+def _no_real_dns(monkeypatch):
+    """Tests never ask a real DNS server. Made-up names fail at once, as they would on Linux: on Windows each
+    one can take seconds. Address literals and localhost still resolve. A test that needs other answers
+    patches socket.getaddrinfo itself."""
+    import ipaddress
+    import socket
+
+    from micropaw.providers import registry
+
+    real = socket.getaddrinfo
+
+    def fake(host, *args, **kwargs):
+        name = host.decode() if isinstance(host, bytes) else host
+        if name is None or name == "localhost" or name.endswith(".localhost"):
+            return real(host, *args, **kwargs)
+        try:
+            ipaddress.ip_address(name.split("%")[0])
+        except ValueError:
+            raise socket.gaierror(socket.EAI_NONAME, "test: no real DNS") from None
+        return real(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake)
+    registry._dns.clear()
+    yield
+    registry._dns.clear()

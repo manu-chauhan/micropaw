@@ -78,7 +78,9 @@ def test_a_tailscale_name_is_checked_for_any_scheme(monkeypatch):
     assert not is_local_url("https://other.example.com")  # an https name that is not a tailnet name: cloud
 
 
-def test_a_failed_lookup_is_not_remembered(monkeypatch):
+def test_a_failed_lookup_is_retried_soon(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(reg_mod, "_now", lambda: now[0])
     calls = []
 
     def flaky(host, port, *a, **k):
@@ -88,6 +90,8 @@ def test_a_failed_lookup_is_not_remembered(monkeypatch):
         return [(2, 1, 6, "", ("192.168.1.50", 0))]
     monkeypatch.setattr(reg_mod.socket, "getaddrinfo", flaky)
     assert is_local_url("http://gpu-box:11434") is False
+    assert is_local_url("http://gpu-box:11434") is False and len(calls) == 1  # not asked again at once
+    now[0] += reg_mod.DNS_FAIL_TTL + 1
     assert is_local_url("http://gpu-box:11434") is True
     assert is_local_url("http://gpu-box:11434") is True and len(calls) == 2  # the finished answer is kept
 

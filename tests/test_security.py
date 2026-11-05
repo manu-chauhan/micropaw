@@ -11,6 +11,17 @@ from micropaw.tools.shell import _BLOCKED_RE, _DANGEROUS_RE
 
 
 class TestValidateUrl:
+    @pytest.fixture(autouse=True)
+    def _public_dns(self, monkeypatch):
+        import socket
+        real = socket.getaddrinfo
+
+        def answer(host, *a, **k):
+            if host == "example.com":
+                return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+            return real(host, *a, **k)
+        monkeypatch.setattr(socket, "getaddrinfo", answer)
+
     @pytest.mark.asyncio
     async def test_normal_https_url(self):
         assert await validate_url("https://example.com/api") is None

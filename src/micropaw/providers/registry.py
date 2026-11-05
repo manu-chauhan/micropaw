@@ -110,8 +110,9 @@ _PRIVATE_NETS = [ipaddress.ip_network(n) for n in
                  ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7", "100.64.0.0/10")]
 
 DNS_TTL = 300.0     # seconds a finished lookup is remembered
+DNS_FAIL_TTL = 10.0  # a failed lookup is retried after this, so a box that wakes up is found soon
 DNS_TIMEOUT = 2.0   # a bad DNS server on a small board must not stall start
-_dns: dict[str, tuple[bool, float]] = {}
+_dns: dict[str, tuple[bool | None, float]] = {}
 _dns_pool = concurrent.futures.ThreadPoolExecutor(2, thread_name_prefix="dns")
 
 
@@ -121,7 +122,8 @@ def _now() -> float:
 
 def _lookup(host: str) -> bool | None:
     """True when the name resolves only to loopback or private addresses, False when any answer is public,
-    None when the lookup failed or timed out. Only finished lookups are remembered, and only for DNS_TTL."""
+    None when the lookup failed or timed out. A finished lookup is remembered for DNS_TTL, a failed one for
+    DNS_FAIL_TTL: a name that does not resolve can take seconds each time (Windows), and every client asks."""
     hit = _dns.get(host)
     if hit and hit[1] > _now():
         return hit[0]
@@ -129,6 +131,7 @@ def _lookup(host: str) -> bool | None:
         infos = _dns_pool.submit(socket.getaddrinfo, host, None).result(timeout=DNS_TIMEOUT)
         private = all(_private_ip(ipaddress.ip_address(a[4][0])) for a in infos)
     except (OSError, ValueError, concurrent.futures.TimeoutError):
+        _dns[host] = (None, _now() + DNS_FAIL_TTL)
         return None
     _dns[host] = (private, _now() + DNS_TTL)
     return private
