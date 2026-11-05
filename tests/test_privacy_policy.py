@@ -432,3 +432,99 @@ def test_location_and_user_text_stay_home_when_sharing_is_off(tmp_path, monkeypa
     assert "Lisbon" not in _prompt(both, **privacy_kw)
     held = Registry(config()).role("main", "chat", ["ollama:m", "claude:c"])
     assert "Lisbon" in _prompt(held, share_with_cloud=False)
+
+
+# --- the smaller rules ------------------------------------------------------------------------------------------------
+
+async def test_a_blocked_connection_is_not_a_reason_to_try_the_next_provider():
+    from micropaw.providers.base import AIProvider, AIResponse
+    from micropaw.providers.failover import FallbackProvider, classify
+
+    class Blocked(AIProvider):
+        name = "a"
+
+        async def chat(self, messages, tools=None):
+            raise httpx.ConnectError("x") from egress.EgressBlocked("air-gapped mode blocked a connection to x")
+
+    class Second(AIProvider):
+        name = "b"
+        called = False
+
+        async def chat(self, messages, tools=None):
+            Second.called = True
+            return AIResponse(content="b", tool_calls=[], usage={})
+
+    err = httpx.ConnectError("x")
+    err.__cause__ = egress.EgressBlocked("air-gapped mode blocked a connection to x")
+    assert classify(err) is None and classify(httpx.ConnectError("plain")) == "could not be reached"
+    with pytest.raises(httpx.ConnectError):
+        await FallbackProvider([Blocked(), Second()]).chat(USER)
+    assert Second.called is False
+
+
+async def test_a_blocked_call_to_a_local_model_gets_a_plain_message():
+    import asyncio as aio
+
+    from micropaw.providers.registry import _Gate
+
+    class Inner:
+        name, model, host = "ollama", "m", "http://127.0.0.1:11434"
+
+        async def chat(self, messages, tools=None):
+            raise httpx.ConnectError("x") from egress.EgressBlocked("local mode blocked a connection to evil.example")
+
+    gate = _Gate(Inner(), aio.Semaphore(1), "ollama")
+    with pytest.raises(Exception, match="Blocked by privacy mode: local mode blocked a connection to evil.example"):
+        await gate.chat(USER)
+
+
+def test_lan_hosts_accepts_names_ranges_and_name_equals_address():
+    set_mode("airgapped", lan_hosts=["Gpu-Box", "192.168.7.0/24", "nas=10.9.8.7", "  "])
+    s = privacy.settings()
+    assert s.names == {"gpu-box", "nas"} and any(str(n) == "10.9.8.7/32" for n in s.nets)
+    assert privacy.local_host("GPU-BOX") and privacy.local_host("nas") and privacy.local_host("192.168.7.99")
+    assert not privacy.local_host("other") and not privacy.local_host("")
+
+
+def test_allowed_vendors_resolve_and_their_addresses_are_learned(monkeypatch):
+    set_mode("local", allow=["telegram", "google"])
+    g = privacy.build_guard()
+    assert g.name_ok("api.telegram.org") and g.name_ok("gmail.googleapis.com") and g.name_ok("accounts.google.com")
+    assert not g.name_ok("telegram.evil.example") and not g.name_ok("discord.com")
+    assert not g.address_ok("149.154.167.220")
+    monkeypatch.setattr(socket, "getaddrinfo", lambda host, *a, **k: [(2, 1, 6, "", ("149.154.167.220", 443))])
+    privacy._learn_vendor_addresses(g)
+    socket.getaddrinfo("api.telegram.org", 443)
+    assert g.address_ok("149.154.167.220") and not g.address_ok("149.154.167.221")
+    set_mode("airgapped", allow=["telegram"])
+    assert not privacy.build_guard().name_ok("api.telegram.org")  # an airgapped install has no vendor exceptions
+
+
+def test_unknown_allow_entries_are_reported():
+    set_mode("local", allow=["telegramm"])
+    c = config(privacy_kw={"allow": ["telegramm"]})
+    assert any('"telegramm"' in n for n in privacy.check_config(c).notices)
+
+
+def test_describe_and_child_isolation_for_status_screens(monkeypatch):
+    set_mode("normal")
+    assert privacy.describe() == "Privacy: normal"
+    set_mode("local")
+    assert privacy.describe() == "Privacy: local (LAN allowed)"
+    set_mode("airgapped", allow_lan=False)
+    assert privacy.describe() == "Privacy: airgapped (this machine only)"
+    from micropaw.tools import sandbox
+    monkeypatch.setattr(sandbox, "isolation_ok", lambda: True)
+    assert privacy.child_isolation() == "bwrap"
+    monkeypatch.setattr(sandbox, "isolation_ok", lambda: False)
+    assert privacy.child_isolation() == "none"
+
+
+async def test_scan_goes_around_environment_proxies(monkeypatch):
+    from micropaw import net
+    from micropaw.providers import registry
+    seen = []
+    real = net.client
+    monkeypatch.setattr(registry.net, "client", lambda *a, **k: seen.append(k.get("local")) or real(*a, **k))
+    assert await registry.scan_local({"x": ("ollama", "http://127.0.0.1:1")}) == []
+    assert seen == [True]
