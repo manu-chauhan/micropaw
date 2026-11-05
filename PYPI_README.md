@@ -148,7 +148,7 @@ MicroPaw:                "Revenue grew 23% in Q4, driven by..."
 
 - **Zero SDK dependencies** — All 4 AI providers via raw httpx. No `anthropic`, `openai`, or `google-genai` packages. Switching providers is a config change.
 
-- **16 built-in tools**: web search (Brave -> SearXNG -> DuckDuckGo), browser automation, file I/O, shell, HTTP requests, memory, contacts, user files, vision, PDF, sessions, delegation, cron scheduling, email (Gmail), calendar (Google Calendar) — all security-hardened.
+- **16 built-in tools**: web search (offline Kiwix and your own documents, your own SearXNG, Brave, DuckDuckGo or public SearXNG, by `search.provider` and the privacy mode), browser automation, file I/O, shell, HTTP requests, memory, contacts, user files, vision, PDF, sessions, delegation, cron scheduling, email (Gmail) and calendar (Google Calendar), all security-hardened.
 
 - **Raw WebSocket** — WebChat channel implements RFC 6455 from scratch. No aiohttp. ~100 LOC.
 
