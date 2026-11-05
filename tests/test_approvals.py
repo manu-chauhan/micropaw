@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from micropaw.channels.base import approval_hint
 from micropaw.gateway import _Approvals
 from micropaw.memory.store import MemoryStore
 from micropaw.tools.base import Tool, ToolContext, run_tool
@@ -76,8 +77,8 @@ class TestApprovals:
     async def _ask_and_answer(self, approvals, reply_word: str, chat="telegram:1", marked=False):
         sent: list[str] = []
 
-        async def send(msg: str) -> None:
-            sent.append(msg)
+        async def send(msg: str, ask_id: str, always: bool) -> None:
+            sent.append(f"{msg}\n\n{approval_hint(ask_id, always)}")
 
         task = asyncio.create_task(approvals.ask(send, "telegram:1", "shell", "Run: ls", marked))
         await asyncio.sleep(0)
@@ -108,7 +109,8 @@ class TestApprovals:
         ok, _, _ = await self._ask_and_answer(a, "always")
         assert ok is True
         sent: list[str] = []
-        assert await a.ask(AsyncMock(side_effect=sent.append), "telegram:1", "shell", "Run: ls", False)
+        send = AsyncMock(side_effect=lambda *args: sent.append(args))
+        assert await a.ask(send, "telegram:1", "shell", "Run: ls", False)
         assert sent == []  # remembered, no new ask
         reloaded = _Approvals(tmp_path / "approved.json")
         assert await reloaded.ask(AsyncMock(), "telegram:1", "shell", "Run: ls", False)
@@ -119,8 +121,8 @@ class TestApprovals:
         await self._ask_and_answer(a, "always")  # saved for unmarked conversations
         sent: list[str] = []
 
-        async def send(msg: str) -> None:
-            sent.append(msg)
+        async def send(msg: str, ask_id: str, always: bool) -> None:
+            sent.append(f"{msg}\n\n{approval_hint(ask_id, always)}")
 
         task = asyncio.create_task(a.ask(send, "telegram:1", "shell", "Run: ls", True))
         await asyncio.sleep(0)

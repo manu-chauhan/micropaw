@@ -4,14 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any
 
-from micropaw.channels.base import Channel, chunk_text, stream_response
+from micropaw.channels.base import Channel, approval_buttons, chunk_text, settled_note, stream_response
+from micropaw.channels.media import Attachment, fetch_media
 
 logger = logging.getLogger(__name__)
 
 MAX_MSG_LEN = 4000
 STREAM_EDIT_INTERVAL = 1.0
+
+
+def _section(text: str) -> dict:
+    return {"type": "section", "text": {"type": "plain_text", "text": text}}
 
 
 class SlackChannel(Channel):
@@ -38,12 +44,12 @@ class SlackChannel(Channel):
 
         @self._app.event("message")
         async def handle_message(event: dict, say: Any, client: Any) -> None:
-            # Skip bot messages
-            if event.get("bot_id") or event.get("subtype"):
+            # Skip bot messages and edits; a message with files has the file_share subtype
+            if event.get("bot_id") or event.get("subtype") not in (None, "file_share"):
                 return
 
             text = event.get("text", "").strip()
-            if not text:
+            if not text and not event.get("files"):
                 return
 
             user_id = event.get("user", "unknown")
@@ -59,6 +65,7 @@ class SlackChannel(Channel):
             # so they share the unified DM conversation with other channels
             conv_channel_id = None if slack_channel.startswith("D") else slack_channel
             thread_ts = event.get("thread_ts") or event.get("ts", "")
+            media = await self._read_files(event, user_id, say, thread_ts)
 
             if self._stream_handler:
                 placeholder = await say(text="...", thread_ts=thread_ts)
@@ -68,13 +75,15 @@ class SlackChannel(Channel):
                         channel=slack_channel, ts=placeholder["ts"], text=t,
                     ),
                     send_fn=lambda t: say(text=t, thread_ts=thread_ts),
-                    max_msg_len=MAX_MSG_LEN, edit_interval=STREAM_EDIT_INTERVAL,
+                    max_msg_len=MAX_MSG_LEN, edit_interval=STREAM_EDIT_INTERVAL, media=media,
                 )
 
             elif self._handler:
-                response = await self._handler(text, user_id, "slack", conv_channel_id)
+                response = await self._handler(text, user_id, "slack", conv_channel_id, media=media)
                 for chunk in chunk_text(response, MAX_MSG_LEN):
                     await say(text=chunk, thread_ts=thread_ts)
+
+        self._app.action(re.compile(r"^ap:[0-9a-f]{4}:(yes|no|always)$"))(self._on_press)
 
         self._socket_handler = AsyncSocketModeHandler(self._app, self.app_token)
         logger.info("Slack channel starting (Socket Mode)...")
@@ -86,6 +95,36 @@ class SlackChannel(Channel):
         if self._task.done() and self._task.exception():
             raise self._task.exception()
         logger.info("Slack channel connected.")
+
+    async def _on_press(self, ack: Any, body: dict, client: Any) -> None:
+        await ack()
+        user_id = body["user"]["id"]
+        slack_channel = body["channel"]["id"]
+        # Checked against the owner list, not just the channel: anyone in it can press a button
+        reply = self.press_approval(
+            body["actions"][0]["action_id"], user_id, None if slack_channel.startswith("D") else slack_channel,
+        )
+        if reply is None:
+            await client.chat_postEphemeral(channel=slack_channel, user=user_id, text="Only the owner can answer this.")
+        elif (note := settled_note(reply)) is not None:
+            text = f"{body['message']['text']}\n\n{note}"
+            ts = body["message"]["ts"]
+            await client.chat_update(channel=slack_channel, ts=ts, text=text, blocks=[_section(text)])
+        else:
+            await client.chat_postEphemeral(channel=slack_channel, user=user_id, text=reply)
+
+    async def _read_files(self, event: dict, user_id: str, say: Any, thread_ts: str) -> list:
+        """Images and audio shared in the message, fetched with the bot token (only ever sent to slack.com).
+        A file someone else uploaded and this message shares is outside content."""
+        files = [Attachment(f.get("url_private", ""), f.get("mimetype", ""), f.get("size") or 0,
+                            f.get("name") or "a file", outside=f.get("user") != user_id)
+                 for f in event.get("files") or []]
+        if not files:
+            return []
+        media, notes = await fetch_media(files, token=self.bot_token, token_host="slack.com")
+        for note in notes:
+            await say(text=note, thread_ts=thread_ts)
+        return media
 
     async def _watch_task(self) -> None:
         """Monitor the background task; log and restart on crash."""
@@ -120,3 +159,20 @@ class SlackChannel(Channel):
             channel = chat_id.replace("slack:", "", 1)
             for chunk in chunk_text(text, MAX_MSG_LEN):
                 await self._app.client.chat_postMessage(channel=channel, text=chunk)
+
+    async def send_approval(self, chat_id: str, text: str, ask_id: str, allow_always: bool) -> None:
+        if not self._app:
+            return
+        channel = chat_id.replace("slack:", "", 1)
+        *head, last = chunk_text(text, 2900 - 80)  # a section holds 3000 chars; room for the decision line
+        for chunk in head:
+            await self._app.client.chat_postMessage(channel=channel, text=chunk)
+        buttons = [
+            {"type": "button", "text": {"type": "plain_text", "text": label}, "action_id": data,
+             **({"style": "primary"} if label == "Yes" else {"style": "danger"} if label == "No" else {})}
+            for label, data in approval_buttons(ask_id, allow_always)
+        ]
+        await self._app.client.chat_postMessage(
+            channel=channel, text=last,
+            blocks=[_section(last), {"type": "actions", "block_id": f"ap:{ask_id}", "elements": buttons}],
+        )

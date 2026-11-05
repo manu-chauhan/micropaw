@@ -12,6 +12,7 @@ import secrets
 import signal
 import time
 from collections.abc import Awaitable, Callable
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -155,7 +156,10 @@ class _Approvals:
         if hasattr(os, "chmod"):
             os.chmod(self._rules_file, 0o600)
 
-    async def ask(self, send: Callable[[str], Awaitable[None]], chat: str, tool: str, text: str, marked: bool) -> bool:
+    async def ask(
+        self, send: Callable[[str, str, bool], Awaitable[None]], chat: str, tool: str, text: str, marked: bool,
+    ) -> bool:
+        """send(text, ask_id, allow_always) puts the question to the owner (a channel's send_approval)."""
         rule = self._rule(tool, text, marked)
         if rule in self._rules:
             return True
@@ -164,12 +168,8 @@ class _Approvals:
             ask_id = secrets.token_hex(2)
         answer: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
         self._pending[ask_id] = (chat, answer, rule)
-        always = f", or 'always {ask_id}' to allow this exact action from now on" if rule else ""
         try:
-            await send(
-                f"Approval needed [{ask_id}]: {tool}\n\n{text}\n\n"
-                f"Reply 'yes {ask_id}' or 'no {ask_id}'{always}. This expires in 10 minutes."
-            )
+            await send(f"Approval needed [{ask_id}]: {tool}\n\n{text}", ask_id, bool(rule))
             return await asyncio.wait_for(answer, self.TIMEOUT)
         except TimeoutError:
             return False
@@ -332,6 +332,9 @@ class Gateway:
             channel.set_handler(self._handle_message)
             channel.set_stream_handler(self._handle_message_stream)
             channel.set_access(self._access.check)
+            channel._approval_answer = partial(self._approval_answer_for, channel.name)
+            channel._voice_on = partial(self._voice_on, channel.name)
+            channel._voice_say = partial(self._voice_say, channel.name)
             if channel.name == "terminal":
                 channel._registry = self.registry
                 channel._config = self.config
@@ -446,12 +449,33 @@ class Gateway:
         channel = next((c for c in self.channels if c.name == platform), None)
         if channel is None:
             return False
-        return await self._approvals.ask(lambda msg: channel.send_message(chat_id, msg), chat_id, tool, text, marked)
+        return await self._approvals.ask(partial(channel.send_approval, chat_id), chat_id, tool, text, marked)
 
     def _approval_answer(self, text: str, user_id: str, platform: str, channel_id: str | None) -> str | None:
         if not self._access.is_allowed(platform, user_id):
             return None
         return self._approvals.answer(f"{platform}:{channel_id or user_id}", text)
+
+    def _approval_answer_for(self, platform: str, text: str, user_id: str, channel_id: str | None) -> str | None:
+        """A button press: the same owner check and chat binding as a typed "yes <id>"."""
+        return self._approval_answer(text, user_id, platform, channel_id)
+
+    def _voice_on(self, platform: str, user_id: str, channel_id: str | None) -> bool:
+        voice = self._route(platform, user_id, channel_id).config.voice
+        return bool(voice.tts and voice.reply_with_voice)
+
+    async def _voice_say(
+        self, platform: str, text: str, user_id: str, channel_id: str | None,
+    ) -> tuple[bytes, str] | None:
+        from micropaw.utils.voice import synthesize
+        return await synthesize(text, self._route(platform, user_id, channel_id).config)
+
+    async def _mark_outside_media(
+        self, agent: Agent, platform: str, user_id: str, channel_id: str | None, media: list | None,
+    ) -> None:
+        """Files and photos from other people are outside content: the conversation is marked first."""
+        if media and any(m.outside for m in media):
+            await agent.store.set_marked(agent.conversations.get_conversation_id(platform, user_id, channel_id))
 
     # -- agents: routing and the commands that change it ---------------------------------
 
@@ -562,6 +586,7 @@ class Gateway:
         logger.debug("[%s] %s: %s", platform, user_id, text[:80])
         agent = self._route(platform, user_id, channel_id)
         async with self._chat_lock(platform, user_id, channel_id):
+            await self._mark_outside_media(agent, platform, user_id, channel_id, media)
             response = await agent.handle_message(text, user_id, platform, channel_id, media=media)
         self._track_usage(agent)
         logger.debug("[%s] MicroPaw: %s", platform, response[:80])
@@ -583,6 +608,7 @@ class Gateway:
         logger.debug("[%s] %s: %s", platform, user_id, text[:80])
         agent = self._route(platform, user_id, channel_id)
         async with self._chat_lock(platform, user_id, channel_id):
+            await self._mark_outside_media(agent, platform, user_id, channel_id, media)
             response = await agent.handle_message_stream(
                 text, user_id, platform, channel_id, on_chunk=_redacting(on_chunk), media=media,
             )

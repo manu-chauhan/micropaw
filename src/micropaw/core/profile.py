@@ -113,7 +113,7 @@ def resolve_profiles(config: Config, registry: Registry) -> dict[str, AgentProfi
 
 
 def agent_config(config: Config, profile: AgentProfile, registry: Registry) -> Config:
-    """The config one agent runs with: its own persona and workspace, and no cloud speech-to-text if private."""
+    """The config one agent runs with: its own persona and workspace, and no cloud voice services if private."""
     out = config.model_copy(deep=True)
     if profile.persona_name:
         out.persona.name = profile.persona_name
@@ -128,6 +128,11 @@ def agent_config(config: Config, profile: AgentProfile, registry: Registry) -> C
         endpoint = _endpoint(out)
         if endpoint is None or not is_local_url(endpoint[0]):
             out.voice.stt = ""
+    if profile.private and out.voice.tts:
+        from micropaw.utils.voice import tts_endpoint
+        endpoint = tts_endpoint(out)
+        if endpoint is None or not is_local_url(endpoint[0]):
+            out.voice.tts = ""
     return out
 
 

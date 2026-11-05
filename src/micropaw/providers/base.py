@@ -64,6 +64,7 @@ class MediaItem:
     type: str  # "image"
     data: bytes
     mime_type: str  # "image/png", "image/jpeg", etc.
+    outside: bool = False  # came from someone else (forwarded, shared): outside content, marks the chat
 
 
 @dataclass(slots=True)
