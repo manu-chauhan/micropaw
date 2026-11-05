@@ -274,6 +274,24 @@ def test_supervisor_stops_on_stop_file():
     assert code == 0 and made[0].stopped and not svc.stop_file().exists()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX signal handlers")
+def test_signal_during_the_backoff_still_stops_the_supervisor():
+    import signal
+
+    class Crashing(FakeGateway):
+        async def start(self):
+            asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, lambda: None)  # what the gateway does
+            raise RuntimeError("boom")
+
+    async def go():
+        task = asyncio.create_task(svc.supervise(lambda: Crashing([]), first_delay=30, poll=0.01))
+        await asyncio.sleep(0.3)
+        os.kill(os.getpid(), signal.SIGTERM)
+        return await asyncio.wait_for(task, 5)
+
+    assert asyncio.run(go()) == 0
+
+
 def test_backoff_doubles_up_to_cap(monkeypatch):
     delays = []
 
@@ -403,3 +421,20 @@ def test_private_writers_open_in_binary_mode(tmp_path, monkeypatch):
     google_auth._save_tokens({"a": 1})
     assert len(flags) == 3 and all(f & 0x8000 for f in flags)
     assert (tmp_path / "t.xml").read_bytes().decode("utf-16").count("\n") == 3
+
+
+def test_doctor_sandbox_row_is_a_warning_on_windows_and_the_report_does_not_fail(monkeypatch, tmp_path):
+    from micropaw.tools import sandbox
+    from micropaw.tools.sandbox import Sandbox
+
+    monkeypatch.setattr(sandbox, "resolve", lambda: Sandbox("none", host_asks=True))
+    monkeypatch.setattr(sandbox, "configure", lambda p: None)
+    monkeypatch.setattr(svc, "running_gateway", lambda: None)  # gateway stopped
+    monkeypatch.setattr(cli.os, "name", "nt")
+    out = CliRunner().invoke(cli.main, ["doctor"])
+    row = next(line for line in out.output.splitlines() if "Shell sandbox" in line)
+    assert "warn" in row and "FAIL" not in row
+    assert out.exit_code == 0
+    monkeypatch.setattr(cli.os, "name", "posix")
+    row = next(line for line in CliRunner().invoke(cli.main, ["doctor"]).output.splitlines() if "Shell sandbox" in line)
+    assert "FAIL" in row

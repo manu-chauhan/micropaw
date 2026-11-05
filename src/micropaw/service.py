@@ -546,6 +546,7 @@ async def supervise(
             err = task.exception()
             if err is None:
                 return 0  # the gateway stopped itself after a signal
+            _stop_on_signals(loop, stop)  # the gateway replaced the handlers; a signal in the back-off must still stop us
             logger.error("Gateway stopped unexpectedly: %r", err, exc_info=err)
             now = time.monotonic()
             if now - started > 300:

@@ -308,7 +308,10 @@ def doctor(quiet):
     from micropaw.tools import sandbox
     sandbox.configure(load_config().permissions)
     sb_line = sandbox.describe()
-    table.add_row("Shell sandbox", ok(sandbox.resolve().active) if not sandbox.resolve().error else ok(False), sb_line)
+    sb = sandbox.resolve()
+    # Windows has no sandbox to find: every command asks, so that is a note, not a failure
+    sb_mark = "[yellow]warn[/yellow]" if not sb.active and not sb.error and os.name == "nt" else ok(sb.active)
+    table.add_row("Shell sandbox", sb_mark, sb_line)
 
     provider = config.provider
     has_key = provider == "ollama" or bool(getattr(config.provider_config, provider).api_key)

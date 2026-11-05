@@ -173,3 +173,12 @@ def test_wizard_pull_returns_true_on_success(pull_server):
 def test_wizard_pull_returns_false_when_server_is_down(capsys):
     assert wiz._pull("http://127.0.0.1:1", "m") is False
     assert "Download failed" in capsys.readouterr().out
+
+
+def test_apply_plan_keeps_the_users_fast_and_vision_models_when_the_plan_has_none():
+    c = Config()
+    c.models.fast, c.models.vision = "ollama:small", "ollama:eyes"
+    wiz.apply_plan(c, wiz.ModelPlan(main="ollama:big"))
+    assert (c.models.fast, c.models.vision) == ("ollama:small", "ollama:eyes")
+    wiz.apply_plan(c, wiz.ModelPlan(main="ollama:big", fast="ollama:tiny"))
+    assert (c.models.fast, c.models.vision) == ("ollama:tiny", "ollama:eyes")
