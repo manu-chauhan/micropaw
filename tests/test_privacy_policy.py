@@ -399,3 +399,36 @@ def test_a_proxy_permit_never_resolves_the_target(no_dns):
     set_mode("local")
     assert privacy.permit("target.example", ips=("127.0.0.1",)) is None
     assert privacy.guard().name_ok("target.example")
+
+
+# --- what a cloud model is told about the owner ---------------------------------------------------------
+
+def _prompt(provider, **privacy_kw) -> str:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from micropaw.core.agent import Agent
+    from micropaw.tools.base import ToolRegistry
+    c = Config(privacy=PrivacyConfig(**privacy_kw))
+    c.persona.location = "Lisbon, Portugal"
+    store = MagicMock()
+    store.get_recent_memories = AsyncMock(return_value=[])
+    return Agent(c, provider, ToolRegistry(), store)._build_system_prompt("terminal")
+
+
+def test_location_and_user_text_stay_home_when_sharing_is_off(tmp_path, monkeypatch):
+    import micropaw.config as config_mod
+    monkeypatch.setattr(config_mod, "CONFIG_DIR", tmp_path)
+    (tmp_path / "USER.md").write_text("Likes tea. Lives alone.")
+    cloud = Registry(config(provider="claude")).get("claude:x")
+    local = Registry(config()).get("ollama:m")
+    assert "Lisbon" in _prompt(cloud) and "Likes tea" in _prompt(cloud)  # today's behaviour is the default
+    off = _prompt(cloud, share_with_cloud=False)
+    assert "Lisbon" not in off and "Likes tea" not in off and "MicroPaw" in off
+    on_device = _prompt(local, share_with_cloud=False)
+    assert "Lisbon" in on_device and "Likes tea" in on_device  # a local model gets it either way
+    # a chain that can reach a cloud model counts as cloud; without the fallback it is local only
+    privacy_kw = {"share_with_cloud": False, "allow_cloud_fallback": True}
+    both = Registry(config(privacy_kw=privacy_kw)).role("main", "chat", ["ollama:m", "claude:c"])
+    assert "Lisbon" not in _prompt(both, **privacy_kw)
+    held = Registry(config()).role("main", "chat", ["ollama:m", "claude:c"])
+    assert "Lisbon" in _prompt(held, share_with_cloud=False)

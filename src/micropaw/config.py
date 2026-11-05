@@ -257,6 +257,7 @@ class PrivacyConfig(BaseModel):
     lan_hosts: list[str] = []       # extra host names or CIDRs that count as local (names are never resolved to decide)
     allow_cloud_fallback: bool = False  # a local main model may fail over to a cloud model
     allow_cloud_helpers: bool = False   # a local main model may use a cloud fast or vision model (normal mode)
+    share_with_cloud: bool = True       # USER.md and the location go to a cloud model (paw setup turns this off)
     # Local-mode exceptions: telegram, discord, slack, whatsapp, google, web_fetch, web_browse, shell_network
     allow: list[str] = []
     # Airgapped: MCP servers over HTTP that you vouch for. MicroPaw cannot see where they send data.

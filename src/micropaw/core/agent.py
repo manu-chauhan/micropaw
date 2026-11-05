@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 
-from micropaw import skills
+from micropaw import privacy, skills
 from micropaw.config import Config
 from micropaw.core.context import ContextManager
 from micropaw.core.conversation import MAX_HISTORY, ConversationManager, sanitize_history
@@ -168,11 +168,13 @@ class Agent:
         parts.append("Help users by chatting naturally and using tools when needed.")
         parts.append("Keep responses concise and conversational.")
 
-        user_ctx = self._cached_file("USER.md")
+        # About-the-user text and the location go to a cloud model only when the owner allows it
+        share = self.config.privacy.share_with_cloud or privacy.is_local_provider(self.provider)
+        user_ctx = self._cached_file("USER.md") if share else ""
         if user_ctx:
             parts.append(f"\nAbout the user:\n{user_ctx}")
 
-        if self.config.persona.location:
+        if self.config.persona.location and share:
             parts.append(f"User's location: {self.config.persona.location}. Use this for local queries like 'near me'.")
 
         # Platform hints
