@@ -307,6 +307,9 @@ def _add_remote(questionary, config: Config, provider: str) -> None:
     if not raw:
         return
     url = server_url(raw)
+    if refusal := modelscan.refusal_for(config, _safe_name(modelscan._hostport(url)[0]), url, ""):  # before any probe
+        console.print(f"[yellow]{refusal}[/yellow]")
+        return
     server = None
     if urlparse(url).port or "://" in raw:
         kind, server = asyncio.run(modelscan.detect(url, "auto"))
@@ -328,9 +331,6 @@ def _add_remote(questionary, config: Config, provider: str) -> None:
     if "kind" in CustomProviderConfig.model_fields:  # named endpoints that speak Ollama's own API
         fields["kind"] = kind
     entry = CustomProviderConfig(**fields)
-    if refusal := modelscan.refusal_for(config, name, entry.base_url, ""):
-        console.print(f"[yellow]{refusal}[/yellow]")
-        return
     config.providers[name] = entry
     pick = pick_local(server.models, None)  # sized for that computer, not this one
     model = (pick.main or server.models[0]).name

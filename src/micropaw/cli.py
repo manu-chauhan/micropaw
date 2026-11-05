@@ -1176,8 +1176,15 @@ def scan(hosts, lan, net_range, yes):
     from micropaw.providers.ollama import ram_bytes
     from micropaw.providers.registry import pick_local
     config = load_config()
+    from micropaw import privacy
+    from micropaw.config import server_url
     try:
-        targets = modelscan.scan_targets(config, hosts)
+        if privacy.local_only():
+            for raw in hosts:
+                if not privacy.is_local_url(server_url(raw)):
+                    raise ValueError(f"{raw} is not on this computer or your network, and this privacy mode "
+                                     "only looks there.")
+        targets, skipped = modelscan.local_only_targets(modelscan.scan_targets(config, hosts))
         network = modelscan.lan_range(net_range or None) if lan or net_range else None  # fail before any scan
     except ValueError as e:
         raise click.ClickException(str(e)) from None
@@ -1204,6 +1211,8 @@ def scan(hosts, lan, net_range, yes):
             click.echo(f"  To use it: paw models add {modelscan.suggested_name(server.url)} {server.url}")
     for target in silent:
         click.echo(f"{target.label or target.name} at {target.url}: not answering (asleep, off, or a firewall)")
+    for target in skipped:
+        click.echo(f"{target.label or target.name} at {target.url}: skipped: not on this computer or your network")
     if not found and not silent:
         console.print("[yellow]No local model server found.[/yellow] Install Ollama from https://ollama.com/download, "
                       "or start LM Studio's server (Developer tab).")

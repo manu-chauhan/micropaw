@@ -90,3 +90,107 @@ def test_a_bad_config_file_is_one_plain_line_and_setup_reset_recovers(lan_home, 
     assert saved and lan_home.with_name("config.json.bak").exists()
     kept = json.loads(lan_home.with_name("config.json.bak").read_text())
     assert kept["provider_config"]["ollama"]["host"] == "foo bar"
+
+
+# --- scan and add stay on this computer and your network in local and air-gapped modes -------------
+
+import pytest  # noqa: E402
+
+import micropaw.modelscan as ms  # noqa: E402
+from micropaw import privacy  # noqa: E402
+
+CLOUD = "https://api.example-cloud.test/v1"
+
+
+@pytest.fixture
+def mode_of(lan_home):
+    def set_mode(mode, **extra):
+        lan_home.write_text(json.dumps({"privacy": {"mode": mode}, **extra}))
+        privacy._reset_for_tests()
+    yield set_mode
+    privacy._reset_for_tests()
+
+
+@pytest.fixture
+def probed(monkeypatch):
+    calls = []
+
+    async def fake(name, kind, url, key="", details=True, connect=None):
+        calls.append((url, key))
+        return None
+
+    monkeypatch.setattr(ms, "probe_target", fake)
+    return calls
+
+
+@pytest.mark.parametrize("mode", ["local", "airgapped"])
+def test_scan_never_contacts_a_cloud_entry_or_sends_its_key(mode_of, probed, monkeypatch, mode):
+    mode_of(mode, providers={"cloudy": {"base_url": CLOUD, "api_key_env": "CLOUDY_KEY"}})
+    monkeypatch.setenv("CLOUDY_KEY", "sk-secret")
+    r = CliRunner().invoke(main, ["models", "scan"])
+    assert r.exit_code == 0, r.output
+    assert "cloudy" in r.output and "skipped: not on this computer or your network" in r.output
+    assert probed and not any("example-cloud" in u or k for u, k in probed)
+
+
+def test_scan_in_normal_mode_still_asks_the_cloud_entry(mode_of, probed, monkeypatch):
+    mode_of("normal", providers={"cloudy": {"base_url": CLOUD, "api_key_env": "CLOUDY_KEY"}})
+    monkeypatch.setenv("CLOUDY_KEY", "sk-secret")
+    CliRunner().invoke(main, ["models", "scan"])
+    assert (CLOUD.removesuffix("/v1"), "sk-secret") in probed
+
+
+def test_scan_host_outside_the_network_is_refused_in_local_modes(mode_of, probed):
+    mode_of("local")
+    r = CliRunner().invoke(main, ["models", "scan", "--host", "8.8.8.8"])
+    assert r.exit_code == 1 and "8.8.8.8 is not on this computer or your network" in r.output
+    assert not probed
+    r = CliRunner().invoke(main, ["models", "scan", "--host", "192.168.1.50"])  # your own network is fine
+    assert r.exit_code == 0 and any("192.168.1.50" in u for u, _ in probed)
+
+
+@pytest.mark.parametrize("address", [CLOUD, "http://8.8.8.8:11434"])
+def test_add_to_a_non_local_address_is_refused_before_anything_is_sent(mode_of, probed, monkeypatch, address):
+    mode_of("local")
+    monkeypatch.setenv("K", "sk-secret")
+    r = CliRunner().invoke(main, ["models", "add", "t1", address, "--key-env", "K"])
+    assert r.exit_code == 1 and ("this computer or your network" in r.output or "Could not find" in r.output)
+    assert not probed
+
+
+# --- the refusal says the real cause ---------------------------------------------------------------
+
+@pytest.mark.parametrize("address", ["gpu-box.local", "myserver", "http://example.com:11434"])
+def test_an_unknown_name_is_a_lookup_problem_not_an_https_one(mode_of, probed, address, monkeypatch):
+    mode_of("normal")
+    monkeypatch.setattr(ms.privacy, "is_local_url", lambda url: False)  # the name does not resolve to a private address
+    r = CliRunner().invoke(main, ["models", "add", "t1", address])
+    host = address.removeprefix("http://").split(":")[0]
+    assert r.exit_code == 1 and f"Could not find {host} on your network" in r.output
+    assert "IP address" in r.output and "privacy.lan_hosts" in r.output
+    assert "https" not in r.output and "clear text" not in r.output
+    assert not probed
+
+
+def test_a_public_ip_over_http_names_clear_text_and_the_key_only_when_there_is_one(mode_of, monkeypatch):
+    mode_of("normal")
+    monkeypatch.setenv("K", "x")
+    text = ms.refusal_for(Config(), "t1", "http://8.8.8.8:11434", "")
+    assert "clear text" in text and "key" not in text and "Use https" in text
+    assert "messages and key" in ms.refusal_for(Config(), "t1", "http://8.8.8.8:11434", "K")
+    assert ms.refusal_for(Config(), "t1", "https://8.8.8.8:11434", "K") is None  # https to a public host is fine
+
+
+def test_the_wizard_says_it_could_not_find_the_name_before_probing(monkeypatch, capsys, mode_of):
+    mode_of("normal")
+    monkeypatch.setattr(ms.privacy, "is_local_url", lambda url: False)
+
+    async def no_probe(*a, **k):
+        pytest.fail("a refused address is never probed")
+
+    monkeypatch.setattr(ms, "detect", no_probe)
+    monkeypatch.setattr(ms, "probe_host", no_probe)
+    c = Config()
+    wiz._add_remote(Scripted({"Address of the other computer": "gpu-box.local"}), c, "ollama")
+    out = capsys.readouterr().out
+    assert "Could not find gpu-box.local" in out and "Nothing answered" not in out and not c.providers

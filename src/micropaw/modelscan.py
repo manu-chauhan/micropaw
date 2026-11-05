@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from micropaw import net
+from micropaw import net, privacy
 from micropaw.config import SCHEMA_VERSION, Config, server_url
 from micropaw.providers.registry import BUILTIN, LOCAL_SERVERS, PRESETS, LocalModel, LocalServer, Registry, parse_spec
 
@@ -198,10 +198,32 @@ def check_name(name: str) -> str | None:
 def refusal_for(config: Config, name: str, url: str, key_env: str) -> str | None:
     """Why the registry would not accept this entry (plain http to a public host, and so on), else None."""
     from micropaw.config import CustomProviderConfig
+    if text := _outside_network(url, key_env):
+        return text
     trial = config.model_copy(deep=True)
     trial.providers[name] = CustomProviderConfig(base_url=url, api_key_env=key_env)
     problems = Registry(trial).problems
     return problems[0] if problems else None
+
+
+def _outside_network(url: str, key_env: str) -> str | None:
+    """The reason a server address is not on this computer or your network, in words that name the real cause."""
+    if privacy.is_local_url(url):
+        return None
+    parsed = urlparse(url if "://" in url else f"http://{url}")
+    host = parsed.hostname or ""
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return (f"Could not find {host} on your network. Use its IP address (for example 192.168.1.50), "
+                "or add the name to privacy.lan_hosts.")
+    if privacy.local_only():
+        return f"{host} is not on this computer or your network, and this privacy mode only uses those."
+    if parsed.scheme == "http":
+        what = "your messages and key" if key_env else "your messages"
+        return (f"{url} is plain http to a host outside your own network, so {what} would travel in clear text. "
+                "Use https.")
+    return None
 
 
 def read_raw() -> dict:
@@ -307,8 +329,18 @@ def scan_targets(config: Config, hosts: tuple[str, ...] = ()) -> list[Target]:
     return list(targets.values())
 
 
+def local_only_targets(targets: list[Target]) -> tuple[list[Target], list[Target]]:
+    """(targets to scan, targets skipped). In local and air-gapped modes only this computer and your network
+    are scanned, so no key or connection goes to another address."""
+    if not privacy.local_only():
+        return targets, []
+    kept = [t for t in targets if privacy.is_local_url(t.url)]
+    return kept, [t for t in targets if t not in kept]
+
+
 async def run_scan(targets: list[Target]) -> tuple[list[tuple[Target, Server]], list[Target]]:
     """(answered, configured targets that did not answer)."""
+    targets, _ = local_only_targets(targets)
     by_name = {t.name: t for t in targets}
     found = await scan_many({t.name: (t.kind, t.url, t.key) for t in targets})
     answered = [(by_name[s.name], s) for s in found if s.name in by_name]
