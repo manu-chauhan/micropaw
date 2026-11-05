@@ -197,7 +197,7 @@ class Agent:
         active = get_active_channels()
         if active:
             others = [ch for ch in active if ch != platform]
-            if others:
+            if others and self.registry.get("channel_send"):  # a lean tool set leaves it out
                 parts.append(f"Other active channels: {', '.join(others)}. "
                              "Use the channel_send tool to send messages there.")
 

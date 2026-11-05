@@ -433,3 +433,26 @@ async def test_the_agent_compacts_with_a_cloud_model_without_touching_local_talk
     assert await s.get_summary("c1", include_local=False) == "cloud summary"
     assert (await s.get_summary("c1")).startswith("local summary")
     await s.close()
+
+
+# --- the prompt names only tools the model has ---
+
+def test_the_prompt_mentions_channel_send_only_when_the_model_has_it():
+    from micropaw.config import Config
+    from micropaw.core.agent import Agent
+    from micropaw.core.profile import ToolView
+    from micropaw.core.toolsets import LEAN, build_registry
+    from micropaw.tools import channel_send
+
+    channel_send.update_channel_chat_id("telegram", "1")
+    try:
+        base = build_registry(Config())
+        for allow, mentioned in (([], True), (list(LEAN), False)):
+            agent = Agent.__new__(Agent)
+            agent.config = Config()
+            agent.registry = ToolView(base, allow, []) if allow else base
+            agent._file_cache = {}
+            prompt = agent._build_system_prompt("terminal")
+            assert ("Use the channel_send tool" in prompt) is mentioned
+    finally:
+        channel_send._channel_registry.pop("telegram", None)
