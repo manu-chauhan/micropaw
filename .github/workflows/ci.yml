@@ -96,3 +96,33 @@ jobs:
         with:
           context: .
           push: false
+
+  image-arm:
+    name: docker build (${{ matrix.platform }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/arm64
+            extras: telegram,discord,slack,whatsapp,pdf
+          # 32-bit ARM: no embeddings or browser, and no discord (audioop-lts has no armv7l wheel, so it needs a compiler)
+          - platform: linux/arm/v7
+            extras: telegram,slack,pdf
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          build-args: EXTRAS=${{ matrix.extras }}
+          tags: micropaw:arm-check
+          load: true
+          push: false
+      # Build and import only. The test suite under QEMU would take far too long.
+      - name: Import smoke test
+        run: |
+          docker run --rm --platform ${{ matrix.platform }} micropaw:arm-check paw --version
+          docker run --rm --platform ${{ matrix.platform }} micropaw:arm-check python -c "import micropaw.cli, micropaw.memory.store, micropaw.gateway"

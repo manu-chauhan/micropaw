@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -308,7 +309,8 @@ def test_powershell_command_line(monkeypatch, tmp_path):
         raise OSError("stop")
 
     monkeypatch.setattr(sandbox, "resolve", lambda: Sandbox("none"))
-    monkeypatch.setattr(shell.os, "name", "nt")
+    # only the shell module sees "nt": changing os.name itself would make pathlib build WindowsPath objects
+    monkeypatch.setattr(shell, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
     monkeypatch.setattr(shell.shutil, "which", lambda n: None)
     monkeypatch.setattr(shell.asyncio, "create_subprocess_exec", fake_exec)
     asyncio.run(shell.ShellTool().execute({"command": "Get-Date"}, _ctx(tmp_path)))
