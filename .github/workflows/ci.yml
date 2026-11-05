@@ -106,9 +106,7 @@ jobs:
         include:
           - platform: linux/arm64
             extras: telegram,discord,slack,whatsapp,pdf
-          # 32-bit ARM: no embeddings or browser, and no discord (audioop-lts has no armv7l wheel, so it needs a compiler)
-          - platform: linux/arm/v7
-            extras: telegram,slack,pdf
+          # No linux/arm/v7 entry: the Dockerfile copies uv from its image, which has only amd64 and arm64 builds.
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
