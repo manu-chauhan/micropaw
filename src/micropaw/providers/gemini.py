@@ -9,7 +9,15 @@ from collections.abc import AsyncGenerator
 
 import httpx
 
-from micropaw.providers.base import AIProvider, AIResponse, Message, ToolCall, ToolDef, parse_sse
+from micropaw.providers.base import (
+    AIProvider,
+    AIResponse,
+    Message,
+    ToolCall,
+    ToolDef,
+    http_timeout,
+    parse_sse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +39,7 @@ class GeminiProvider(AIProvider):
         self.max_tokens = max_tokens
         self._api_base = f"{base_url.rstrip('/')}/v1beta/models"
         self._client = httpx.AsyncClient(
-            timeout=120.0,
+            timeout=http_timeout(120.0),
             headers={"x-goog-api-key": api_key},
         )
 

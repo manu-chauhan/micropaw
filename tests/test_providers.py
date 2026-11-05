@@ -111,7 +111,7 @@ class TestFailoverProvider:
         fallback = MockProvider("fallback-response")
         fo = FailoverProvider([primary, fallback])
         resp = await fo.chat([Message(role="user", content="hi")])
-        assert resp.content == "fallback-response"
+        assert resp.content.startswith("fallback-response")  # plus a note saying why the primary was skipped
 
     async def test_all_fail_raises(self):
         p1 = MockProvider(fail=True)

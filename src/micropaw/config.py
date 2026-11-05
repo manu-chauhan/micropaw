@@ -5,17 +5,21 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+
+from micropaw.providers.registry import BUILTIN, PRESETS, legacy_compat
 
 load_dotenv()
 
 CONFIG_DIR = Path.home() / ".micropaw"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 DB_FILE = CONFIG_DIR / "data.db"
+SCHEMA_VERSION = 1  # bump when a migration is added to _migrate()
 
 
 # ---------------------------------------------------------------------------
@@ -41,6 +45,8 @@ class OllamaConfig(BaseModel):
     host: str = "http://localhost:11434"
     model: str = "llama3.1"
     max_tokens: int = 4096
+    num_ctx: int = 0          # 0 = by RAM: 8192 up to 16 GB, else 16384. Ollama cuts longer prompts silently.
+    keep_alive: str = "30m"   # how long a model stays loaded after the last call
 
 
 class GeminiConfig(BaseModel):
@@ -50,29 +56,60 @@ class GeminiConfig(BaseModel):
     base_url: str = "https://generativelanguage.googleapis.com"
 
 
-# OpenAI-compatible servers usable by name in a model spec ("groq:llama-3.3-70b-versatile").
-# name -> (base URL without /v1, env var holding the key; "" = local, no key needed)
-OPENAI_COMPATIBLE: dict[str, tuple[str, str]] = {
-    "openrouter": ("https://openrouter.ai/api", "OPENROUTER_API_KEY"),
-    "groq": ("https://api.groq.com/openai", "GROQ_API_KEY"),
-    "deepseek": ("https://api.deepseek.com", "DEEPSEEK_API_KEY"),
-    "mistral": ("https://api.mistral.ai", "MISTRAL_API_KEY"),
-    "together": ("https://api.together.xyz", "TOGETHER_API_KEY"),
-    "lmstudio": ("http://localhost:1234", ""),
-    "llamacpp": ("http://localhost:8080", ""),
-    "vllm": ("http://localhost:8000", ""),
-}
+# v0.3 name for the presets (base URL without /v1, key env). They live in providers/registry.py.
+OPENAI_COMPATIBLE: dict[str, tuple[str, str]] = legacy_compat()
 
 
 class ModelsConfig(BaseModel):
     """Extra models by job, each "provider:model" and local or cloud; empty = use the main model.
 
-    provider is claude, openai, gemini, ollama, or a name from OPENAI_COMPATIBLE.
+    provider is claude, openai, gemini, ollama, a preset (providers/registry.py) or one of your own (providers).
     Examples: "ollama:gemma4:e4b", "claude:claude-haiku-5-5", "groq:llama-3.3-70b-versatile".
     """
 
     fast: str = ""    # summaries and sub-agents: cheap and quick is fine
     vision: str = ""  # images, for when the main model can't see
+
+
+class CustomProviderConfig(BaseModel):
+    """Your own OpenAI-style server: `"providers": {"myvllm": {"base_url": "http://gpu-box:8000/v1", ...}}`."""
+
+    base_url: str
+    api_key_env: str = ""  # name of the environment variable that holds the key; "" = no key
+
+
+class AgentPersona(BaseModel):
+    name: str = ""
+    personality: str = ""
+    system_prompt_extra: str = ""
+
+
+class ToolFilter(BaseModel):
+    """Tool names or patterns ("mcp_*"). A non-empty allow list is all the agent gets; deny removes after that."""
+
+    allow: list[str] = []
+    deny: list[str] = []
+
+
+class AgentConfig(BaseModel):
+    """A named agent. Every field is optional and inherits from the top-level config.
+
+    model, fast, vision, fallbacks are specs ("provider:model"). fast = "" means the main model.
+    fallbacks = [] means strict (no fallback); leaving it out inherits the top-level list.
+    """
+
+    model_config = ConfigDict(extra="forbid")  # a typo or an unsupported key (such as "users") must not pass silently
+
+    model: str = ""
+    fast: str | None = None
+    vision: str | None = None
+    fallbacks: list[str] | None = None
+    persona: AgentPersona = AgentPersona()
+    tools: ToolFilter = ToolFilter()
+    workspace: str = ""
+    history: Literal["shared", "separate"] = "shared"  # separate = own conversation ids
+    # A local agent never inherits cloud fallbacks or roles. This lets it use the ones it lists itself.
+    allow_cloud: bool = False
 
 
 class MCPServerConfig(BaseModel):
@@ -229,6 +266,9 @@ class ContextConfig(BaseModel):
 # Root config
 # ---------------------------------------------------------------------------
 
+_AGENT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+
+
 class Config(BaseModel):
     config_version: str = "1.0"
     provider: Literal["claude", "openai", "ollama", "gemini"] = "claude"
@@ -246,6 +286,33 @@ class Config(BaseModel):
     voice: VoiceConfig = VoiceConfig()
     mcp_servers: dict[str, MCPServerConfig] = {}
     fallback_providers: list[str] = []
+    schema_version: int = SCHEMA_VERSION
+    agents: dict[str, AgentConfig] = {}  # absent = one agent "main" built from the fields above
+    routes: dict[str, str] = {}          # "telegram:-100123" or "discord:*" -> agent name
+    providers: dict[str, CustomProviderConfig] = {}
+
+    @model_validator(mode="after")
+    def _check_agents(self) -> Config:
+        known = {*BUILTIN, *PRESETS, *(n.lower() for n in self.providers)}
+
+        def check(where: str, spec: str) -> None:
+            name = spec.partition(":")[0].strip().lower()
+            if spec and name not in known:
+                raise ValueError(f"{where}: unknown provider '{name}' in '{spec}'. Known: {', '.join(sorted(known))}")
+
+        for name, agent in self.agents.items():
+            if not _AGENT_NAME.match(name):
+                raise ValueError(f"Agent name '{name}': use lowercase letters, digits, - and _ (at most 32).")
+            for role in ("model", "fast", "vision"):
+                check(f"agents.{name}.{role}", getattr(agent, role) or "")
+            for spec in agent.fallbacks or []:
+                check(f"agents.{name}.fallbacks", spec)
+        for key, target in self.routes.items():
+            if ":" not in key:
+                raise ValueError(f"Route '{key}': write it as platform:chat (telegram:-100123) or platform:* .")
+            if target != "main" and target not in self.agents:
+                raise ValueError(f"Route '{key}' points to agent '{target}', which is not in agents.")
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +384,7 @@ def config_exists() -> bool:
 def load_config() -> Config:
     """Load config from ~/.micropaw/config.json with env var overrides."""
     raw: dict = {}
+    on_disk = False  # raw came from a file that parsed
     _logger = logging.getLogger(__name__)
 
     if CONFIG_FILE.exists():
@@ -336,12 +404,22 @@ def load_config() -> Config:
 
         try:
             raw = json.loads(CONFIG_FILE.read_text())
+            on_disk = True
         except json.JSONDecodeError as e:
             _logger.warning("Config file corrupt, using defaults: %s", e)
         except OSError as e:
             _logger.warning("Config file unreadable, using defaults: %s", e)
 
-    # Migrate old email+calendar config → unified google config
+    if on_disk and raw.get("schema_version", 0) < SCHEMA_VERSION:
+        raw = _migrate_file(raw)
+    _apply_env_overrides(raw)
+    raw.pop("config_version", None)
+    return Config(**raw)
+
+
+def _migrate(raw: dict) -> dict:
+    """Bring an old config dict up to SCHEMA_VERSION. Pure: no file access."""
+    # v0 -> v1: email + calendar became one google block; config_version became schema_version
     if ("calendar" in raw or "email" in raw) and "google" not in raw:
         cal = raw.pop("calendar", {})
         email_cfg = raw.pop("email", {})
@@ -352,13 +430,26 @@ def load_config() -> Config:
             "gmail_enabled": email_cfg.get("enabled", False),
             "calendar_enabled": cal.get("enabled", False),
         }
-    # Clean stale keys
     raw.pop("calendar", None)
     raw.pop("email", None)
-
-    _apply_env_overrides(raw)
     raw.pop("config_version", None)
-    return Config(**raw)
+    raw["schema_version"] = SCHEMA_VERSION
+    return raw
+
+
+def _migrate_file(raw: dict) -> dict:
+    """Migrate, keeping a copy of the old file first. Files are written 0600. Read-only is fine: stay in memory."""
+    old_version = raw.get("schema_version", 0)
+    migrated = _migrate(raw)
+    backup = CONFIG_FILE.with_name(f"{CONFIG_FILE.name}.v{old_version}.bak")
+    try:
+        if not backup.exists():
+            _write_bytes(backup, CONFIG_FILE.read_bytes())
+        _write_private(migrated)
+        logging.getLogger(__name__).info("Config migrated to schema %d (old copy: %s)", SCHEMA_VERSION, backup)
+    except OSError as e:
+        logging.getLogger(__name__).warning("Could not write the migrated config: %s", e)
+    return migrated
 
 
 def save_config(config: Config) -> None:
@@ -366,16 +457,22 @@ def save_config(config: Config) -> None:
     _write_private(config.model_dump())
 
 
-def _write_private(data: dict) -> None:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    # Write with 0o600 from creation — avoid world-readable TOCTOU window
-    fd = os.open(str(CONFIG_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+def _write_bytes(path: Path, data: bytes) -> None:
+    """Write 0600 from creation (no world-readable window) through a temp file, then replace."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
         if hasattr(os, "fchmod"):
             os.fchmod(fd, 0o600)  # the mode above only applies when the file is new
-        os.write(fd, json.dumps(data, indent=2).encode())
+        os.write(fd, data)
     finally:
         os.close(fd)
+    os.replace(tmp, path)
+
+
+def _write_private(data: dict) -> None:
+    _write_bytes(CONFIG_FILE, json.dumps(data, indent=2).encode())
 
 
 def set_allowed_user(platform: str, user_id: str, remove: bool = False) -> list[str]:
