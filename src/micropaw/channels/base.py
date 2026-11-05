@@ -115,7 +115,7 @@ async def stream_response(
         if now - last_edit >= edit_interval:
             last_edit = now
             try:
-                await edit_fn(accumulated[:max_msg_len - 4] + " ...")
+                await edit_fn(strip_images(accumulated)[:max_msg_len - 4] + " ...")
             except Exception as e:
                 logger.debug("%s stream edit failed: %s", platform, e)
 

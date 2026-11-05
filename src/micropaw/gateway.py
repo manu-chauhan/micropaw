@@ -37,13 +37,14 @@ from micropaw.utils.redact import add_known_secret, config_secrets, redact, secr
 
 logger = logging.getLogger(__name__)
 
-is_local_url = privacy.is_local_url
+
+def is_local_url(url: str) -> bool:
+    return privacy.is_local_url(url)  # looked up on every call: stream A owns the policy behind it
 
 
 def _loopback(host: str) -> bool:
     name = (host.split("//")[-1].split("/")[0].rsplit(":", 1)[0]).strip("[]").lower()
     return name in ("localhost", "127.0.0.1", "::1", "0.0.0.0")
-
 
 
 def _redacting(on_chunk):

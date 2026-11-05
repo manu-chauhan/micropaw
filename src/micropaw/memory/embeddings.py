@@ -171,7 +171,7 @@ def offline_env() -> None:
 
 
 class LocalEmbedding(EmbeddingProvider):
-    """Local embeddings via fastembed/ONNX — no API key, runs on CPU, no PyTorch.
+    """Local embeddings via fastembed/ONNX: no API key, runs on CPU, no PyTorch.
 
     The model loads on the first message, not at start, and only from files already on this machine in
     local and airgapped mode. If it cannot load, embeddings stay off and the log says how to fix it.

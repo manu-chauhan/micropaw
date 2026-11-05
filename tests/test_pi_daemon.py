@@ -279,3 +279,14 @@ def test_install_scripts_compile_bytecode():
     root = Path(__file__).parents[1]
     assert "uv tool install --compile-bytecode" in (root / "install.sh").read_text()
     assert "uv tool install --compile-bytecode" in (root / "install.ps1").read_text()
+
+
+def test_bench_script_is_standard_library_only_and_prints_help():
+    script = Path(__file__).parents[1] / "scripts" / "bench.py"
+    import ast
+    imports = {n.names[0].name.split(".")[0] for n in ast.walk(ast.parse(script.read_text()))
+               if isinstance(n, ast.Import)} | {n.module.split(".")[0] for n in ast.walk(ast.parse(script.read_text()))
+                                                if isinstance(n, ast.ImportFrom) and n.module}
+    assert "micropaw" not in imports and "httpx" not in imports
+    r = subprocess.run([sys.executable, str(script), "--help"], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0 and "--idle" in r.stdout
