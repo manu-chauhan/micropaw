@@ -83,6 +83,7 @@ def _make_agent(provider: AIProvider, tools: list[Tool] | None = None) -> Agent:
     store.get_or_create_conversation = AsyncMock()
     store.get_messages = AsyncMock(return_value=[])
     store.save_message = AsyncMock()
+    store.save_messages = AsyncMock()
     store.get_recent_memories = AsyncMock(return_value=[])
     store.search_documents = AsyncMock(return_value=[])
     store.ingest_document = AsyncMock(return_value=0)
@@ -493,12 +494,12 @@ class TestToolResult:
         result = await agent.handle_message("take a screenshot", "user1", "terminal")
         assert result == "I can see the page."
         # Verify tool message was saved with media
-        save_calls = agent.store.save_message.call_args_list
-        tool_msgs = [c for c in save_calls if c[0][1].role == "tool"]
+        saved = [m for c in agent.store.save_messages.call_args_list for m in c[0][1]]
+        tool_msgs = [m for m in saved if m.role == "tool"]
         assert len(tool_msgs) == 1
-        assert tool_msgs[0][0][1].content == "Screenshot of example.com"
-        assert len(tool_msgs[0][0][1].media) == 1
-        assert tool_msgs[0][0][1].media[0].mime_type == "image/png"
+        assert tool_msgs[0].content == "Screenshot of example.com"
+        assert len(tool_msgs[0].media) == 1
+        assert tool_msgs[0].media[0].mime_type == "image/png"
 
     @pytest.mark.asyncio
     async def test_tool_returning_string_still_works(self):
@@ -514,8 +515,8 @@ class TestToolResult:
         agent = _make_agent(provider, tools=[EchoTool()])
         result = await agent.handle_message("echo hello", "user1", "terminal")
         assert result == "Got it."
-        save_calls = agent.store.save_message.call_args_list
-        tool_msgs = [c for c in save_calls if c[0][1].role == "tool"]
+        saved = [m for c in agent.store.save_messages.call_args_list for m in c[0][1]]
+        tool_msgs = [m for m in saved if m.role == "tool"]
         assert len(tool_msgs) == 1
-        assert tool_msgs[0][0][1].content == "echo: hello"
-        assert tool_msgs[0][0][1].media == []
+        assert tool_msgs[0].content == "echo: hello"
+        assert tool_msgs[0].media == []

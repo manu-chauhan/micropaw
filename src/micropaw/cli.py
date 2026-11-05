@@ -114,6 +114,7 @@ def _create_registry(config: Config):
     from micropaw.tools.pdf_read import PdfReadTool
     from micropaw.tools.sessions import SessionsTool
     from micropaw.tools.shell import ShellTool
+    from micropaw.tools.tool_output import ToolOutputTool
     from micropaw.tools.vision import VisionTool
     from micropaw.tools.web_browse import WebBrowseTool
     from micropaw.tools.web_search import WebSearchTool
@@ -128,7 +129,7 @@ def _create_registry(config: Config):
         ShellTool(), HttpRequestTool(), MemoryTool(), PdfReadTool(),
         VisionTool(), SessionsTool(), DelegateTool(), CronTool(),
         EmailTool(), CalendarTool(), ContactsTool(), FilesTool(),
-        ChannelSendTool(),
+        ChannelSendTool(), ToolOutputTool(),
     ]:
         if tool.name not in disabled:
             registry.register(tool)

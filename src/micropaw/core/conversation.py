@@ -71,11 +71,14 @@ class ConversationManager:
         return self._global_override or _DM_CONV_ID
 
     async def load_history(self, conversation_id: str, platform: str, user_id: str) -> list[Message]:
-        await self.store.get_or_create_conversation(conversation_id, platform, user_id)
+        await self.store.get_or_create_conversation(conversation_id, platform, user_id, commit=False)
         return sanitize_history(await self.store.get_messages(conversation_id, MAX_HISTORY))
 
     async def save_message(self, conversation_id: str, message: Message) -> None:
         await self.store.save_message(conversation_id, message)
+
+    async def save_messages(self, conversation_id: str, messages: list[Message]) -> None:
+        await self.store.save_messages(conversation_id, messages)
 
     def new_channel_session(self, platform: str, new_id: str) -> None:
         """Branch this channel into a fresh conversation (/new)."""
