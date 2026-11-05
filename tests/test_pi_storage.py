@@ -328,3 +328,29 @@ async def test_memory_tool_hides_local_memories_from_a_cloud_model(tmp_path):
     assert "kept at home" in await memory_tool.MemoryTool().execute({"action": "list"}, home)
     assert "kept at home" not in await memory_tool.MemoryTool().execute({"action": "search", "query": "home"}, cloud)
     await s.close()
+
+
+# --- a failover chain is local when every provider in it is ---
+
+def test_a_failover_chain_of_local_providers_is_local():
+    from micropaw.config import BudgetConfig
+    from micropaw.memory.ledger import LateLedger
+    from micropaw.providers.failover import FallbackProvider
+    from micropaw.providers.metered import meter
+    from micropaw.providers.ollama import OllamaProvider
+    from micropaw.utils.prices import is_local_provider
+
+    class Lan:
+        name, model, host = "lan", "m", "http://127.0.0.1:8080"
+
+    class Cloud:
+        name, model, host = "claude", "m", "https://api.anthropic.com"
+
+    local = OllamaProvider("http://localhost:11434", "m", 1000, 4096, "30m")
+    assert is_local_provider(FallbackProvider([local, Lan()]))
+    assert not is_local_provider(FallbackProvider([local, Cloud()]))  # a mixed chain may reach the cloud
+    assert not is_local_provider(FallbackProvider([Cloud(), local]))
+    metered = [meter(p, agent="main", role="chat", ledger=LateLedger(), budget=BudgetConfig()) for p in (local, Lan())]
+    assert is_local_provider(FallbackProvider(metered))
+    assert is_local_provider(meter(FallbackProvider([local, Lan()]), agent="main", role="chat",
+                                   ledger=LateLedger(), budget=BudgetConfig()))

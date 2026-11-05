@@ -96,7 +96,15 @@ def is_local(where: str) -> bool:
 
 
 def is_local_provider(provider: object) -> bool:
-    """True when this provider object talks to a local server (by name or by its base URL)."""
+    """True when this provider object talks to a local server (by name or by its base URL).
+    A failover chain is local only when every provider in it is."""
+    from micropaw.providers.failover import FallbackProvider
+    from micropaw.providers.metered import MeteredProvider
+
+    if isinstance(provider, MeteredProvider):
+        return is_local_provider(provider.inner)
+    if isinstance(provider, FallbackProvider):
+        return all(is_local_provider(p) for p in provider.providers)
     url = getattr(provider, "host", "") or getattr(provider, "_api_url", "") or getattr(provider, "base_url", "")
     if url:  # the address decides: a custom server named "vllm" that points at a cloud URL is not free
         return is_local(str(url))
