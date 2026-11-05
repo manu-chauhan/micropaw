@@ -19,7 +19,7 @@ _AGE = re.compile(r"^\s*(\d+)\s*([dw]?)\s*$", re.IGNORECASE)
 
 # Every table holding what was said, read or saved. Usage counts and scheduled jobs are not content.
 _TABLES = (
-    "messages_fts", "messages", "conversations", "memories", "document_chunks", "contacts",
+    "messages", "conversations", "memories", "document_chunks", "contacts",
     "email_seen", "email_runs", "chat_agent",
 )
 
@@ -69,6 +69,12 @@ def forget_all(db_file: Path, home: Path) -> list[str]:
         try:
             con.execute("PRAGMA secure_delete=ON")
             vec_ok = _load_vec(con)
+            for trigger in ("messages_fts_ai", "messages_fts_ad"):
+                con.execute(f"DROP TRIGGER IF EXISTS {trigger}")  # the next start makes them and the index again
+            try:
+                con.execute("DROP TABLE IF EXISTS messages_fts")  # its words sit in index blocks, not only in rows
+            except sqlite3.Error as e:  # SQLite without FTS5 cannot even open the table
+                problems.append(f"The search index was not cleared ({e}). It holds the words you wrote.")
             for table in _TABLES:
                 try:
                     con.execute(f"DELETE FROM {table}")

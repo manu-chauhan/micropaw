@@ -175,6 +175,11 @@ class MemoryStore:
                     f"CREATE TRIGGER IF NOT EXISTS messages_fts_{name} AFTER {event} ON messages "
                     f"WHEN {row}.role IN ('user', 'assistant') AND {row}.content != '' BEGIN {body}; END"
                 )
+            try:  # FTS5 keeps the words of deleted rows in its index until a merge, unless told to wipe them
+                await self.db.execute("INSERT INTO messages_fts(messages_fts, rank) VALUES('secure-delete', ?)",
+                                      (int(self.secure_delete),))
+            except Exception as e:  # SQLite older than 3.42: retention and forget merge the index instead
+                logger.debug("FTS5 secure-delete is not available: %s", e)
             if is_new:
                 async with self.db.execute("SELECT COALESCE(MAX(id), 0) FROM messages") as cur:
                     top = (await cur.fetchone())[0]
@@ -571,6 +576,13 @@ class MemoryStore:
             except aiosqlite.Error:
                 pass  # the scheduler has not made its tables yet
         await self.db.commit()
+        if self.has_fts:
+            try:
+                # merge the index, so old words do not stay in blocks of their own
+                await self.db.execute("INSERT INTO messages_fts(messages_fts) VALUES('optimize')")
+                await self.db.commit()
+            except aiosqlite.Error as e:
+                logger.debug("Search index merge skipped: %s", e)
         await self.compact_storage()
         return counts
 

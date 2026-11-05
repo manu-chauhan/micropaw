@@ -370,3 +370,66 @@ def test_a_database_made_by_forget_is_owner_only(home):
         assert stat.S_IMODE((home / "data.db").stat().st_mode) == 0o600
     finally:
         os.umask(old_umask)
+
+
+# --- the full-text index must not keep the words of deleted messages ---
+
+WORDS = (b"zebraquartz", b"flamingoxylo")  # plain lowercase words: the index stores tokens, not the original case
+
+
+async def _said(db: Path) -> MemoryStore:
+    store = MemoryStore(db)
+    await store.init()
+    await asyncio.gather(*store._tasks)
+    await store.get_or_create_conversation("dm:owner", "dm", "owner")
+    await store.save_messages("dm:owner", [Message(role="user", content="zebraquartz secret"),
+                                           Message(role="assistant", content="flamingoxylo")])
+    await store.checkpoint()
+    return store
+
+
+async def test_forget_all_removes_the_words_from_the_search_index(tmp_path):
+    db = tmp_path / "data.db"
+    store = await _said(db)
+    assert all(w in _raw(db) for w in WORDS)  # it was really written, in the index
+    await store.close()
+    assert storage.forget_all(db, tmp_path) == []
+    assert not any(w in _raw(db) for w in WORDS)
+    store = MemoryStore(db)  # the index comes back on the next start and still works
+    await store.init()
+    await store.save_messages("dm:owner", [Message(role="user", content="pineapple")])
+    assert await store.search_messages("pineapple")
+    await store.close()
+
+
+async def test_retention_removes_the_words_from_the_search_index(tmp_path):
+    db = tmp_path / "data.db"
+    store = await _said(db)
+    await store.db.execute("UPDATE messages SET created_at = datetime('now', '-40 days')")
+    await store.db.commit()
+    await store.purge_older_than(30)
+    await store.close()
+    assert not any(w in _raw(db) for w in WORDS)
+
+
+async def test_a_plain_delete_leaves_no_words_in_the_search_index(tmp_path):
+    db = tmp_path / "data.db"
+    store = await _said(db)
+    await store.db.execute("DELETE FROM messages WHERE conversation_id = 'dm:owner'")  # what sessions clear does
+    await store.checkpoint()
+    await store.close()
+    assert not any(w in _raw(db) for w in WORDS)
+
+
+async def test_an_old_database_gets_secure_delete_on_its_search_index(tmp_path):
+    db = tmp_path / "data.db"
+    store = await _said(db)
+    await store.db.execute("INSERT INTO messages_fts(messages_fts, rank) VALUES('secure-delete', 0)")  # as v0.3 made it
+    await store.db.commit()
+    await store.close()
+    store = MemoryStore(db)
+    await store.init()
+    await store.db.execute("DELETE FROM messages")
+    await store.checkpoint()
+    await store.close()
+    assert not any(w in _raw(db) for w in WORDS)
