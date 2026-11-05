@@ -17,9 +17,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 from xml.etree.ElementTree import fromstring
 
-import httpx
-
-from micropaw import privacy, webfetch
+from micropaw import net, privacy, webfetch
 from micropaw.providers.base import MediaItem
 from micropaw.security import validate_url
 from micropaw.tools.base import Tool, ToolContext, ToolResult
@@ -238,7 +236,7 @@ async def fetch_youtube_transcript(video_id: str) -> str:
         "Accept-Language": "en-US",
     }
 
-    async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=15.0) as client:
+    async with net.client("https://www.youtube.com", headers=headers, follow_redirects=True, timeout=15.0) as client:
         # 1. Get API key from video page
         page = await client.get(f"https://www.youtube.com/watch?v={video_id}")
         m = _INNERTUBE_KEY_RE.search(page.text)

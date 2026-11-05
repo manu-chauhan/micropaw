@@ -13,6 +13,7 @@ from typing import Any
 
 import httpx
 
+from micropaw import net
 from micropaw.channels.base import Channel, chunk_text
 from micropaw.utils.logger import short_hash
 
@@ -146,9 +147,10 @@ class WhatsAppChannel(Channel):
     async def _send(self, to: str, text: str) -> None:
         """Send a message via WhatsApp Cloud API."""
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            url = f"https://graph.facebook.com/{API_VERSION}/{self.phone_id}/messages"
+            async with net.client(url, timeout=15.0) as client:
                 resp = await client.post(
-                    f"https://graph.facebook.com/{API_VERSION}/{self.phone_id}/messages",
+                    url,
                     headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"},
                     json={
                         "messaging_product": "whatsapp",
