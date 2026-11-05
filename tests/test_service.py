@@ -404,13 +404,14 @@ def test_private_writers_open_in_binary_mode(tmp_path, monkeypatch):
     """Windows turns every 0x0A into 0D 0A without O_BINARY, which corrupts UTF-16 task XML."""
     from micropaw.tools import google_auth
 
-    monkeypatch.setattr(os, "O_BINARY", 0x8000, raising=False)
+    binary = getattr(os, "O_BINARY", 0x8000)  # the real flag on Windows, a stand-in elsewhere
+    monkeypatch.setattr(os, "O_BINARY", binary, raising=False)
     flags = []
     real_open = os.open
 
     def spy(path, f, *a, **k):
         flags.append(f)
-        return real_open(path, f & ~0x8000, *a, **k)
+        return real_open(path, f if os.name == "nt" else f & ~binary, *a, **k)
 
     monkeypatch.setattr(os, "open", spy)
     data = "<Task>\n<a/>\n</Task>\n".encode("utf-16")
@@ -419,7 +420,7 @@ def test_private_writers_open_in_binary_mode(tmp_path, monkeypatch):
     monkeypatch.setattr(google_auth, "_TOKEN_FILE", tmp_path / "tok.json")
     monkeypatch.setattr(google_auth, "CONFIG_DIR", tmp_path)
     google_auth._save_tokens({"a": 1})
-    assert len(flags) == 3 and all(f & 0x8000 for f in flags)
+    assert len(flags) == 3 and all(f & binary for f in flags)
     assert (tmp_path / "t.xml").read_bytes().decode("utf-16").count("\n") == 3
 
 

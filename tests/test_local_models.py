@@ -163,7 +163,7 @@ def test_macos_ram_comes_from_sysctl_once(monkeypatch):
     monkeypatch.setattr(ollama.sys, "platform", "darwin")
     monkeypatch.setattr(ollama.os, "name", "posix")
     monkeypatch.setattr(ollama.subprocess, "run", fake_run)
-    monkeypatch.setattr(ollama.os, "sysconf", lambda name: (_ for _ in ()).throw(ValueError(name)))
+    monkeypatch.setattr(ollama.os, "sysconf", lambda name: (_ for _ in ()).throw(ValueError(name)), raising=False)
     assert ollama.ram_bytes() == 16 * GIB and ollama.ram_bytes() == 16 * GIB
     assert calls == [["sysctl", "-n", "hw.memsize"]]
     ollama._mac_ram.cache_clear()
