@@ -474,6 +474,135 @@ def show_log(count):
     console.print(table)
 
 
+# ---------------------------------------------------------------------------
+# MCP subcommands
+# ---------------------------------------------------------------------------
+
+@main.group()
+def mcp():
+    """Manage MCP servers (extra tools from other programs)."""
+
+
+_SECRET_HEADER = ("auth", "key", "token", "secret", "cookie")
+
+
+@mcp.command(name="add")
+@click.argument("name")
+@click.argument("command", nargs=-1)
+@click.option("--url", default="", help="A streamable HTTP server instead of a command.")
+@click.option("--header", "headers", multiple=True, help="NAME=VALUE sent to the server. Use ${ENV_NAME} for secrets.")
+def mcp_add(name, command, url, headers):
+    """Add a server: a preset name, `-- COMMAND ARGS...`, or --url URL.
+
+    Example: paw mcp add rea -- npx -y rea-agents@1.2.3
+    """
+    import re
+    import shlex
+
+    from micropaw.config import MCPServerConfig, save_mcp_server
+    from micropaw.mcp import PRESETS
+
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", name):
+        raise click.BadParameter("use letters, digits, - and _ (at most 32)")
+    if command and url:
+        raise click.UsageError("Give a command or --url, not both.")
+    entry: dict = {"command": command[0], "args": list(command[1:])} if command else {"url": url} if url else {}
+    if not entry and name in PRESETS:
+        entry = dict(PRESETS[name])
+    if not entry:
+        presets = ", ".join(PRESETS) or "none yet"
+        raise click.UsageError(
+            f"Nothing to run. Presets: {presets}. Or: paw mcp add {name} -- COMMAND ARGS, or --url URL.")
+    for header in headers:
+        key, _, value = header.partition("=")
+        if not key or not value:
+            raise click.BadParameter(f"{header!r}: use NAME=VALUE")
+        if any(w in key.lower() for w in _SECRET_HEADER) and "${" not in value:
+            raise click.BadParameter(f"{key}: put the secret in an environment variable and write ${{ENV_NAME}}")
+        entry.setdefault("headers", {})[key] = value
+    cfg = MCPServerConfig(**entry)
+    if cfg.url:
+        console.print(f"This will connect to: {cfg.url}")
+        console.print("Its tools can return anything, so every call asks you first and counts as outside content.")
+    else:
+        console.print(f"This will run: {shlex.join([cfg.command, *cfg.args])}")
+        console.print("[yellow]It runs on this computer with your permissions. It is not sandboxed.[/yellow]")
+    if not click.confirm(f"Add '{name}'?", default=False):
+        console.print("Nothing was written.")
+        return
+    save_mcp_server(name, {**cfg.model_dump(exclude_defaults=True), "enabled": True})
+    console.print(f"[green]Added '{name}'.[/green] Its tool list is pinned at the first start. Try: paw mcp test {name}")
+
+
+@mcp.command(name="list")
+def mcp_list():
+    """Show configured MCP servers."""
+    servers = load_config().mcp_servers
+    if not servers:
+        console.print("[dim]No MCP servers. Add one with: paw mcp add NAME -- COMMAND ARGS[/dim]")
+        return
+    table = Table(title="MCP servers")
+    for column in ("Name", "Runs", "State", "Tool list"):
+        table.add_column(column)
+    for name, cfg in servers.items():
+        runs = cfg.url or " ".join([cfg.command, *cfg.args])
+        table.add_row(name, runs, "on" if cfg.enabled else "off", "pinned" if cfg.tools_hash else "not pinned yet")
+    console.print(table)
+
+
+def _mcp_server(name):
+    servers = load_config().mcp_servers
+    if name not in servers:
+        raise click.ClickException(f"No MCP server named '{name}'. See: paw mcp list")
+    return servers[name]
+
+
+@mcp.command(name="test")
+@click.argument("name")
+def mcp_test(name):
+    """Start one server and list its tools."""
+    from micropaw.mcp import MCPError, start_server
+
+    async def _run():
+        server, tools = await start_server(name, _mcp_server(name), timeout=180.0)
+        await server.close()
+        return tools
+
+    try:
+        tools = asyncio.run(_run())
+    except (OSError, MCPError) as e:
+        raise click.ClickException(f"'{name}' did not start: {e}") from None
+    console.print(f"[green]'{name}' started with {len(tools)} tools:[/green]")
+    for tool in tools:
+        console.print(f"  {tool.name}")
+
+
+@mcp.command(name="trust")
+@click.argument("name")
+def mcp_trust(name):
+    """Approve the tool list a server has now (after it changed)."""
+    from micropaw.config import pin_mcp_tools
+    from micropaw.mcp import MCPError, start_server
+
+    cfg = _mcp_server(name).model_copy(update={"tools_hash": ""})
+
+    async def _run():
+        server, tools = await start_server(name, cfg, timeout=180.0, pin=False)
+        await server.close()
+        return tools, server.digest
+
+    try:
+        tools, digest = asyncio.run(_run())
+    except (OSError, MCPError) as e:
+        raise click.ClickException(f"'{name}' did not start: {e}") from None
+    console.print(f"'{name}' now offers {len(tools)} tools:")
+    for tool in tools:
+        console.print(f"  {tool.name}: {tool.description[:160]}")
+    if click.confirm("Trust this tool list?", default=False):
+        pin_mcp_tools(name, digest)
+        console.print("[green]Trusted.[/green]")
+
+
 @main.group()
 def cron():
     """Manage scheduled tasks."""

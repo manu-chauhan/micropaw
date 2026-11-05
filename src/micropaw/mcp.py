@@ -37,6 +37,12 @@ _MAX_TOOLS = 128           # per server
 _MAX_DESCRIPTION = 1000    # characters, per tool
 
 
+# `paw mcp add <preset>` entries: {"command": ..., "args": [...pinned version...]}.
+# Empty on purpose: a preset needs a package name and a version confirmed on its primary page,
+# and research/05 confirms no version for REA, pyghidra-mcp or jadx-ai-mcp. Add them here when known.
+PRESETS: dict[str, dict] = {}
+
+
 class MCPError(Exception):
     pass
 
@@ -51,6 +57,7 @@ class MCPServer:
         self._pending: dict[int, asyncio.Future[Any]] = {}
         self._next_id = 0
         self._reader: asyncio.Task | None = None
+        self.digest = ""  # hash of the tool list, set by start_server
 
     async def _launch(self) -> None:
         from micropaw.tools.shell import _child_env
@@ -341,7 +348,7 @@ async def start_server(
     server = HTTPMCPServer(name, cfg) if cfg.url else MCPServer(name, cfg)
     try:
         specs = [s for s in await server.start(timeout) if s.get("name")]
-        digest = tools_digest(specs)
+        digest = server.digest = tools_digest(specs)
         if cfg.tools_hash and cfg.tools_hash != digest:
             raise MCPError(f"its tool list changed since you approved it; check it, then run: paw mcp trust {name}")
         if not cfg.tools_hash and pin:
