@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import base64
+import functools
 import logging
 import os
+import subprocess
+import sys
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass
@@ -24,6 +27,16 @@ from micropaw.providers.base import (
 logger = logging.getLogger(__name__)
 
 _GIB = 2**30
+
+
+@functools.cache
+def _mac_ram() -> int | None:
+    """macOS has no SC_PHYS_PAGES; ask sysctl once."""
+    try:
+        out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=2).stdout
+        return int(out.strip())
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
 
 
 def ram_bytes() -> int | None:
@@ -46,6 +59,8 @@ def ram_bytes() -> int | None:
             if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):  # type: ignore[attr-defined]
                 return None
             return int(status.ullTotalPhys)
+        if sys.platform == "darwin":
+            return _mac_ram()
         return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
     except (AttributeError, ValueError, OSError):
         return None
