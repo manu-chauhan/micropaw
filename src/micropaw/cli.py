@@ -298,11 +298,30 @@ def status():
     console.print(table)
 
 
-@main.command(name="privacy")
-def privacy_cmd():
+@main.group(name="privacy", invoke_without_command=True)
+@click.pass_context
+def privacy_cmd(ctx):
     """Show where your data goes: the mode, every model, search, channel and server, and file permissions."""
-    from micropaw import privacy_report
-    click.echo(privacy_report.render(load_config()))
+    if ctx.invoked_subcommand is None:
+        from micropaw import privacy_report
+        click.echo(privacy_report.render(load_config()))
+
+
+@privacy_cmd.command(name="share-history")
+@click.option("--yes", is_flag=True, help="Do not ask first.")
+def privacy_share_history(yes):
+    """Let cloud models see what was saved in local or air-gapped mode."""
+    from micropaw import storage
+    click.echo("Rows saved in local or air-gapped mode become sendable to cloud models.")
+    if not DB_FILE.exists():
+        click.echo("There is no saved history yet.")
+        return
+    if not yes and not click.confirm("Share it?", default=False):
+        click.echo("Nothing changed.")
+        return
+    counts = storage.share_local_history(DB_FILE)
+    click.echo(f"Shared: {counts['messages']} messages, {counts['memories']} memories, "
+               f"{counts['document_chunks']} document pieces, {counts['summaries']} summaries.")
 
 
 @main.command()

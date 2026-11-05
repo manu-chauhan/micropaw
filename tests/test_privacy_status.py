@@ -192,3 +192,41 @@ def test_the_upgrade_notice_shows_once_and_only_without_a_privacy_block(monkeypa
     (tmp_path / "config.json").write_text(json.dumps({"privacy": {"mode": "local"}}))
     cli._privacy_upgrade_notice()
     assert capsys.readouterr().out == ""
+
+
+def test_share_history_asks_says_what_it_does_and_prints_the_counts(monkeypatch, tmp_path):
+    import sqlite3
+
+    import micropaw.cli as cli
+    db = tmp_path / "data.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE messages (id INTEGER, local_only INTEGER)")
+    con.execute("CREATE TABLE memories (id INTEGER, local_only INTEGER)")
+    con.execute("CREATE TABLE document_chunks (id INTEGER, local_only INTEGER)")
+    con.execute("CREATE TABLE kv_meta (key TEXT PRIMARY KEY, value TEXT)")
+    con.executemany("INSERT INTO messages VALUES (?, 1)", [(1,), (2,)])
+    con.execute("INSERT INTO memories VALUES (1, 1)")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(cli, "DB_FILE", db)
+
+    def local_rows():
+        c = sqlite3.connect(db)
+        try:
+            return c.execute("SELECT COUNT(*) FROM messages WHERE local_only = 1").fetchone()[0]
+        finally:
+            c.close()
+
+    declined = CliRunner().invoke(main, ["privacy", "share-history"], input="n\n")
+    assert declined.exit_code == 0 and "become sendable to cloud models" in declined.output
+    assert "Nothing changed" in declined.output and local_rows() == 2
+    done = CliRunner().invoke(main, ["privacy", "share-history", "--yes"])
+    assert done.exit_code == 0 and "2 messages, 1 memories, 0 document pieces, 0 summaries" in done.output
+    assert local_rows() == 0
+
+
+def test_share_history_with_no_database_changes_nothing(monkeypatch, tmp_path):
+    import micropaw.cli as cli
+    monkeypatch.setattr(cli, "DB_FILE", tmp_path / "none.db")
+    r = CliRunner().invoke(main, ["privacy", "share-history", "--yes"])
+    assert r.exit_code == 0 and "no saved history" in r.output and not (tmp_path / "none.db").exists()
