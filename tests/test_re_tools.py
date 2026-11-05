@@ -214,3 +214,52 @@ def test_both_tools_are_registered():
     registry = _create_registry(Config())
     assert {"inspect", "har"} <= set(registry.names)
     assert registry.get("inspect").marks and registry.get("har").marks
+
+
+def test_hostile_har_makes_a_stub_that_runs_nothing(tmp_path, monkeypatch):
+    import sys
+    import types
+
+    monkeypatch.chdir(tmp_path)  # the payload would write here, relative to the working folder
+    marker = tmp_path / "pwned"
+    code = "open('pwned', 'w').write('x')"
+    entries = [
+        {"request": {"method": "GET", "url": "https://api.example.com/a/{" + code + "}/b", "headers": []},
+         "response": {"status": 200}},
+        {"request": {"method": "GET", "url": "https://api.example.com/q/%7Bos%7D/%22+print(1)+%22/{id}", "headers": []},
+         "response": {"status": 200}},
+        {"request": {"method": "POST", "url": "https://api.example.com/x\\\"\n__import__('os')", "headers": []},
+         "response": {"status": 200}},
+        {"request": {"method": 'GET"); ' + code + '; ("', "url": "https://api.example.com/m", "headers": []},
+         "response": {"status": 200}},
+    ]
+    out = summarize_har(json.dumps({"log": {"entries": entries}}))
+    stub = out.split("Python client stub (add your own auth headers):\n")[1]
+    calls = []
+
+    class FakeClient:
+        def __init__(self, **kw):
+            pass
+
+        def request(self, method, url, params=None):
+            calls.append((method, url))
+
+    fake = types.ModuleType("httpx")
+    fake.Client, fake.Response = FakeClient, object
+    monkeypatch.setitem(sys.modules, "httpx", fake)
+    ns: dict = {}
+    exec(compile(stub, "stub", "exec"), ns)  # noqa: S102  (the stub is the generated source under test)
+    client = ns["Client"]()
+    for name in dir(client):
+        fn = getattr(client, name)
+        if name.startswith(("get_", "post_")) and callable(fn):
+            fn(**{p: "7" for p in fn.__code__.co_varnames[1:fn.__code__.co_argcount]})
+    assert not marker.exists()
+    assert any("{" + code + "}" in url for _, url in calls)  # the braces came through as plain text
+    assert not any(m not in ("GET", "POST") for m, _ in calls)  # the odd method was dropped
+
+
+def test_har_stub_still_templates_ids():
+    stub = summarize_har(_har()).split("Python client stub (add your own auth headers):\n")[1]
+    assert "def get_v1_users(self, user_id, **params)" in stub
+    assert 'f"/v1/users/{user_id}"' in stub
