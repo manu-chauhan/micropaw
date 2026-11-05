@@ -107,10 +107,13 @@ class DelegateTool(Tool):
             job.add_done_callback(_tasks.discard)
             return f"Task delegated in background: {task[:80]}"
 
-        # Inline: block until done. Shares the turn's context, so approvals and the mark carry over.
+        # Inline: block until done. It runs on a copy of the turn's context, with the same approvals.
         inline = dataclasses.replace(context, local_data=context.local_data and is_local_provider(provider))
         agent = SubAgent(provider, registry=registry, tool_context=inline, max_iterations=_max_iterations)
-        return await agent.run(task)
+        try:
+            return await agent.run(task)
+        finally:
+            context.tainted = context.tainted or inline.tainted  # the reply may repeat what the helper saw
 
 
 async def _run_background(agent: SubAgent, task: str, channel: str, chat_id: str) -> None:
