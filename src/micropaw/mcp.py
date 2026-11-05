@@ -1,19 +1,25 @@
-"""MCP client: tools from Model Context Protocol servers (stdio), e.g. REA, GhidraMCP, blender-mcp.
+"""MCP client: tools from Model Context Protocol servers, e.g. REA, GhidraMCP, blender-mcp.
 
-Each server runs as a child process speaking JSON-RPC 2.0, one message per line. Its tools are
-registered as mcp_<server>_<tool>. Safety: servers get an environment without MicroPaw's keys,
-their output marks the conversation as outside content, and every call asks the owner unless
-the tool is listed in that server's `allow`.
+A server is either a child process speaking JSON-RPC 2.0, one message per line (`command`), or a
+streamable HTTP endpoint (`url`). Its tools are registered as mcp_<server>_<tool>. Safety: servers
+get an environment without MicroPaw's keys, their output marks the conversation as outside content,
+and every call asks the owner unless the tool is listed in that server's `allow`.
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
+import os
 import re
+import shutil
+from collections.abc import AsyncIterator, Callable
 from typing import Any
+
+import httpx
 
 from micropaw.config import MCPServerConfig
 from micropaw.providers.base import MediaItem
@@ -23,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 _PROTOCOL = "2025-06-18"
 _START_TIMEOUT = 60.0
+_BACKGROUND_START_TIMEOUT = 180.0  # first runs of npx -y or uvx download the package
 _MAX_OUTPUT = 50_000
 
 
@@ -41,23 +48,30 @@ class MCPServer:
         self._next_id = 0
         self._reader: asyncio.Task | None = None
 
-    async def start(self) -> list[dict]:
-        """Launch the server, do the handshake and return its tool definitions."""
+    async def _launch(self) -> None:
         from micropaw.tools.shell import _child_env
 
+        # which() honors PATHEXT, so "npx" finds npx.cmd on Windows
+        command = shutil.which(self.config.command)
+        if not command:
+            raise MCPError(f"command not found: {self.config.command}")
         self._proc = await asyncio.create_subprocess_exec(
-            self.config.command, *self.config.args,
+            command, *self.config.args,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             env={**_child_env(), **self.config.env},
             limit=16 * 1024 * 1024,  # tool results can be large single lines
         )
         self._reader = asyncio.create_task(self._read())
         asyncio.create_task(self._drain_stderr())
+
+    async def start(self, timeout: float = _START_TIMEOUT) -> list[dict]:
+        """Launch the server, do the handshake and return its tool definitions."""
+        await self._launch()
         try:
             await self.request("initialize", {
                 "protocolVersion": _PROTOCOL, "capabilities": {},
                 "clientInfo": {"name": "micropaw", "version": "0"},
-            }, timeout=_START_TIMEOUT)
+            }, timeout=timeout)
             await self._send({"jsonrpc": "2.0", "method": "notifications/initialized"})
         except MCPError as e:
             # Stateless servers (2026 spec) may have no handshake; tools/list decides
@@ -65,7 +79,7 @@ class MCPServer:
         tools: list[dict] = []
         cursor = None
         while True:
-            page = await self.request("tools/list", {"cursor": cursor} if cursor else {}, timeout=_START_TIMEOUT)
+            page = await self.request("tools/list", {"cursor": cursor} if cursor else {}, timeout=timeout)
             tools.extend(page.get("tools", []))
             cursor = page.get("nextCursor")
             if not cursor:
@@ -127,6 +141,123 @@ class MCPServer:
             self._reader.cancel()
 
 
+_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_MAX_BODY = 16 * 1024 * 1024
+
+
+def _expand_env(value: str) -> str:
+    """Replace ${NAME} with the environment variable NAME. Nothing else is expanded."""
+    def one(m: re.Match) -> str:
+        if m.group(1) not in os.environ:
+            raise MCPError(f"environment variable {m.group(1)} is not set")
+        return os.environ[m.group(1)]
+    return _ENV_REF.sub(one, value)
+
+
+async def _sse_data(resp: httpx.Response) -> AsyncIterator[str]:
+    """The data of each server-sent event in the response."""
+    lines: list[str] = []
+    async for line in resp.aiter_lines():
+        if line:
+            if line.startswith("data:"):
+                lines.append(line[5:].removeprefix(" "))
+        elif lines:
+            yield "\n".join(lines)
+            lines = []
+    if lines:
+        yield "\n".join(lines)
+
+
+class HTTPMCPServer(MCPServer):
+    """One MCP server over streamable HTTP: each message is a POST, the reply is JSON or an event stream."""
+
+    def __init__(self, name: str, config: MCPServerConfig) -> None:
+        super().__init__(name, config)
+        self._client: httpx.AsyncClient | None = None
+        self._session = ""
+        self._headers: dict[str, str] = {}
+
+    async def _launch(self) -> None:
+        from urllib.parse import urlparse
+
+        from micropaw.security import validate_url
+
+        if (urlparse(self.config.url).hostname or "").lower() not in _LOCAL_HOSTS:
+            if error := await validate_url(self.config.url):
+                raise MCPError(error)
+        self._headers = {k: _expand_env(v) for k, v in self.config.headers.items()}
+        self._client = httpx.AsyncClient(
+            follow_redirects=False, timeout=httpx.Timeout(self.config.timeout, connect=15.0),
+        )
+
+    async def _send(self, message: dict) -> None:
+        await self._post(message, None)
+
+    async def request(self, method: str, params: dict, timeout: float | None = None) -> Any:
+        if not self._client:
+            raise MCPError(f"server {self.name} is not running")
+        self._next_id += 1
+        message = {"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": params}
+        try:
+            return await asyncio.wait_for(self._post(message, self._next_id), timeout or self.config.timeout)
+        except TimeoutError:
+            raise MCPError(f"{method} timed out") from None
+        except httpx.HTTPError as e:
+            raise MCPError(f"{method} failed: {type(e).__name__}") from None
+
+    async def _post(self, message: dict, request_id: int | None) -> Any:
+        assert self._client
+        headers = {**self._headers, "Accept": "application/json, text/event-stream",
+                   "MCP-Protocol-Version": _PROTOCOL}
+        if self._session:
+            headers["Mcp-Session-Id"] = self._session
+        async with self._client.stream("POST", self.config.url, json=message, headers=headers) as resp:
+            self._session = resp.headers.get("mcp-session-id", self._session)
+            if resp.status_code >= 400:
+                raise MCPError(f"HTTP {resp.status_code}")
+            if request_id is None or resp.status_code == 202:
+                return {}
+            if resp.headers.get("content-type", "").startswith("text/event-stream"):
+                chunks = _sse_data(resp)
+            else:
+                body = bytearray()
+                async for chunk in resp.aiter_bytes():
+                    body += chunk
+                    if len(body) > _MAX_BODY:
+                        raise MCPError("reply too large")
+                chunks = _one(body.decode("utf-8", errors="replace"))
+            async for data in chunks:
+                try:
+                    parsed = json.loads(data)
+                except ValueError:
+                    continue
+                for msg in parsed if isinstance(parsed, list) else [parsed]:
+                    if "method" in msg:
+                        if "id" in msg:  # the server asks us something: not offered
+                            error = {"code": -32601, "message": "not supported by this client"}
+                            await self._post({"jsonrpc": "2.0", "id": msg["id"], "error": error}, None)
+                    elif msg.get("id") == request_id:
+                        if "error" in msg:
+                            raise MCPError(msg["error"].get("message", "error"))
+                        return msg.get("result", {})
+        raise MCPError("no answer in the reply")
+
+    async def close(self) -> None:
+        if self._client:
+            if self._session:
+                with contextlib.suppress(httpx.HTTPError):
+                    await self._client.delete(
+                        self.config.url, headers={**self._headers, "Mcp-Session-Id": self._session},
+                    )
+            await self._client.aclose()
+            self._client = None
+
+
+async def _one(text: str) -> AsyncIterator[str]:
+    yield text
+
+
 def _tool_name(server: str, tool: str) -> str:
     """Provider-safe and unique: letters, digits, _ and -, at most 64 characters."""
     return re.sub(r"[^A-Za-z0-9_-]", "_", f"mcp_{server}_{tool}")[:64]
@@ -172,21 +303,40 @@ class MCPTool(Tool):
         return ToolResult(text=text, media=media) if media else text
 
 
-async def start_servers(configs: dict[str, MCPServerConfig]) -> tuple[list[MCPServer], list[MCPTool]]:
-    """Start every enabled server; one that fails is logged and skipped."""
-    servers: list[MCPServer] = []
-    tools: list[MCPTool] = []
-    for name, cfg in configs.items():
-        if not cfg.enabled:
-            continue
-        server = MCPServer(name, cfg)
-        try:
-            specs = await server.start()
-        except (OSError, MCPError) as e:
-            logger.warning("MCP server '%s' did not start: %s", name, e)
-            await server.close()
-            continue
-        servers.append(server)
-        tools.extend(MCPTool(server, spec) for spec in specs if spec.get("name"))
-        logger.info("MCP server '%s': %d tools", name, len(specs))
-    return servers, tools
+async def _start_one(name: str, cfg: MCPServerConfig, timeout: float) -> tuple[MCPServer, list[MCPTool]] | None:
+    server = HTTPMCPServer(name, cfg) if cfg.url else MCPServer(name, cfg)
+    try:
+        specs = await server.start(timeout)
+    except (OSError, MCPError, httpx.HTTPError) as e:
+        logger.warning("MCP server '%s' did not start: %s", name, e)
+        await server.close()
+        return None
+    logger.info("MCP server '%s': %d tools", name, len(specs))
+    return server, [MCPTool(server, spec) for spec in specs if spec.get("name")]
+
+
+async def start_servers(
+    configs: dict[str, MCPServerConfig], timeout: float = _START_TIMEOUT,
+) -> tuple[list[MCPServer], list[MCPTool]]:
+    """Start every enabled server at once; one that fails is logged and skipped."""
+    started = await asyncio.gather(*(_start_one(n, c, timeout) for n, c in configs.items() if c.enabled))
+    servers = [r[0] for r in started if r]
+    return servers, [t for r in started if r for t in r[1]]
+
+
+def start_servers_background(
+    configs: dict[str, MCPServerConfig], on_ready: Callable[[MCPServer, list[MCPTool]], None],
+    timeout: float = _BACKGROUND_START_TIMEOUT,
+) -> asyncio.Task:
+    """Start servers without waiting: on_ready(server, tools) is called as each one comes up.
+
+    The caller keeps the returned task and closes the servers it was given at shutdown.
+    """
+    async def one(name: str, cfg: MCPServerConfig) -> None:
+        if result := await _start_one(name, cfg, timeout):
+            on_ready(*result)
+
+    async def run() -> None:
+        await asyncio.gather(*(one(n, c) for n, c in configs.items() if c.enabled))
+
+    return asyncio.create_task(run())

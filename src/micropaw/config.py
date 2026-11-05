@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 load_dotenv()
 
@@ -78,12 +78,20 @@ class ModelsConfig(BaseModel):
 class MCPServerConfig(BaseModel):
     """An MCP server MicroPaw starts as a child process. Pin versions in args (pkg@1.2.3)."""
 
-    command: str              # e.g. "npx", "uvx", "python"
+    command: str = ""         # e.g. "npx", "uvx", "python"; empty when `url` is set
+    url: str = ""             # streamable HTTP server instead of a child process
+    headers: dict[str, str] = {}  # sent with every request; ${ENV_NAME} is read from the environment
     args: list[str] = []
     env: dict[str, str] = {}  # only these are added; MicroPaw's own keys are never passed on
     allow: list[str] = []     # tool names that run without asking (until outside content is read)
     timeout: float = 300.0    # seconds per call; decompiling can be slow
     enabled: bool = True
+
+    @model_validator(mode="after")
+    def _needs_command_or_url(self) -> MCPServerConfig:
+        if not self.command and not self.url:
+            raise ValueError("an MCP server needs a command or a url")
+        return self
 
 
 class ProviderConfig(BaseModel):
@@ -207,6 +215,7 @@ class VoiceConfig(BaseModel):
 class SchedulerConfig(BaseModel):
     heartbeat_interval: int = 1800  # seconds (30 minutes)
     max_jobs: int = 50
+    email_poll_seconds: int = 300   # how often Gmail is checked for email-triggered tasks
 
 
 class GoogleConfig(BaseModel):
