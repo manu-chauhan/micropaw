@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from micropaw.config import Config, server_url
+from micropaw.config import SCHEMA_VERSION, Config, server_url
 from micropaw.providers import registry as registry_mod
 from micropaw.providers.registry import (
     BUILTIN,
@@ -175,6 +175,7 @@ def write_entry(name: str, url: str, kind: str, key_env: str, use: str, spec: st
     from micropaw.config import update_config_file
 
     def change(raw: dict) -> None:
+        raw.setdefault("schema_version", SCHEMA_VERSION)
         entry: dict = {"base_url": url}
         if kind == "ollama":
             entry["kind"] = "ollama"
@@ -366,6 +367,7 @@ class Endpoint:
     key_env: str = ""
     models: set[str] = field(default_factory=set)
     used_by: set[str] = field(default_factory=set)
+    optional: bool = False   # only memory search with embedding auto uses it: down is a warning, not a failure
 
 
 def doctor_endpoints(config: Config) -> list[Endpoint]:
@@ -374,8 +376,9 @@ def doctor_endpoints(config: Config) -> list[Endpoint]:
     registry = Registry(config)
     found: dict[tuple[str, int], Endpoint] = {}
 
-    def add(url: str, kind: str, key_env: str = "", model: str = "", role: str = "") -> None:
-        ep = found.setdefault(_hostport(url), Endpoint(url.rstrip("/"), kind, key_env))
+    def add(url: str, kind: str, key_env: str = "", model: str = "", role: str = "", optional: bool = False) -> None:
+        ep = found.setdefault(_hostport(url), Endpoint(url.rstrip("/"), kind, key_env, optional=optional))
+        ep.optional = ep.optional and optional  # a second use that needs it makes it required
         if model:
             ep.models.add(model)
         if role:
@@ -393,7 +396,8 @@ def doctor_endpoints(config: Config) -> list[Endpoint]:
                 kind = "ollama" if ep.kind == "ollama" else "openai"
                 add(provider_root(ep.base_url, kind), kind, ep.key_env, ep.model, f"{p.name} {role}")
     if config.embedding.enabled != "false" and config.embedding.provider in ("auto", "ollama"):
-        add(config.provider_config.ollama.host, "ollama", role="memory search")
+        add(config.provider_config.ollama.host, "ollama", role="memory search",
+            optional=config.embedding.enabled != "true" and config.embedding.provider == "auto")
     for spec, url, role in ((config.voice.stt, config.voice.stt_url, "speech to text"),
                             (config.voice.tts, config.voice.tts_url, "text to speech")):
         if spec.startswith("local:"):
@@ -403,6 +407,13 @@ def doctor_endpoints(config: Config) -> list[Endpoint]:
 
 async def _check(ep: Endpoint) -> tuple[str, str]:
     """(mark, detail) for one server. mark is pass, warn or fail."""
+    mark, detail = await _probe_endpoint(ep)
+    if mark == "fail" and ep.optional:
+        return "warn", detail + ". Not needed: memory search picks another method"
+    return mark, detail
+
+
+async def _probe_endpoint(ep: Endpoint) -> tuple[str, str]:
     key = os.environ.get(ep.key_env, "") if ep.key_env else ""
     scope = where(ep.url)
     if ep.kind == "speech":

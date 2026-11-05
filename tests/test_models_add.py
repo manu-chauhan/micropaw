@@ -329,3 +329,28 @@ def test_paw_doctor_prints_the_server_rows_and_quiet_skips_them(lan_home, monkey
     calls.clear()
     q = run("doctor", "--quiet")
     assert q.exit_code == 0 and q.output == "" and not calls
+
+
+def test_a_bad_range_fails_before_any_scan_starts(lan_home, monkeypatch):
+    called = []
+
+    async def spy(targets=None):
+        called.append(1)
+        return []
+
+    monkeypatch.setattr("micropaw.providers.registry.scan_local", spy)
+    r = run("models", "scan", "--range", "8.8.8.0/24")
+    assert r.exit_code != 0 and "Only private IPv4 ranges" in r.output and not called
+
+
+def test_doctor_calls_an_unused_ollama_for_memory_search_a_warning_not_a_failure(lan_home):
+    rows = asyncio.run(ms.doctor_rows(load_config()))
+    assert [r[1] for r in rows] == ["warn"] and "Not needed" in rows[0][2]
+    lan_home.write_text(json.dumps({"embedding": {"enabled": "true", "provider": "ollama"}}))
+    assert [r[1] for r in asyncio.run(ms.doctor_rows(load_config()))] == ["fail"]
+
+
+def test_the_first_saved_server_writes_a_schema_version(lan_home, model_server):
+    box = model_server()
+    run("models", "add", "box", f"127.0.0.1:{box.port}")
+    assert saved(lan_home)["schema_version"] == 1

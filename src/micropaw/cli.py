@@ -1175,6 +1175,7 @@ def scan(hosts, lan, net_range, yes):
     config = load_config()
     try:
         targets = modelscan.scan_targets(config, hosts)
+        network = modelscan.lan_range(net_range or None) if lan or net_range else None  # fail before any scan
     except ValueError as e:
         raise click.ClickException(str(e)) from None
     found, silent = asyncio.run(modelscan.run_scan(targets))
@@ -1205,16 +1206,12 @@ def scan(hosts, lan, net_range, yes):
                       "or start LM Studio's server (Developer tab).")
     elif ram and any(modelscan.is_loopback(s.url) for _, s in found):
         click.echo(f"Memory: {ram / 2**30:.0f} GB. Models up to 60% of that are suggested for this computer.")
-    if lan or net_range:
-        _scan_network(net_range or None, yes)
+    if network:
+        _scan_network(*network, yes)
 
 
-def _scan_network(cidr: str | None, yes: bool) -> None:
+def _scan_network(net, addresses: list[str], yes: bool) -> None:
     from micropaw import modelscan
-    try:
-        net, addresses = modelscan.lan_range(cidr)
-    except ValueError as e:
-        raise click.ClickException(str(e)) from None
     if not yes and not click.confirm(
             f"This sends one short connection attempt to {len(addresses)} addresses on {net}, ports "
             f"{modelscan.PORT_LIST}. Only scan a network you own or may scan. Continue?"):
@@ -1379,6 +1376,7 @@ def docs_add(folder):
 
     from micropaw import docsearch
     from micropaw.memory.store import MemoryStore
+    quiet_console()
 
     async def run() -> tuple[int, int, list[str]]:
         store = MemoryStore(DB_FILE)  # no embedder: nothing is sent anywhere
