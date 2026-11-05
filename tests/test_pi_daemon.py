@@ -13,6 +13,7 @@ import textwrap
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -76,7 +77,7 @@ def test_supervisor_watches_the_stop_file_every_15_seconds_on_windows(monkeypatc
             return None
 
     with monkeypatch.context() as m:
-        m.setattr(svc.os, "name", "nt")
+        m.setattr(svc, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
         assert asyncio.run(svc.supervise(Clean)) == 0
     assert started == [15.0]
 

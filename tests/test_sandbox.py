@@ -241,9 +241,9 @@ def test_skip_rules(monkeypatch):
     monkeypatch.setattr(sandbox, "resolve", lambda: Sandbox("seatbelt"))
     assert tool.needs_approval({"command": "ls"}, _ctx(**skip))  # experimental: always asks
     monkeypatch.setattr(sandbox, "resolve", lambda: Sandbox("none"))
-    monkeypatch.setattr(shell.os, "name", "nt")
+    monkeypatch.setattr(shell, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))  # not os.name itself: pathlib would build WindowsPath
     assert tool.needs_approval({"command": "ls"}, _ctx(**skip))  # Windows host: always asks
-    monkeypatch.setattr(shell.os, "name", "posix")
+    monkeypatch.setattr(shell, "os", os)
     assert tool.needs_approval({"command": "ls"}, _ctx(**skip)) is None
 
 
@@ -463,7 +463,7 @@ def test_auto_without_a_sandbox_always_asks_on_posix(monkeypatch):
     _cfg(sandbox="auto")
     sb = sandbox.resolve()
     assert sb.kind == "none" and sb.host_asks and not sb.error
-    monkeypatch.setattr(shell.os, "name", "posix")
+    monkeypatch.setattr(shell, "os", os)
     assert shell.ShellTool().needs_approval({"command": "ls"}, _ctx(confirm_dangerous=False))
     _cfg(sandbox="off")  # the owner chose "off": the old rule still applies
     assert shell.ShellTool().needs_approval({"command": "ls"}, _ctx(confirm_dangerous=False)) is None
@@ -578,7 +578,7 @@ def test_windows_timeout_uses_taskkill(monkeypatch):
         calls.append(argv)
         return Killer()
 
-    monkeypatch.setattr(shell.os, "name", "nt")
+    monkeypatch.setattr(shell, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
     monkeypatch.setattr(shell.asyncio, "create_subprocess_exec", fake_exec)
     asyncio.run(shell._kill_tree(Proc()))
     assert calls[0] == ("taskkill", "/T", "/F", "/PID", "4242") and calls[1] == "kill"
