@@ -30,18 +30,21 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
     created_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS email_runs (job_id INTEGER NOT NULL, ts REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS email_seen (
+    job_id INTEGER NOT NULL, msg_id TEXT NOT NULL, ts REAL NOT NULL, PRIMARY KEY (job_id, msg_id)
+);
 """
 
 # Added in v0.4; old databases get them with ALTER TABLE
 _NEW_COLUMNS = {
     "trigger": "TEXT DEFAULT 'time'",   # 'time' or 'email'
     "match": "TEXT DEFAULT ''",         # JSON rule for email jobs
-    "last_msg_id": "TEXT DEFAULT ''",   # newest Gmail message already handled
     "since": "REAL DEFAULT 0",          # only mail after this moment counts (set when the job is switched on)
 }
 
 _ADDRESS = re.compile(r"[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _RUNS_PER_HOUR, _RUNS_PER_DAY = 6, 30
+_SEEN_KEPT = 500  # handled message ids remembered per job
 _MAX_EMAIL_BODY = 20_000
 
 
@@ -203,7 +206,7 @@ class Scheduler:
     async def _poll_email(self, now: float) -> None:
         """Check Gmail for the enabled email jobs. Does nothing, not even a network call, when there are none."""
         async with self.db.execute(
-            "SELECT id, description, platform, chat_id, match, last_msg_id, since "
+            "SELECT id, description, platform, chat_id, match, since "
             "FROM cron_jobs WHERE enabled = 1 AND trigger = 'email'",
         ) as cur:
             jobs = await cur.fetchall()
@@ -220,7 +223,7 @@ class Scheduler:
                 logger.error("Email job #%d failed: %s", job[0], e)
 
     async def _check_mail(
-        self, job_id: int, description: str, platform: str, chat_id: str, match: str, last_id: str, since: float,
+        self, job_id: int, description: str, platform: str, chat_id: str, match: str, since: float,
     ) -> None:
         rule = json.loads(match)
         where = f'label:"{rule["label"]}"' if rule["label"] else "in:inbox"
@@ -228,7 +231,9 @@ class Scheduler:
         if rule["subject_contains"]:
             query += f' subject:"{rule["subject_contains"]}"'
         ids = await self.gmail.search(query, 10)  # newest first
-        fresh = ids[:ids.index(last_id)] if last_id in ids else ids
+        async with self.db.execute("SELECT msg_id FROM email_seen WHERE job_id = ?", (job_id,)) as cur:
+            seen = {row[0] for row in await cur.fetchall()}
+        fresh = [i for i in ids if i not in seen]  # an archived mail leaves the search; it must not re-run the rest
         for message_id in reversed(fresh):
             if not await self._room_for_run(job_id):
                 logger.warning("Email job #%d hit its run limit (%d an hour, %d a day); waiting",
@@ -242,7 +247,13 @@ class Scheduler:
                 logger.info("Email job #%d skipped message %s: %s", job_id, message_id, reason)
             else:
                 await self._run_for_email(job_id, description, platform, chat_id, message, header)
-            await self.db.execute("UPDATE cron_jobs SET last_msg_id = ? WHERE id = ?", (message_id, job_id))
+            await self.db.execute(
+                "INSERT OR IGNORE INTO email_seen (job_id, msg_id, ts) VALUES (?, ?, ?)",
+                (job_id, message_id, time.time()))
+            await self.db.execute(
+                "DELETE FROM email_seen WHERE job_id = ? AND rowid NOT IN "
+                "(SELECT rowid FROM email_seen WHERE job_id = ? ORDER BY rowid DESC LIMIT ?)",
+                (job_id, job_id, _SEEN_KEPT))
             await self.db.commit()
 
     @staticmethod
@@ -416,9 +427,8 @@ class Scheduler:
         """Turn a job on or off. Returns the job, or None if it doesn't exist."""
         # Switching on starts the clock again: mail that came in while the job was off does not count
         cur = await self.db.execute(
-            "UPDATE cron_jobs SET enabled = ?, since = CASE WHEN ? THEN ? ELSE since END, "
-            "last_msg_id = CASE WHEN ? THEN '' ELSE last_msg_id END WHERE id = ?",
-            (int(enabled), int(enabled), time.time(), int(enabled), job_id),
+            "UPDATE cron_jobs SET enabled = ?, since = CASE WHEN ? THEN ? ELSE since END WHERE id = ?",
+            (int(enabled), int(enabled), time.time(), job_id),
         )
         await self.db.commit()
         if cur.rowcount == 0:
@@ -427,6 +437,7 @@ class Scheduler:
 
     async def remove_job(self, job_id: int) -> bool:
         cur = await self.db.execute("DELETE FROM cron_jobs WHERE id = ?", (job_id,))
+        await self.db.execute("DELETE FROM email_seen WHERE job_id = ?", (job_id,))
         await self.db.commit()
         return cur.rowcount > 0
 
