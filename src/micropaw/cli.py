@@ -109,7 +109,9 @@ def _create_registry(config: Config):
     from micropaw.tools.file_read import FileReadTool
     from micropaw.tools.file_write import FileWriteTool
     from micropaw.tools.files_tool import FilesTool
+    from micropaw.tools.har_tool import HarTool
     from micropaw.tools.http_request import HttpRequestTool
+    from micropaw.tools.inspect_tool import InspectTool
     from micropaw.tools.memory_tool import MemoryTool
     from micropaw.tools.pdf_read import PdfReadTool
     from micropaw.tools.sessions import SessionsTool
@@ -128,7 +130,7 @@ def _create_registry(config: Config):
         ShellTool(), HttpRequestTool(), MemoryTool(), PdfReadTool(),
         VisionTool(), SessionsTool(), DelegateTool(), CronTool(),
         EmailTool(), CalendarTool(), ContactsTool(), FilesTool(),
-        ChannelSendTool(),
+        ChannelSendTool(), InspectTool(), HarTool(),
     ]:
         if tool.name not in disabled:
             registry.register(tool)
@@ -612,8 +614,14 @@ def cron():
 @click.argument("description")
 @click.option("--every", "interval", default=None, help="Recurring interval (e.g. 6h, 45m, 30s, 1d).")
 @click.option("--once", "once_delay", default=None, help="One-shot delay (e.g. 2h, 30m). Fires once then deletes.")
-def add(description, interval, once_delay):
+@click.option("--on-email", is_flag=True, help="Run for each new Gmail message from --from instead of on a timer.")
+@click.option("--from", "from_address", default="", help="Exact sender address (with --on-email).")
+@click.option("--subject-contains", default="", help="Words the subject must contain (with --on-email).")
+@click.option("--label", default="", help="Gmail label to search in (with --on-email).")
+def add(description, interval, once_delay, on_email, from_address, subject_contains, label):
     """Add a scheduled task."""
+    if on_email:
+        return _add_email_job(description, interval, once_delay, from_address, subject_contains, label)
     if not interval and not once_delay:
         console.print("[red]Provide --every (recurring) or --once (one-shot).[/red]")
         return
@@ -632,6 +640,34 @@ def add(description, interval, once_delay):
             job_id = await sched.add_job(description, seconds, one_shot=one_shot)
             kind = "one-shot" if one_shot else "recurring"
             console.print(f"[green]Created {kind} job #{job_id}: \"{description}\"[/green]")
+        except ValueError as e:
+            console.print(f"[red]{e}[/red]")
+        finally:
+            await sched.close()
+
+    asyncio.run(_add())
+
+
+def _add_email_job(description, interval, once_delay, from_address, subject_contains, label):
+    from micropaw.scheduler import Scheduler, email_rule
+
+    if interval or once_delay:
+        console.print("[red]--on-email does not take --every or --once.[/red]")
+        return
+    try:
+        rule = email_rule(from_address, subject_contains, label)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        return
+
+    async def _add():
+        sched = Scheduler(str(DB_FILE), handler=None, bus=None, channels=[])
+        await sched.init()
+        try:
+            job_id = await sched.add_job(description, 0, match=rule)
+            console.print(f"[green]Created email job #{job_id}: \"{description}\" for mail from {rule['from']}[/green]")
+            console.print("It runs unattended: it reads the email, summarizes it and reports to you. "
+                          "Anything that would change something is refused.")
         except ValueError as e:
             console.print(f"[red]{e}[/red]")
         finally:
@@ -661,8 +697,11 @@ def list_jobs():
             table.add_column("Next Run")
             table.add_column("State")
             for j in jobs:
-                kind = "once" if j["one_shot"] else f"every {_fmt(j['interval_seconds'])}"
-                next_dt = datetime.fromtimestamp(j["next_run_at"], tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
+                email = j["trigger"] == "email"
+                kind = ("on email from " + j["match"]["from"] if email
+                        else "once" if j["one_shot"] else f"every {_fmt(j['interval_seconds'])}")
+                next_dt = ("-" if email
+                           else datetime.fromtimestamp(j["next_run_at"], tz=UTC).strftime("%Y-%m-%d %H:%M UTC"))
                 state = "on" if j["enabled"] else f"paused (paw cron enable {j['id']})"
                 table.add_row(str(j["id"]), j["description"], kind, next_dt, state)
             console.print(table)

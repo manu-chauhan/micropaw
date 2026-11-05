@@ -206,3 +206,11 @@ async def test_har_tool_rules_and_errors(tmp_path):
     assert await tool.execute({"path": "empty.har"}, ctx) == "No requests found in this HAR file."
     assert (await tool.execute({"path": "missing.har"}, ctx)).startswith("Error: Not a file")
     assert (await tool.execute({"path": "~/.aws/credentials"}, ctx)).startswith("Error: Access denied")
+
+
+def test_both_tools_are_registered():
+    from micropaw.cli import _create_registry
+    from micropaw.config import Config
+    registry = _create_registry(Config())
+    assert {"inspect", "har"} <= set(registry.names)
+    assert registry.get("inspect").marks and registry.get("har").marks
