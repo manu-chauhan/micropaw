@@ -183,6 +183,20 @@ def _privacy_choices(questionary) -> list:
     ]
 
 
+def _ask_address(questionary, prompt: str, default: str = "", kind: str = "openai") -> str:
+    """Ask for a server address until it is one (three tries, then none). Returns the text as typed, "" for blank."""
+    for _ in range(3):
+        raw = (questionary.text(prompt, default=default).ask() or "").strip()
+        if not raw:
+            return ""
+        try:
+            server_url(raw, kind)
+            return raw
+        except ValueError as e:
+            console.print(f"[yellow]{e}[/yellow]")
+    return ""
+
+
 def _choose_privacy(questionary, config: Config) -> str:
     """The first question. Local is preselected when a model server already runs on this computer."""
     console.print("[dim]Looking for model servers on this computer...[/dim]")
@@ -198,8 +212,8 @@ def _choose_privacy(questionary, config: Config) -> str:
     hosts = questionary.text("Names or addresses on your network that count as local (comma-separated, optional):",
                              default=",".join(config.privacy.lan_hosts)).ask() or ""
     config.privacy.lan_hosts = [h.strip() for h in hosts.split(",") if h.strip()]
-    kiwix = (questionary.text("Kiwix server for offline Wikipedia and docs (address, optional):",
-                              default=config.search.kiwix_url).ask() or "").strip()
+    kiwix = _ask_address(questionary, "Kiwix server for offline Wikipedia and docs (address, optional):",
+                         config.search.kiwix_url)
     config.search.kiwix_url = server_url(kiwix) if kiwix else ""
     if kiwix:
         books = questionary.text("Kiwix book names to search (comma-separated, up to 5):",
@@ -207,8 +221,8 @@ def _choose_privacy(questionary, config: Config) -> str:
         config.search.kiwix_books = [b.strip() for b in books.split(",") if b.strip()][:5]
     own = ""
     if mode == "local":
-        own = (questionary.text("Your own SearXNG server for online search (address, optional):",
-                                default=config.search.searxng_url).ask() or "").strip()
+        own = _ask_address(questionary, "Your own SearXNG server for online search (address, optional):",
+                           config.search.searxng_url)
         config.search.searxng_url = server_url(own) if own else ""
         if own:
             config.search.proxy = (questionary.text("SOCKS proxy for it, such as Tor (optional, "
@@ -232,7 +246,7 @@ def _ask_search(questionary, config: Config) -> None:
     ).ask() or "off"
     config.search.provider = choice
     if choice == "searxng":
-        url = (questionary.text("Your SearXNG address:", default=config.search.searxng_url).ask() or "").strip()
+        url = _ask_address(questionary, "Your SearXNG address:", config.search.searxng_url)
         if url:
             config.search.searxng_url = server_url(url)
         else:
@@ -289,12 +303,10 @@ def _add_remote(questionary, config: Config, provider: str) -> None:
     from micropaw import modelscan
     from micropaw.providers.registry import pick_local
 
-    raw = (questionary.text("Address of the other computer (for example 192.168.1.50 or gpu-box.local):").ask() or "")
-    try:
-        url = server_url(raw)
-    except ValueError as e:
-        console.print(f"[yellow]{e}[/yellow]")
+    raw = _ask_address(questionary, "Address of the other computer (for example 192.168.1.50 or gpu-box.local):")
+    if not raw:
         return
+    url = server_url(raw)
     server = None
     if urlparse(url).port or "://" in raw:
         kind, server = asyncio.run(modelscan.detect(url, "auto"))
@@ -359,8 +371,8 @@ def _offer_lan_scan(questionary, config: Config, provider: str) -> None:
         console.print(f"No model server found on {net}.")
 
 
-def run_setup() -> None:
-    """Run the interactive setup wizard using questionary."""
+def run_setup(reset: bool = False) -> None:
+    """Run the interactive setup wizard using questionary. `reset` starts from defaults, keeping a .bak copy."""
     try:
         import questionary
     except ImportError:
@@ -374,7 +386,11 @@ def run_setup() -> None:
     ))
 
     # Load existing config to preserve API keys, channel tokens, etc.
-    config = load_config() if config_exists() else Config()
+    if reset and config_exists():
+        from micropaw.config import CONFIG_FILE
+        shutil.copy2(CONFIG_FILE, CONFIG_FILE.with_name(CONFIG_FILE.name + ".bak"))
+        console.print(f"[dim]The old settings are kept in {CONFIG_FILE.name}.bak[/dim]")
+    config = load_config() if config_exists() and not reset else Config()
 
     privacy_mode = _choose_privacy(questionary, config)
 
@@ -410,11 +426,9 @@ def run_setup() -> None:
         if api_key:
             getattr(config.provider_config, provider).api_key = api_key
     elif provider == "ollama":
-        host = questionary.text(
-            "Ollama host:", default=config.provider_config.ollama.host
-        ).ask()
+        host = _ask_address(questionary, "Ollama host:", config.provider_config.ollama.host, "ollama")
         if host:
-            config.provider_config.ollama.host = host
+            config.provider_config.ollama.host = server_url(host, "ollama")
 
     where = _ask_where(questionary, provider)
     _choose_models(questionary, config, provider, where)
@@ -541,11 +555,10 @@ def run_setup() -> None:
             # Prompt for API keys for cloud fallback providers
             for fb in fallbacks:
                 if fb == "ollama":
-                    host = questionary.text(
-                        "Ollama host for fallback:", default=config.provider_config.ollama.host
-                    ).ask()
+                    host = _ask_address(questionary, "Ollama host for fallback:",
+                                        config.provider_config.ollama.host, "ollama")
                     if host:
-                        config.provider_config.ollama.host = host
+                        config.provider_config.ollama.host = server_url(host, "ollama")
                 elif fb in ("claude", "openai", "gemini"):
                     existing_key = getattr(config.provider_config, fb).api_key
                     if existing_key:

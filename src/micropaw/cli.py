@@ -20,6 +20,7 @@ from micropaw.config import (
     CONFIG_FILE,
     DB_FILE,
     Config,
+    ConfigError,
     config_exists,
     display_config,
     load_config,
@@ -164,7 +165,17 @@ def _create_channels(config: Config) -> list:
 # CLI
 # ---------------------------------------------------------------------------
 
-@click.group()
+class PawGroup(click.Group):
+    """A bad config value is one plain line, not a traceback."""
+
+    def invoke(self, ctx):
+        try:
+            return super().invoke(ctx)
+        except ConfigError as e:
+            raise click.ClickException(str(e)) from None
+
+
+@click.group(cls=PawGroup)
 @click.version_option(version=__version__, prog_name="MicroPaw")
 def main():
     """MicroPaw — Your AI. Your machine. Your keys."""
@@ -172,10 +183,11 @@ def main():
 
 
 @main.command()
-def setup():
+@click.option("--reset", is_flag=True, help="Start from default settings. The old file is kept as config.json.bak.")
+def setup(reset):
     """Run the interactive setup wizard."""
     from micropaw.setup_wizard import run_setup
-    run_setup()
+    run_setup(reset=reset)
 
 
 @main.command()

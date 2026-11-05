@@ -12,7 +12,7 @@ from typing import Literal
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 from micropaw.providers.registry import BUILTIN, PRESETS
 
@@ -23,6 +23,10 @@ load_dotenv(CONFIG_DIR / ".env")  # keys for a service live here; values already
 CONFIG_FILE = CONFIG_DIR / "config.json"
 DB_FILE = CONFIG_DIR / "data.db"
 SCHEMA_VERSION = 1  # bump when a migration is added to _migrate()
+
+
+class ConfigError(Exception):
+    """The config file or an environment override holds a value that cannot be used. The text is for the user."""
 
 
 # ---------------------------------------------------------------------------
@@ -532,7 +536,13 @@ def load_config() -> Config:
         raw = _migrate_file(raw)
     _apply_env_overrides(raw)
     raw.pop("config_version", None)
-    return Config(**raw)
+    try:
+        return Config(**raw)
+    except ValidationError as e:
+        first = e.errors()[0]
+        where = ".".join(str(part) for part in first["loc"])
+        raise ConfigError(f"The config file {CONFIG_FILE} has a problem at '{where}': "
+                          f"{first['msg'].removeprefix('Value error, ')}. Fix it, or run: paw setup --reset") from None
 
 
 def _migrate(raw: dict) -> dict:
