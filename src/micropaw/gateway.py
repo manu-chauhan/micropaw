@@ -224,6 +224,8 @@ class Gateway:
     async def start(self) -> None:
         """Initialize everything and start all channels."""
         set_known_secrets(config_secrets(self.config))
+        from micropaw.tools import sandbox
+        sandbox.configure(self.config.permissions)
         # Create embedding provider (auto-detect or explicit)
         embedding_provider = await self._create_embedding_provider()
 
@@ -273,13 +275,18 @@ class Gateway:
         from micropaw.tools.channel_send import set_channel_send_deps
         set_channel_send_deps(self._bus)
 
-        # MCP servers add their tools before the agent sees the registry
-        from micropaw.mcp import start_servers
-        self._mcp_servers, mcp_tools = await start_servers(self.config.mcp_servers)
+        # MCP servers start in the background; their tools join the registry as each one is ready
+        from micropaw.mcp import start_servers_background
+        self._mcp_servers = []
         disabled = set(self.config.permissions.disabled_tools)
-        for tool in mcp_tools:
-            if tool.name not in disabled:
-                self.registry.register(tool)
+
+        def _mcp_ready(server, tools) -> None:
+            self._mcp_servers.append(server)
+            for tool in tools:
+                if tool.name not in disabled:
+                    self.registry.register(tool)
+
+        self._mcp_task = start_servers_background(self.config.mcp_servers, _mcp_ready)
 
         # Init agent
         self.agent = Agent(self.config, self.provider, self.registry, self.store)
@@ -348,6 +355,7 @@ class Gateway:
             str(DB_FILE), self._handle_message, self._bus, self.channels,
             heartbeat_interval=self.config.scheduler.heartbeat_interval,
             max_jobs=self.config.scheduler.max_jobs,
+            email_poll_seconds=self.config.scheduler.email_poll_seconds, store=self.store,
         )
         await self._scheduler.init()
         self._scheduler_task: asyncio.Task | None = asyncio.create_task(self._scheduler.run())
@@ -659,6 +667,7 @@ class Gateway:
             self._bus.close()
         await self._cancel_task(getattr(self, "_bus_task", None))
 
+        await self._cancel_task(getattr(self, "_mcp_task", None))
         for server in getattr(self, "_mcp_servers", []):
             await server.close()
 

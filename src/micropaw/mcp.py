@@ -358,6 +358,9 @@ async def start_server(
     except (OSError, MCPError, httpx.HTTPError) as e:
         await server.close()
         raise (e if isinstance(e, (OSError, MCPError)) else MCPError(type(e).__name__)) from None
+    except asyncio.CancelledError:  # shutdown while starting: don't leave the child process running
+        await server.close()
+        raise
     logger.info("MCP server '%s': %d tools", name, len(specs))
     return server, [MCPTool(server, spec) for spec in specs]
 
