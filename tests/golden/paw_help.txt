@@ -1,0 +1,33 @@
+Usage: paw [OPTIONS] COMMAND [ARGS]...
+
+  MicroPaw — Your AI. Your machine. Your keys.
+
+Options:
+  --version  Show the version and exit.
+  --help     Show this message and exit.
+
+Commands:
+  agent    Named agents: each has its own model, persona and tools.
+  allow    Let one of your own accounts use the assistant.
+  chat     Start a terminal-only chat session.
+  config   Show current configuration (redacted).
+  connect  Connect a messaging channel (Telegram, Discord, Slack, WhatsApp,...
+  cron     Manage scheduled tasks.
+  docs     Your own documents, searched offline.
+  doctor   Run diagnostics and check system health.
+  export   Export conversation history.
+  extras   Optional features (channels, PDF, browser, embeddings).
+  forget   Delete what MicroPaw remembers, and overwrite the space it used.
+  goal     Work on a goal in rounds in a terminal chat, until the check...
+  log      Show recent tool calls and approvals (the audit log).
+  mcp      Manage MCP servers (extra tools from other programs).
+  models   See, find and test the models MicroPaw can use.
+  privacy  Show where your data goes: the mode, every model, search,...
+  reset    Reset all configuration and data.
+  service  Run MicroPaw in the background and start it at login.
+  setup    Run the interactive setup wizard.
+  start    Start the gateway with all enabled channels.
+  status   Show system status.
+  test     Test connectivity to all configured channels and AI provider.
+  update   Show the latest version and upgrade the way MicroPaw was installed.
+  usage    Show model usage and spend by day, agent and model.

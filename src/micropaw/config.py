@@ -14,8 +14,6 @@ from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
-from micropaw.providers.registry import BUILTIN, PRESETS
-
 load_dotenv()
 
 CONFIG_DIR = Path(os.environ.get("MICROPAW_HOME") or Path.home() / ".micropaw")
@@ -621,6 +619,9 @@ class Config(_Model):
     display: DisplayConfig = _sub(DisplayConfig)
 
     def _check(self) -> None:
+        if not (self.agents or self.routes):
+            return
+        from micropaw.providers.registry import BUILTIN, PRESETS  # loads httpx; only needed to check agents
         known = {*BUILTIN, *PRESETS, *(n.lower() for n in self.providers)}
 
         def check(where: str, spec: str) -> None:
