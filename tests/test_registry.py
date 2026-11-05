@@ -155,3 +155,17 @@ def test_role_providers_are_metered_around_the_shared_provider():
 
 def test_registry_model_dump_roundtrip():
     assert json.loads(Config().model_dump_json())["providers"] == {}
+
+
+@pytest.mark.parametrize("url,local", [("http://100.101.102.103:11434", True), ("http://100.128.0.1:11434", False)])
+def test_tailscale_range_is_local_and_the_edge_of_it_is_not(url, local):
+    assert is_local_url(url) is local
+
+
+def test_one_server_written_two_ways_shares_one_gate():
+    c = Config(provider_config={"ollama": {"host": "192.168.1.50"}},
+               providers={"box": {"base_url": "http://192.168.1.50:11434/v1"}})
+    reg = Registry(c)
+    a, b = reg.resolve("ollama:m"), reg.resolve("box:m")
+    assert reg._sem(a) is reg._sem(b)
+    assert reg._sem(a) is not reg._sem(reg.resolve("claude:x"))

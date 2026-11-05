@@ -14,11 +14,12 @@ from html import unescape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 from xml.etree.ElementTree import fromstring
 
 import httpx
 
+from micropaw import privacy, webfetch
 from micropaw.providers.base import MediaItem
 from micropaw.security import validate_url
 from micropaw.tools.base import Tool, ToolContext, ToolResult
@@ -28,9 +29,17 @@ logger = logging.getLogger(__name__)
 
 MAX_CONTENT = 20_000
 
-# Shared browser instance (lazy init)
+# Shared browser instance (lazy init). It closes after IDLE_SECONDS without a web_browse call in any chat.
 _browser = None
 _playwright = None
+IDLE_SECONDS = 600.0
+_idle_timer: asyncio.TimerHandle | None = None
+_expired: set[str] = set()  # chats whose page was closed for idling: the next click says so
+# Chromium's own background traffic (updates, sync, pings) is off in every mode
+_BROWSER_ARGS = ["--disable-background-networking", "--disable-component-update", "--disable-sync",
+                 "--no-pings", "--disable-domain-reliability"]
+# Local mode: hosts the owner approved, per chat. The page can load nothing from anywhere else.
+_approved_hosts: dict[str, set[str]] = {}
 
 # YouTube URL patterns — matches watch, short URLs, and Shorts
 _YT_PATTERN = re.compile(
@@ -49,13 +58,45 @@ async def _get_browser():
         except ImportError:
             raise RuntimeError("Playwright is not installed. Run: paw extras add browser")
         _playwright = await async_playwright().start()
-        _browser = await _playwright.chromium.launch(headless=True)
+        launch: dict[str, Any] = {"headless": True, "args": _BROWSER_ARGS}
+        if privacy.local_only() and webfetch.proxy():
+            launch["proxy"] = {"server": webfetch.proxy()}
+        _browser = await _playwright.chromium.launch(**launch)
     return _browser
+
+
+def _touch() -> None:
+    """Restart the idle timer: Chromium and the open pages go away after IDLE_SECONDS of no use."""
+    global _idle_timer
+    if _idle_timer is not None:
+        _idle_timer.cancel()
+    _idle_timer = asyncio.get_running_loop().call_later(
+        IDLE_SECONDS, lambda: asyncio.ensure_future(_close_idle()))
+
+
+async def _close_idle() -> None:
+    global _idle_timer
+    _idle_timer = None
+    for conv_id in list(_sessions):
+        _expired.add(conv_id)
+        await close_session(conv_id)
+    await cleanup_browser()
+
+
+def _mode_refusal() -> str | None:
+    if privacy.airgapped():
+        return "Error: web_browse is off in air-gapped mode."
+    if privacy.local_only() and not webfetch.allowed("web_browse"):
+        return "Error: web_browse is off in local mode. Add web_browse to privacy.allow in the config to turn it on."
+    return None
 
 
 async def cleanup_browser():
     """Clean up the browser on shutdown."""
-    global _browser, _playwright
+    global _browser, _playwright, _idle_timer
+    if _idle_timer is not None:
+        _idle_timer.cancel()
+        _idle_timer = None
     if _browser:
         await _browser.close()
         _browser = None
@@ -73,6 +114,13 @@ async def _get_session(conv_id: str, url: str | None = None) -> Any:
     if conv_id not in _sessions:
         browser = await _get_browser()
         ctx = await browser.new_context()
+        if privacy.local_only():
+            async def only_approved(route: Any) -> None:
+                host = urlparse(route.request.url).hostname or ""
+                ok = route.request.url.startswith(("data:", "about:")) or host in _approved_hosts.get(conv_id, ())
+                await (route.continue_() if ok else route.abort())
+
+            await ctx.route("**/*", only_approved)
         page = await ctx.new_page()
         _sessions[conv_id] = (ctx, page)
     _ctx, page = _sessions[conv_id]
@@ -102,6 +150,7 @@ async def close_session(conv_id: str) -> None:
     if server := _previews.pop(conv_id, None):
         await asyncio.to_thread(server.shutdown)
         server.server_close()
+    _approved_hosts.pop(conv_id, None)
     if conv_id in _sessions:
         ctx, _page = _sessions.pop(conv_id)
         try:
@@ -308,12 +357,31 @@ class WebBrowseTool(Tool):
         "required": [],
     }
 
+    def needs_approval(self, args: dict[str, Any], context: ToolContext) -> str | None:
+        """Local mode: every page, with the cleaned address. Normal mode: once outside content was read."""
+        if args.get("action", "browse") != "browse" or _mode_refusal() or not args.get("url"):
+            return None
+        if privacy.mode() == "normal" and not context.marked:
+            return None
+        url = webfetch.clean_url(str(args["url"]))
+        route = f"through {webfetch.proxy().split('@')[-1]}" if privacy.local_only() and webfetch.proxy() else "direct"
+        odd = webfetch.odd_segments(url)
+        return f"Open {url} in the browser ({route})" + (f"\nLong parts that could carry data: {', '.join(odd)}"
+                                                         if odd else "")
+
     async def execute(self, args: dict[str, Any], context: ToolContext) -> str | ToolResult:
         if not context.allow_web_browse:
             return "Error: Web browsing is not enabled."
 
         action = args.get("action", "browse")
         conv_id = context.conversation_id
+        if action == "browse" and (refusal := _mode_refusal()):
+            return refusal
+        _touch()
+        if conv_id in _expired and conv_id not in _sessions:
+            if action in ("click", "type", "scroll", "screenshot"):
+                return "Error: the browser session expired after sitting idle. Open the page again with 'browse'."
+            _expired.discard(conv_id)
 
         try:
             if action == "browse":
@@ -341,11 +409,14 @@ class WebBrowseTool(Tool):
             return "Error: 'browse' action requires 'url'."
         extract = args.get("extract", "text")
 
+        url = webfetch.clean_url(url)
         if error := await validate_url(url):
             return f"Error: {error}"
+        if privacy.local_only():
+            _approved_hosts.setdefault(conv_id, set()).add(urlparse(url).hostname or "")
 
-        # Smart YouTube detection
-        yt_match = _YT_PATTERN.search(url)
+        # Smart YouTube detection. In local mode its own requests would skip the approval, so the page is browsed.
+        yt_match = None if privacy.local_only() else _YT_PATTERN.search(url)
         if yt_match and extract == "text":
             try:
                 transcript = await fetch_youtube_transcript(yt_match.group(1))

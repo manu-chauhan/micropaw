@@ -51,6 +51,8 @@ def build_registry(config: Config) -> ToolRegistry:
     disabled = set(config.permissions.disabled_tools)
     if disabled:
         logger.info("Disabled tools: %s", ", ".join(sorted(disabled)))
+    from micropaw import webfetch
+    disabled |= webfetch.tools_off_by_mode(config)
     registry = ToolRegistry()
     for name, (module, cls) in _TOOLS.items():
         if name not in disabled and _wanted(name, config):

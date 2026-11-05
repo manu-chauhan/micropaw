@@ -1,17 +1,21 @@
-"""Voice notes to text, and replies to speech, through OpenAI-style endpoints (local or hosted)."""
+"""Voice notes to text, and replies to speech, through OpenAI-style endpoints (local, on the network, or hosted)."""
 
 from __future__ import annotations
 
 import logging
 import os
 import re
+from urllib.parse import urlparse
 
 import httpx
 
+from micropaw import net
 from micropaw.config import Config
 from micropaw.providers.registry import PRESETS
 
 logger = logging.getLogger(__name__)
+
+SPEECH_TIMEOUT = httpx.Timeout(120.0, connect=5.0)  # a sleeping box fails in 5 s, a long recording still finishes
 
 
 def _resolve(spec: str, local_url: str, config: Config, hosted: bool) -> tuple[str, str, str] | None:
@@ -23,6 +27,10 @@ def _resolve(spec: str, local_url: str, config: Config, hosted: bool) -> tuple[s
         return local_url, "", model
     if name == "openai" and config.provider_config.openai.api_key:
         return config.provider_config.openai.base_url, config.provider_config.openai.api_key, model
+    entry = {k.lower(): v for k, v in config.providers.items()}.get(name)
+    if entry:  # a server added with `paw models add`, for example "desktop:whisper-large-v3"
+        key = os.environ.get(entry.api_key_env, "") if entry.api_key_env else ""
+        return (entry.base_url, key, model) if key or not entry.api_key_env else None
     if hosted and name in PRESETS:
         key_env = PRESETS[name].key_env
         key = os.environ.get(key_env, "") if key_env else ""
@@ -37,7 +45,7 @@ def _endpoint(config: Config) -> tuple[str, str, str] | None:
 
 
 def tts_endpoint(config: Config) -> tuple[str, str, str] | None:
-    """(base_url, api_key, model) for config.voice.tts: OpenAI or a local server only."""
+    """(base_url, api_key, model) for config.voice.tts: OpenAI, a local server or one you added."""
     return _resolve(config.voice.tts, config.voice.tts_url, config, hosted=False)
 
 
@@ -45,6 +53,16 @@ def _audio_url(base_url: str, path: str = "audio/transcriptions") -> str:
     """The endpoint URL. A base URL that already ends in a version ("/v1") is not given a second one."""
     base = base_url.rstrip("/")
     return f"{base}/{path}" if re.search(r"/v\d+$", base) else f"{base}/v1/{path}"
+
+
+def unheard_note(config: Config) -> str:
+    """What to tell the chat when a voice note produced no text."""
+    endpoint = _endpoint(config)
+    if endpoint is None:
+        return ("I got a voice note but can't transcribe it: speech-to-text isn't set up. "
+                "Set voice.stt in the config, for example 'local:whisper' with a local Whisper server.")
+    host = urlparse(endpoint[0]).netloc
+    return f"I could not reach the speech server at {host}, so I could not hear that voice note."
 
 
 async def transcribe(data: bytes, mime_type: str, config: Config) -> str | None:
@@ -56,7 +74,7 @@ async def transcribe(data: bytes, mime_type: str, config: Config) -> str | None:
     ext = mime_type.split("/")[-1].split(";")[0] or "ogg"
     headers = {"Authorization": f"Bearer {key}"} if key else {}
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with net.client(base_url, timeout=SPEECH_TIMEOUT) as client:
             resp = await client.post(
                 _audio_url(base_url),
                 headers=headers, data={"model": model}, files={"file": (f"voice.{ext}", data, mime_type)},
@@ -95,7 +113,7 @@ async def synthesize(text: str, config: Config) -> tuple[bytes, str] | None:
     headers = {"Authorization": f"Bearer {key}"} if key else {}
     body = {"model": model, "input": text[:TTS_MAX_CHARS], "voice": voice, "response_format": "opus"}
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with net.client(base_url, timeout=SPEECH_TIMEOUT) as client:
             resp = await client.post(_audio_url(base_url, "audio/speech"), headers=headers, json=body)
             resp.raise_for_status()
             data = resp.content

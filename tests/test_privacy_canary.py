@@ -255,7 +255,7 @@ def test_airgapped_gateway_turn_makes_no_outside_connection(tmp_path, listener, 
         assert results["lan_listener"] == "ok" and b"lan" in lan.said
 
     # the turn ran, with the tools that are allowed in this mode
-    assert results["mcp_started"] and results["reply"].strip() == "canary done"
+    assert results["mcp_started"] and results["reply"].strip().splitlines()[0] == "canary done"
     assert "http_request" not in results["tools"] and "web_browse" not in results["tools"]
     assert {"shell", "memory", "web_search"} <= set(results["tools"])
 

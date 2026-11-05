@@ -7,8 +7,9 @@ from click.testing import CliRunner
 
 import micropaw.config as config_mod
 from micropaw.cli import main
+from micropaw.modelscan import Server
 from micropaw.providers.base import AIProvider, AIResponse, ToolCall
-from micropaw.providers.registry import LocalModel, LocalServer, Registry
+from micropaw.providers.registry import LocalModel, Registry
 
 
 def run(*args):
@@ -25,9 +26,9 @@ def test_models_list_shows_agents_and_presets(tmp_path, monkeypatch):
 
 def test_models_scan_prints_servers_and_a_suggestion(monkeypatch):
     async def fake(targets=None):
-        return [LocalServer("ollama", "http://127.0.0.1:11434", [LocalModel("qwen", 5_000_000_000)])]
+        return [Server("ollama", "http://127.0.0.1:11434", [LocalModel("qwen", 5_000_000_000)])]
 
-    monkeypatch.setattr("micropaw.providers.registry.scan_local", fake)
+    monkeypatch.setattr("micropaw.modelscan.scan_many", fake)
     r = run("models", "scan")
     assert "ollama:qwen" in r.output and "Suggested main model" in r.output
 
@@ -36,7 +37,7 @@ def test_models_scan_with_nothing_found_points_to_ollama(monkeypatch):
     async def fake(targets=None):
         return []
 
-    monkeypatch.setattr("micropaw.providers.registry.scan_local", fake)
+    monkeypatch.setattr("micropaw.modelscan.scan_many", fake)
     assert "https://ollama.com/download" in run("models", "scan").output
 
 

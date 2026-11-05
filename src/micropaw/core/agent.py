@@ -414,8 +414,8 @@ class Agent:
         if media:
             text, images = await self._read_media(text, media)
             if not text and not images:
-                return ("I got a voice note but can't transcribe it: speech-to-text isn't set up. "
-                        "Set voice.stt in the config, for example 'local:whisper' with a local Whisper server.")
+                from micropaw.utils.voice import unheard_note
+                return unheard_note(self.config)
             text = text or "(sent a photo)"
         from micropaw.tools.channel_send import reset_send_count
         reset_send_count()

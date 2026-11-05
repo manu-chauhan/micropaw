@@ -9,9 +9,10 @@ import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 from micropaw.providers.registry import BUILTIN, PRESETS
 
@@ -22,6 +23,53 @@ load_dotenv(CONFIG_DIR / ".env")  # keys for a service live here; values already
 CONFIG_FILE = CONFIG_DIR / "config.json"
 DB_FILE = CONFIG_DIR / "data.db"
 SCHEMA_VERSION = 1  # bump when a migration is added to _migrate()
+
+
+class ConfigError(ValueError):
+    """The config file or an environment override holds a value that cannot be used. The text is for the user."""
+
+
+# ---------------------------------------------------------------------------
+# Typed server addresses
+# ---------------------------------------------------------------------------
+
+OLLAMA_PORT = 11434
+
+
+def server_url(text: str, kind: str = "openai") -> str:
+    """One rule for a model server address typed by a person or set in OLLAMA_HOST.
+
+    No scheme means http. No scheme and no port means 11434 for kind "ollama" (nothing is added for
+    "openai", where `paw models add` finds the port by probing). 0.0.0.0 and [::] are bind addresses,
+    so they become loopback. For kind "ollama" a trailing /api or /v1 is dropped, because that client
+    adds its own paths. Raises ValueError, in plain words, when the text is not an address.
+    """
+    text = text or ""
+    raw = text.strip()
+    bad = ValueError(f"{'Ollama host' if kind == 'ollama' else 'Server address'} '{text}' is not an address. "
+                     "Example: 192.168.1.50 or http://gpu-box.local:11434")
+    bare = "://" not in raw
+    if not raw or raw.endswith("://") or any(c.isspace() for c in raw):
+        raise bad
+    raw = raw.rstrip("/")
+    try:
+        parsed = urlparse(f"http://{raw}" if bare else raw)
+        host, port = parsed.hostname, parsed.port
+    except ValueError:
+        raise bad from None
+    if not host or parsed.scheme not in ("http", "https"):
+        raise bad
+    netloc = parsed.netloc
+    if host in ("0.0.0.0", "::"):
+        netloc = netloc.replace("[::]", "[::1]") if host == "::" else netloc.replace("0.0.0.0", "127.0.0.1")
+    if bare and port is None and kind == "ollama":
+        netloc += f":{OLLAMA_PORT}"
+    path = parsed.path.rstrip("/")
+    if kind == "ollama":
+        for tail in ("/api", "/v1"):
+            if path.endswith(tail):
+                path = path[: -len(tail)]
+    return f"{parsed.scheme}://{netloc}{path}"
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +98,11 @@ class OllamaConfig(BaseModel):
     num_ctx: int = 0          # 0 = by RAM: 8192 up to 16 GB, else 16384. Ollama cuts longer prompts silently.
     keep_alive: str = "30m"   # how long a model stays loaded after the last call
 
+    @field_validator("host")
+    @classmethod
+    def _host_is_an_address(cls, v: str) -> str:
+        return server_url(v, "ollama")
+
 
 class GeminiConfig(BaseModel):
     api_key: str = ""
@@ -77,6 +130,11 @@ class CustomProviderConfig(BaseModel):
     kind: Literal["openai", "ollama"] = "openai"  # ollama: the native Ollama API, so num_ctx and keep_alive work
     num_ctx: int = 0       # kind ollama: context size; 0 = 8192 for a server on another machine
     keep_alive: str = ""   # kind ollama: how long the model stays loaded; "" = the ollama.keep_alive setting
+
+    @field_validator("base_url")
+    @classmethod
+    def _base_url_is_an_address(cls, v: str) -> str:
+        return server_url(v)
 
 
 class AgentPersona(BaseModel):
@@ -244,9 +302,20 @@ class EmbeddingConfig(BaseModel):
 
 
 class SearchConfig(BaseModel):
-    provider: Literal["auto", "searxng", "brave", "duckduckgo"] = "auto"
+    """off: no search. offline: Kiwix and your own documents, no internet. searxng: your own server.
+    auto: your own SearXNG or Brave if set, else public instances (never in airgapped or local mode).
+    """
+
+    provider: Literal["auto", "off", "offline", "kiwix", "docs", "searxng", "brave", "duckduckgo"] = "auto"
     brave_api_key: str = ""
     searxng_url: str = ""  # self-hosted SearXNG URL, e.g. "http://localhost:8888"
+    kiwix_url: str = ""    # kiwix-serve on this computer or your network, e.g. "http://localhost:8080"
+    kiwix_books: list[str] = []  # book names to search (up to 5), e.g. ["wikipedia_en_all_nopic_2026-06"]
+    proxy: str = ""        # socks5h:// or socks5:// proxy for your own SearXNG (needs: pip install micropaw[tor])
+
+
+class DisplayConfig(BaseModel):
+    show_provider: bool = True  # end each reply with a line naming the model server that answered
 
 
 class PrivacyConfig(BaseModel):
@@ -371,6 +440,7 @@ class Config(BaseModel):
     providers: dict[str, CustomProviderConfig] = {}
     # Tools shown to the model: auto = a short list for a local model and all of them for a cloud one
     toolset: Literal["auto", "lean", "all"] = "auto"
+    display: DisplayConfig = DisplayConfig()
 
     @model_validator(mode="after")
     def _check_agents(self) -> Config:
@@ -448,9 +518,11 @@ def _apply_env_overrides(raw: dict) -> dict:
         value = os.getenv(env_var)
         if value is None:
             continue
-        # OLLAMA_HOST=0.0.0.0[:port] is a bind address, not a connect address
-        if env_var == "OLLAMA_HOST" and value.lstrip("htps:/").startswith("0.0.0.0"):
-            value = value.replace("0.0.0.0", "127.0.0.1")
+        if env_var == "OLLAMA_HOST":  # Ollama's own format (0.0.0.0:11434, no scheme) becomes a full URL
+            try:
+                value = server_url(value, "ollama")
+            except ValueError:
+                pass  # kept as typed; validating the config then reports it in plain words
         d = raw
         for key in path[:-1]:
             d = d.setdefault(key, {})
@@ -503,7 +575,13 @@ def load_config() -> Config:
         raw = _migrate_file(raw)
     _apply_env_overrides(raw)
     raw.pop("config_version", None)
-    cfg = Config(**raw)
+    try:
+        cfg = Config(**raw)
+    except ValidationError as e:
+        first = e.errors()[0]
+        where = ".".join(str(part) for part in first["loc"])
+        raise ConfigError(f"The config file {CONFIG_FILE} has a problem at '{where}': "
+                          f"{first['msg'].removeprefix('Value error, ').rstrip('.')}. Fix it, or run: paw setup --reset") from None
     from micropaw import privacy
     privacy.apply_floor(cfg)  # settings a strict run is holding back stay held in later loads
     return cfg

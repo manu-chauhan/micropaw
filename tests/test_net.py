@@ -18,8 +18,8 @@ BANNED_HTTPX = {"AsyncClient", "Client", "get", "post", "put", "delete", "head",
 # Modules that still build their own clients. Each stream moves its own onto net.client; this list only shrinks.
 # Owned by the other round 3 streams, so they are listed here until that work is merged:
 PENDING = {
-    "channels/whatsapp.py", "channels/media.py", "memory/embeddings.py", "utils/voice.py",
-    "tools/web_search.py", "tools/web_browse.py", "connector.py", "cli.py",
+    "channels/whatsapp.py", "channels/media.py", "memory/embeddings.py",
+    "tools/web_search.py", "tools/web_browse.py", "connector.py",
 }
 
 

@@ -237,3 +237,50 @@ def test_config_dir_and_log_files_are_owner_only(tmp_path, monkeypatch):
     outside.parent.chmod(0o755)
     cfg.private_dir(outside)
     assert outside.parent.stat().st_mode & 0o777 == 0o755  # folders outside ~/.micropaw are left as they are
+
+
+# --- server_url: one rule for typed server addresses ---
+
+@pytest.mark.parametrize("text,kind,want", [
+    ("192.168.1.50", "ollama", "http://192.168.1.50:11434"),
+    ("192.168.1.50:11434", "ollama", "http://192.168.1.50:11434"),
+    ("  gpu-box.local  ", "ollama", "http://gpu-box.local:11434"),
+    ("http://gpu-box.local:11434/", "ollama", "http://gpu-box.local:11434"),
+    ("http://x:11434/v1", "ollama", "http://x:11434"),
+    ("http://x:11434/api/", "ollama", "http://x:11434"),
+    ("0.0.0.0:11434", "ollama", "http://127.0.0.1:11434"),
+    ("http://[::]:11434", "ollama", "http://[::1]:11434"),
+    ("https://gpu.tail1234.ts.net", "ollama", "https://gpu.tail1234.ts.net"),
+    ("192.168.1.60:8000/v1", "openai", "http://192.168.1.60:8000/v1"),
+    ("192.168.1.60", "openai", "http://192.168.1.60"),
+    ("http://x:8000/v1/", "openai", "http://x:8000/v1"),
+])
+def test_server_url_table(text, kind, want):
+    from micropaw.config import server_url
+    assert server_url(text, kind) == want
+
+
+@pytest.mark.parametrize("text", ["", "   ", "a b", "http://", "ftp://x:1", "http://x:99999"])
+def test_server_url_refuses_what_is_not_an_address_with_an_example(text):
+    from micropaw.config import server_url
+    with pytest.raises(ValueError, match="Example: 192.168.1.50 or http://gpu-box.local:11434"):
+        server_url(text, "ollama")
+
+
+def test_the_ollama_host_field_and_custom_base_url_use_the_rule():
+    from micropaw.config import Config
+    c = Config(provider_config={"ollama": {"host": "192.168.1.50"}},
+               providers={"box": {"base_url": "gpu-box:8000/v1/"}})
+    assert c.provider_config.ollama.host == "http://192.168.1.50:11434"
+    assert c.providers["box"].base_url == "http://gpu-box:8000/v1"
+    with pytest.raises(ValueError, match="not an address"):
+        Config(provider_config={"ollama": {"host": "x y"}})
+
+
+def test_ollama_host_env_in_ollamas_own_format_reaches_the_config_as_a_url(tmp_path, monkeypatch):
+    import micropaw.config as cm
+    monkeypatch.setattr(cm, "CONFIG_FILE", tmp_path / "none.json")
+    monkeypatch.setenv("OLLAMA_HOST", "192.168.1.50:11434")
+    assert cm.load_config().provider_config.ollama.host == "http://192.168.1.50:11434"
+    monkeypatch.setenv("OLLAMA_HOST", "0.0.0.0:11434")
+    assert cm.load_config().provider_config.ollama.host == "http://127.0.0.1:11434"

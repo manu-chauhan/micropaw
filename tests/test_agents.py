@@ -439,7 +439,8 @@ async def test_gateway_runs_named_agents_and_probes_ollama_in_the_background(tmp
     monkeypatch.setattr("micropaw.scheduler.Scheduler.run", lambda self: asyncio.sleep(0))
     await gw.start()
     assert seen["agents"] == ["family", "main"]
-    assert seen["reply"] == "hi from family" and seen["main_reply"] == "hi from main"
+    assert seen["reply"].startswith("hi from family\n\n[via ")
+    assert seen["main_reply"].startswith("hi from main\n\n[via ")
     assert gw.agent is gw.agents["main"]
 
 

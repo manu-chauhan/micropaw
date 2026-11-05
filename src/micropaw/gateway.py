@@ -168,8 +168,9 @@ class _Approvals:
             self._rules = set()
 
     def _rule(self, tool: str, text: str, marked: bool) -> str:
-        """The exact action as a rule key, or "" when rules don't apply (outside content was read)."""
-        return "" if marked else hashlib.sha256(f"{tool}\n{text}".encode()).hexdigest()
+        """The exact action as a rule key, or "" when rules don't apply (outside content was read, or a search:
+        the model writes the query, so no "always" for it)."""
+        return "" if marked or tool == "web_search" else hashlib.sha256(f"{tool}\n{text}".encode()).hexdigest()
 
     def _remember(self, rule: str) -> None:
         self._rules.add(rule)
@@ -331,7 +332,7 @@ class Gateway:
         set_provider(self.vision_provider or self.provider)
 
         from micropaw.tools.web_search import set_search_config
-        set_search_config(self.config.search)
+        set_search_config(self.config.search, self.config.privacy, self.store)
 
         from micropaw.tools.google_auth import set_google_config
         if self.config.google.enabled and self.config.google.client_id and not privacy.tool_refusal("google"):
@@ -608,6 +609,12 @@ class Gateway:
                     "Use the chat ID in routes, for example paw agent add coder --model ... --route " + where)
         if text.lower() == "/agents":
             return "Agents:\n" + "\n".join(self._describe(a) for a in self.agents.values())
+        if text.lower() in ("/privacy", "/status"):
+            from micropaw import privacy_report
+            if text.lower() == "/privacy":
+                return privacy_report.render(self.config)
+            return (f"{privacy_report.status_line(self.config)}\n"
+                    f"This chat talks to: {self._describe(self._route(platform, user_id, channel_id))}")
         if m := _AGENT_CMD.match(text):
             return await self._agent_command(m.group(1), platform, user_id, channel_id)
         if text.lower() == "/memory" and self.store:
@@ -705,7 +712,23 @@ class Gateway:
                 response = await agent.handle_message(text, user_id, platform, channel_id, media=media)
         self._track_usage(agent)
         logger.debug("[%s] MicroPaw: %s", platform, response[:80], extra={"content": True})
+        if line := self._reply_label(agent, platform, response):
+            response += line
+            if streaming and on_chunk:
+                await _redacting(on_chunk)(line)
         return redact(response)
+
+    def _reply_label(self, agent: Agent, platform: str, response: str) -> str:
+        """"[via claude (api.anthropic.com)]" at the end of a reply, naming who answered. "" when off."""
+        if self.models is None or platform in self._INTERNAL_PLATFORMS:
+            return ""
+        from micropaw import privacy_report
+        spec = agent.profile.main if agent.profile else self.config.provider
+        try:
+            return privacy_report.reply_label(spec, response, self.models, self.config, platform)
+        except Exception as e:  # a label must never lose the answer
+            logger.debug("Reply label failed: %s", e)
+            return ""
 
     # Internal platforms that should not be registered as real channels
     _INTERNAL_PLATFORMS = frozenset({"heartbeat", "system"})
