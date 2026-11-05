@@ -11,6 +11,7 @@ from email.utils import parseaddr
 
 import aiosqlite
 
+from micropaw import privacy
 from micropaw.bus import OutboundMessage
 from micropaw.config import CONFIG_DIR
 
@@ -41,6 +42,7 @@ _NEW_COLUMNS = {
     "match": "TEXT DEFAULT ''",         # JSON rule for email jobs
     "since": "REAL DEFAULT 0",          # only mail after this moment counts (set when the job is switched on)
     "agent": "TEXT DEFAULT ''",         # the agent that runs the job; '' (older jobs) = main
+    "local_only": "INTEGER DEFAULT 0",  # made in local or airgapped mode: not listed to a cloud model
 }
 
 _ADDRESS = re.compile(r"[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
@@ -433,20 +435,20 @@ class Scheduler:
 
         cur = await self.db.execute(
             "INSERT INTO cron_jobs (description, interval_seconds, next_run_at, one_shot, "
-            "user_id, platform, chat_id, enabled, created_at, trigger, match, since, agent) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "user_id, platform, chat_id, enabled, created_at, trigger, match, since, agent, local_only) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (description, interval_seconds, now + interval_seconds, int(one_shot),
              user_id, platform, chat_id, int(enabled), now,
-             "email" if match else "time", json.dumps(match) if match else "", now, agent),
+             "email" if match else "time", json.dumps(match) if match else "", now, agent, int(privacy.local_only())),
         )
         await self.db.commit()
         return cur.lastrowid  # type: ignore[return-value]
 
-    async def list_jobs(self) -> list[dict]:
+    async def list_jobs(self, include_local: bool = True) -> list[dict]:
         async with self.db.execute(
             "SELECT id, description, interval_seconds, next_run_at, one_shot, enabled, created_at, trigger, match, "
             "agent "
-            "FROM cron_jobs ORDER BY id",
+            f"FROM cron_jobs{'' if include_local else ' WHERE local_only = 0'} ORDER BY id",
         ) as cur:
             rows = await cur.fetchall()
         return [

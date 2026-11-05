@@ -313,7 +313,7 @@ def privacy_share_history(yes):
     """Let cloud models see what was saved in local or air-gapped mode."""
     from micropaw import storage
     click.echo("Rows saved in local or air-gapped mode become sendable to cloud models.")
-    if not DB_FILE.exists():
+    if not DB_FILE.exists() or not DB_FILE.stat().st_size:
         click.echo("There is no saved history yet.")
         return
     if not yes and not click.confirm("Share it?", default=False):
@@ -321,7 +321,8 @@ def privacy_share_history(yes):
         return
     counts = storage.share_local_history(DB_FILE)
     click.echo(f"Shared: {counts['messages']} messages, {counts['memories']} memories, "
-               f"{counts['document_chunks']} document pieces, {counts['summaries']} summaries.")
+               f"{counts['document_chunks']} document pieces, {counts['summaries']} summaries, "
+               f"{counts['contacts']} contacts, {counts['cron_jobs']} scheduled jobs, {counts['files']} files.")
 
 
 @main.command()

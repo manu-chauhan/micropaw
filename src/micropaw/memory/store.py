@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS contacts (
     phone TEXT DEFAULT '',
     company TEXT DEFAULT '',
     notes TEXT DEFAULT '',
+    local_only INTEGER DEFAULT 0,
     created_at REAL DEFAULT (unixepoch('now')),
     updated_at REAL DEFAULT (unixepoch('now'))
 );
@@ -152,7 +153,8 @@ class MemoryStore:
     async def _migrate(self) -> None:
         """Add columns that older databases don't have."""
         for table, new in (("conversations", ("marked",)), ("memories", ("marked", "local_only")),
-                           ("messages", ("local_only",)), ("document_chunks", ("local_only",))):
+                           ("messages", ("local_only",)), ("document_chunks", ("local_only",)),
+                           ("contacts", ("local_only",))):
             async with self.db.execute(f"PRAGMA table_info({table})") as cur:
                 columns = {row[1] for row in await cur.fetchall()}
             for column in new:
@@ -872,26 +874,28 @@ class MemoryStore:
 
     async def add_contact(self, name: str, email: str = "", phone: str = "", company: str = "", notes: str = "") -> int:
         cursor = await self.db.execute(
-            "INSERT INTO contacts (name, email, phone, company, notes) VALUES (?, ?, ?, ?, ?)",
-            (name, email, phone, company, notes),
+            "INSERT INTO contacts (name, email, phone, company, notes, local_only) VALUES (?, ?, ?, ?, ?, ?)",
+            (name, email, phone, company, notes, _local_now()),
         )
         await self.db.commit()
         return cursor.lastrowid
 
-    async def search_contacts(self, query: str) -> list[dict]:
+    async def search_contacts(self, query: str, include_local: bool = True) -> list[dict]:
         q = f"%{query}%"
         async with self.db.execute(
             "SELECT id, name, email, phone, company, notes FROM contacts "
-            "WHERE name LIKE ? COLLATE NOCASE OR email LIKE ? COLLATE NOCASE OR company LIKE ? COLLATE NOCASE "
+            "WHERE (name LIKE ? COLLATE NOCASE OR email LIKE ? COLLATE NOCASE OR company LIKE ? COLLATE NOCASE)"
+            f"{'' if include_local else ' AND local_only = 0'} "
             "ORDER BY name COLLATE NOCASE LIMIT 50",
             (q, q, q),
         ) as cursor:
             rows = await cursor.fetchall()
         return [self._contact_row(r) for r in rows]
 
-    async def get_all_contacts(self, limit: int = 50) -> list[dict]:
+    async def get_all_contacts(self, limit: int = 50, include_local: bool = True) -> list[dict]:
         async with self.db.execute(
-            "SELECT id, name, email, phone, company, notes FROM contacts ORDER BY name COLLATE NOCASE LIMIT ?",
+            "SELECT id, name, email, phone, company, notes FROM contacts"
+            f"{'' if include_local else ' WHERE local_only = 0'} ORDER BY name COLLATE NOCASE LIMIT ?",
             (limit,),
         ) as cursor:
             rows = await cursor.fetchall()
