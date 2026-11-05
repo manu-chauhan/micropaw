@@ -77,3 +77,13 @@ async def test_voice_note_without_stt_explains_instead_of_calling_model():
     main = _Recorder()
     reply = await _make_agent(main).handle_message("", "u", "terminal", media=[_OGG])
     assert "speech-to-text" in reply and main.seen == []
+
+
+@pytest.mark.asyncio
+async def test_voice_note_with_an_unreachable_speech_server_says_which_one():
+    main = _Recorder()
+    agent = _make_agent(main)
+    agent.config.voice.stt = "local:whisper"
+    agent.config.voice.stt_url = "http://127.0.0.1:1"
+    reply = await agent.handle_message("", "u", "terminal", media=[_OGG])
+    assert "could not reach the speech server at 127.0.0.1:1" in reply and main.seen == []
