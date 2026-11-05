@@ -531,7 +531,7 @@ def mcp_add(name, command, url, headers):
         console.print("Nothing was written.")
         return
     save_mcp_server(name, {**cfg.model_dump(exclude_defaults=True), "enabled": True})
-    console.print(f"[green]Added '{name}'.[/green] Its tool list is pinned at the first start. Try: paw mcp test {name}")
+    console.print(f"[green]Added '{name}'.[/green] Tools are pinned at first start. Try: paw mcp test {name}")
 
 
 @mcp.command(name="list")
