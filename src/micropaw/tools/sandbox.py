@@ -18,7 +18,7 @@ from pathlib import Path
 
 from micropaw.config import CONFIG_DIR, PermissionsConfig
 
-PROBE_TIMEOUT = 0.2
+PROBE_TIMEOUT = 3.0  # a cold start on WSL or a busy laptop can take over a second
 CONTAINER_PROBE_TIMEOUT = 5.0  # `docker info` talks to the daemon and is slower
 PULL_TIMEOUT = 300
 
@@ -40,6 +40,7 @@ class Sandbox:
     network: bool = False
     image: str = ""
     error: str = ""  # a sandbox was asked for but cannot run; shell refuses
+    host_asks: bool = False  # auto found nothing: commands run on the host and always ask
 
     @property
     def active(self) -> bool:
@@ -67,6 +68,7 @@ class Wrapped:
 
 _config: PermissionsConfig | None = None
 _probes: dict[str, bool] = {}
+_broken: set[str] = set()  # sandboxes that worked at first and then failed for real
 _pulled: set[str] = set()
 
 
@@ -74,6 +76,7 @@ def configure(permissions: PermissionsConfig) -> None:
     global _config
     _config = permissions
     _probes.clear()
+    _broken.clear()
 
 
 def _settings() -> PermissionsConfig:
@@ -90,6 +93,17 @@ def _settings() -> PermissionsConfig:
 def mark_failed(kind: str) -> None:
     """A sandbox that passed the probe failed for real: stop using it in this process."""
     _probes[kind] = False
+    _broken.add(kind)
+
+
+def recheck(kind: str) -> bool:
+    """True when the sandbox is really broken: a fresh probe fails. A command can print any text it likes,
+    so its own stderr is never proof."""
+    _probes.pop(kind, None)
+    if _available(kind):
+        return False
+    mark_failed(kind)
+    return True
 
 
 def _run(argv: list[str], timeout: float = PROBE_TIMEOUT) -> bool:
@@ -121,10 +135,13 @@ def resolve() -> Sandbox:
     if mode == "off":
         return Sandbox("none")
     if mode == "auto":
+        if _broken:
+            return Sandbox("none", error="The sandbox stopped working. Shell is refused until you restart "
+                                         "MicroPaw or change permissions.sandbox.")
         for kind in ("bwrap", "seatbelt"):
             if _available(kind):
                 return Sandbox(kind, net)
-        return Sandbox("none")
+        return Sandbox("none", host_asks=True)
     if mode == "docker" and Path("/.dockerenv").exists() and Path("/var/run/docker.sock").exists():
         return Sandbox("none", error="MicroPaw runs in a container with the Docker socket mounted, "
                                      "so the docker sandbox is refused.")
@@ -140,7 +157,7 @@ def describe() -> str:
     if sb.error:
         return sb.error
     if not sb.active:
-        extra = " Every command asks first." if os.name == "nt" else ""
+        extra = " Every command asks first." if os.name == "nt" or sb.host_asks else ""
         return f"No sandbox: shell commands run on this computer.{extra}"
     exp = " (experimental, always asks)" if not sb.may_skip_ask else ""
     return f"Shell runs in {sb.kind}{exp}, {'network on' if sb.network else 'no network'}."

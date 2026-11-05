@@ -10,6 +10,7 @@ import os
 import re
 import secrets
 import signal
+import sys
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -247,6 +248,9 @@ class Gateway:
         set_known_secrets(config_secrets(self.config))
         from micropaw.tools import sandbox
         sandbox.configure(self.config.permissions)
+        sb = await asyncio.to_thread(sandbox.resolve)  # probe now, off the event loop
+        if sb.host_asks and sys.platform != "win32":
+            logger.warning("No sandbox found; shell commands run on this computer and always ask.")
         # Create embedding provider (auto-detect or explicit)
         embedding_provider = await self._create_embedding_provider()
 

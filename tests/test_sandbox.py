@@ -20,6 +20,7 @@ from micropaw.utils import redact
 def _fresh(monkeypatch):
     monkeypatch.setattr(sandbox, "_config", None)
     monkeypatch.setattr(sandbox, "_probes", {})
+    monkeypatch.setattr(sandbox, "_broken", set())
     monkeypatch.setattr(sandbox, "_pulled", set())
     redact.set_known_secrets({})
 
@@ -257,6 +258,7 @@ def test_broken_explicit_sandbox_refuses(monkeypatch):
 def test_sandbox_failure_is_not_rerun_on_host(monkeypatch, tmp_path):
     sandbox._probes["bwrap"] = True
     monkeypatch.setattr(sandbox, "resolve", lambda: Sandbox("bwrap") if sandbox._probes["bwrap"] else Sandbox("none"))
+    monkeypatch.setattr(sandbox, "_available", lambda kind: False)  # the fresh probe fails too
     marker = tmp_path / "ran-on-host"
     monkeypatch.setattr(sandbox, "wrap", lambda *a, **k: sandbox.Wrapped(
         ["/bin/sh", "-c", "echo 'bwrap: No permissions to create new namespace' >&2; exit 1"], None))
@@ -437,3 +439,74 @@ def test_docker_runs_command_with_only_workspace(tmp_path):
     w = sandbox.wrap(Sandbox("docker", False, "python:3.13-slim"), "echo hi > f && ls /work && ls /root", tmp_path, {})
     r = _run(w.argv)
     assert "f" in r.stdout and (tmp_path / "f").exists()
+
+
+# --- probe, auto without a sandbox, and a command that fakes a failure ---------------
+
+def test_probe_timeout_allows_a_slow_cold_start():
+    assert sandbox.PROBE_TIMEOUT >= 3.0
+
+
+def test_auto_without_a_sandbox_always_asks_on_posix(monkeypatch):
+    monkeypatch.setattr(sandbox, "_available", lambda kind: False)
+    _cfg(sandbox="auto")
+    sb = sandbox.resolve()
+    assert sb.kind == "none" and sb.host_asks and not sb.error
+    monkeypatch.setattr(shell.os, "name", "posix")
+    assert shell.ShellTool().needs_approval({"command": "ls"}, _ctx(confirm_dangerous=False))
+    _cfg(sandbox="off")  # the owner chose "off": the old rule still applies
+    assert shell.ShellTool().needs_approval({"command": "ls"}, _ctx(confirm_dangerous=False)) is None
+
+
+def test_auto_after_a_real_failure_refuses_instead_of_using_the_host(monkeypatch):
+    monkeypatch.setattr(sandbox, "_available", lambda kind: kind == "bwrap")
+    _cfg(sandbox="auto")
+    assert sandbox.resolve().kind == "bwrap"
+    sandbox.mark_failed("bwrap")
+    sb = sandbox.resolve()
+    assert sb.kind == "none" and "stopped working" in sb.error
+    out = asyncio.run(shell.ShellTool().execute({"command": "ls"}, _ctx()))
+    assert out.startswith("Error:") and out.endswith("Not run.")
+    _cfg(sandbox="auto")  # a new setting clears it
+    assert sandbox.resolve().kind == "bwrap"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="uses /bin/sh")
+def test_command_cannot_switch_the_sandbox_off_by_printing_bwrap(monkeypatch, tmp_path):
+    monkeypatch.setattr(sandbox, "_available", lambda kind: kind == "bwrap")  # the probe still passes
+    _cfg(sandbox="auto")
+    assert sandbox.resolve().kind == "bwrap"
+    monkeypatch.setattr(sandbox, "wrap", lambda *a, **k: sandbox.Wrapped(
+        ["/bin/sh", "-c", "echo 'bwrap: injected' >&2; exit 3"], None))
+    out = asyncio.run(shell.ShellTool().execute({"command": "x"}, _ctx(tmp_path)))
+    assert "injected" in out and "Sandbox failed" not in out
+    assert sandbox.resolve().kind == "bwrap"
+
+
+async def test_gateway_start_probes_and_warns_when_no_sandbox(monkeypatch, tmp_path, caplog):
+    from unittest.mock import MagicMock
+
+    from micropaw import gateway as gw_mod
+    from micropaw.config import Config
+
+    monkeypatch.setattr(gw_mod, "DB_FILE", tmp_path / "d.db")
+    monkeypatch.setattr(gw_mod, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(sandbox, "_available", lambda kind: False)
+    monkeypatch.setattr(gw_mod.sys, "platform", "linux")
+    monkeypatch.setattr("micropaw.scheduler.Scheduler.run", lambda self: asyncio.sleep(0))
+    c = Config()
+    c.embedding.enabled = "false"
+    class Terminal:
+        name = "terminal"
+
+        def set_handler(self, h): pass
+        def set_stream_handler(self, h): pass
+        def set_access(self, h): pass
+
+        async def start(self): pass
+        async def stop(self): pass
+
+    gw = gw_mod.Gateway(c, MagicMock(), MagicMock(), [Terminal()])
+    with caplog.at_level("WARNING"):
+        await gw.start()
+    assert "No sandbox found; shell commands run on this computer and always ask." in caplog.text

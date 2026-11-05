@@ -134,7 +134,7 @@ class ShellTool(Tool):
         if sb.error:
             return None  # execute() refuses
         if not context.confirm_dangerous and not context.marked:
-            host_always_asks = not sb.active and os.name == "nt"
+            host_always_asks = not sb.active and (os.name == "nt" or sb.host_asks)
             if sb.may_skip_ask and not host_always_asks:
                 return None
         risky = any(p.search(command) for p in _DANGEROUS_RE)
@@ -189,8 +189,8 @@ class ShellTool(Tool):
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=TIMEOUT)
             output = stdout.decode("utf-8", errors="replace").strip()
             errors = stderr.decode("utf-8", errors="replace").strip()
-            if reason := sandbox.failure(sb, proc.returncode, errors):
-                sandbox.mark_failed(sb.kind)
+            reason = sandbox.failure(sb, proc.returncode, errors)
+            if reason and await asyncio.to_thread(sandbox.recheck, sb.kind):
                 return f"Sandbox failed: {reason}. Not run."
 
             result = output
