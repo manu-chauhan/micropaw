@@ -10,7 +10,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/micropaw?style=for-the-badge)](https://pypi.org/project/micropaw/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?style=for-the-badge)](https://python.org)
-[![Tests](https://img.shields.io/badge/tests-393%20passed-brightgreen?style=for-the-badge)]()
+[![Tests](https://img.shields.io/badge/tests-1840%20passed-brightgreen?style=for-the-badge)]()
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)](https://github.com/manu-chauhan/micropaw/blob/main/LICENSE)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/manuchauhan)
 
@@ -175,7 +175,7 @@ MicroPaw:                "Revenue grew 23% in Q4, driven by..."
 
 **MicroPaw sits in the sweet spot** — full-featured like OpenClaw (RAG, 6 channels, 17 tools, scheduling, email, calendar, multi-agent delegation) but lightweight like PicoClaw (~9,200 LOC, zero SDK dependencies). No telemetry, no bloat, no wrappers.
 
-> Started at **4,667 LOC** in the first commit. Grew to **~9,200 source + ~5,150 test LOC** while adding 6 channels, 17 tools, RAG, multi-agent delegation, scheduling, email, calendar — and 389 tests. Every feature earned its lines.
+> Started at **4,667 LOC** in the first commit. Grew to **~9,200 source + ~5,150 test LOC** while adding 6 channels, 17 tools, RAG, multi-agent delegation, scheduling, email, calendar, and 1840 tests. Every feature earned its lines.
 
 ---
 
@@ -417,6 +417,14 @@ Your messages go where you point MicroPaw: the model, search and chat services y
 
 MICROPAW_PRIVACY in the environment can make the mode stricter than the config says, never looser. The mode is read once when MicroPaw starts.
 
+A setting that makes MicroPaw less private is held back at the next start. If `config.json` says `normal` after the last run was `local`, or adds a name to `privacy.allow` (such as `web_fetch`), MicroPaw keeps the old value and prints a note, because a file edit cannot be told apart from a change made by a tool. To loosen a setting on purpose, use one of these:
+
+- `paw privacy allow web_fetch` (or `web_browse`, `google`) records that choice. It asks first, and `--yes` skips the question.
+- `paw setup` asks about web page fetches in local mode, and asks before it keeps any held setting.
+- Start once with `MICROPAW_CONFIRM_PRIVACY` set to the mode you want. In bash or zsh: `MICROPAW_CONFIRM_PRIVACY=local paw chat`. In PowerShell: `$env:MICROPAW_CONFIRM_PRIVACY='local'; paw chat`. In cmd: `set MICROPAW_CONFIRM_PRIVACY=local` and then `paw chat`.
+
+What you save in local or air-gapped mode (messages, memories, document pieces, contacts, scheduled jobs, files, long tool outputs) stays hidden from cloud models after you move to `normal`. A local model in `normal` mode can still read it, and what it saves from that turn stays hidden too. `paw privacy` says how many items are hidden. `paw privacy share-history` lets cloud models see them (it asks first).
+
 ### What is checked, and what is not
 
 A local address is not proof that a server keeps data local. A proxy such as LiteLLM or Open WebUI on your own network can forward to a cloud API, and Ollama can serve cloud models through its local daemon (names ending in `-cloud`). MicroPaw cannot see that. It refuses models that Ollama marks as cloud in `local` and `airgapped` mode, and `paw doctor` reminds you to turn Ollama's cloud features off (`"disable_ollama_cloud": true` in `~/.ollama/server.json`, then restart Ollama).
@@ -629,6 +637,7 @@ MicroPaw > [delegate] "Research quantum computing breakthroughs"
 | `paw status` | System status overview |
 | `paw doctor` | Diagnostics: Python, deps, disk, keys, every model server you use, privacy checks (`--search` runs one test search) |
 | `paw privacy` | Where your data goes: the mode, each model, search, channel and server, file permissions |
+| `paw privacy allow <web_fetch\|web_browse\|google>` | Turn on a web feature in local mode and remember it as your choice (asks first, `--yes` skips the question) |
 | `paw privacy share-history` | Let cloud models see what was saved in local or air-gapped mode (asks first, `--yes` skips the question) |
 | `paw models add <name> <address>` | Test a model server on another computer and save it (`--key-env`, `--use main\|fast\|vision\|fallback`) |
 | `paw models remove <name>` | Forget a server added with `paw models add` |
@@ -822,7 +831,7 @@ Full documentation: [GitHub](https://github.com/manu-chauhan/micropaw)
 
 ```bash
 pip install ".[dev]"
-pytest                 # 389 tests
+pytest                 # 1840 tests
 ruff check src/
 mypy src/
 ```

@@ -92,3 +92,10 @@ def test_settings_and_safeguards_the_docs_name_from_other_branches_exist(text):
         assert "addaudithook" in src and ci.exists() and "canary" in ci.read_text(encoding="utf-8").lower()
     if "link previews off" in text.lower() or "turns link previews off" in text:
         assert "disable_web_page_preview" in src or "link_preview" in src
+
+
+def test_the_docs_explain_how_to_loosen_a_held_setting_and_what_share_history_shows(text):
+    for needle in ("MICROPAW_CONFIRM_PRIVACY=local paw chat", "$env:MICROPAW_CONFIRM_PRIVACY='local'",
+                   "set MICROPAW_CONFIRM_PRIVACY=local", "paw privacy allow", "paw privacy share-history",
+                   "hidden from cloud models"):
+        assert needle in text, needle

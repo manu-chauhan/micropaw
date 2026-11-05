@@ -17,6 +17,9 @@ Privacy:
 - Local mode searches only through your own SearXNG (`search.searxng_url`), optionally through a SOCKS proxy such as Tor (`search.proxy`, install `micropaw[tor]`). Every query is shown before it is sent, and the next one asks again. A down server is reported, never replaced by DuckDuckGo. `paw doctor --search` runs one test query after asking.
 - Kiwix articles are fetched without cookies, referrers or tracking parameters, and every redirect is checked. In local mode `web_browse` and `http_request` are off unless named in `privacy.allow`. `web_browse` shows each page address for approval, removes tracking parameters, and the browser can load only the page you approved; Chromium's own background traffic is off in every mode. `http_request` does the same in local mode: it asks for every address, shows the cleaned one and any long path or query part, sends no cookies, referrer or caller headers, checks every redirect, and makes GET requests only. Chromium closes after 10 idle minutes.
 - `paw privacy share-history` lets cloud models see what was saved in local or air-gapped mode. It says what it does, asks first (`--yes` skips the question) and prints how many rows it changed. `paw setup` now records the mode you pick as your own choice, so the next start does not hold it back.
+- Local-mode data stays away from cloud models after you loosen the mode: documents (also in `web_search`), contacts, scheduled jobs, saved files and long tool outputs are flagged like messages and memories. A turn where a local model could see such data saves its messages and memories flagged too. Cloud embedders no longer get local-mode documents when vectors are rebuilt, a delegate task asks before it goes to a cloud helper, and `paw privacy` says how many items are hidden.
+- `http_request` in local mode connects to the public address it checked, so a name whose DNS answer changes to this computer or your network cannot reach it. `paw privacy allow web_fetch` (or `web_browse`, `google`) records a choice that a hand edit of `config.json` would not keep, and `paw setup` asks about web page fetches and before it keeps a held setting. The README now explains `MICROPAW_CONFIRM_PRIVACY` for bash, PowerShell and cmd.
+- `paw forget --all` also clears the document search index and scheduled jobs, and retention wipes old document words from the index. `paw docs add` skips a PDF it cannot read, reads UTF-16 text, and stores one source per file.
 - Link previews are off on Telegram, Slack and Discord, and Markdown images are removed from replies, because the company's server would fetch any address in a reply. `paw connect` says that vendor chat apps see every message.
 - README: a Privacy section with what is and is not checked (a local address can still be a proxy to the cloud), the cloud providers' data terms as of today, and how to move models and packages onto an offline machine. The old "no data leaves your machine" claim is gone.
 
@@ -47,7 +50,7 @@ Shell, install and service:
 
 Fixes: scheduler jobs run on the agent that created them; the Gmail ids a job handled are remembered per job; Ollama numeric `keep_alive` and stream errors; saved turns after side effects; owner-only config and log folders; env secrets that the config names are hidden from child processes.
 
-Tests: 1308 passed.
+Tests: 1840 passed.
 
 ---
 

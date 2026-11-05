@@ -377,3 +377,27 @@ def test_delegate_asks_before_a_cloud_helper_gets_a_task_from_a_local_model():
     go_normal()
     assert cloud.needs_approval(args, ToolContext("c", "u", "terminal")) is None  # no local data was seen
     assert "lymphoma" in cloud.needs_approval(args, ToolContext("c", "u", "terminal", tainted=True))
+
+
+async def test_share_history_on_a_database_made_by_the_store(tmp_path):
+    from micropaw import storage
+    from micropaw.providers.base import Message
+    db = tmp_path / "data.db"
+    store = MemoryStore(db, NullEmbedding())
+    await store.init()
+    go_local()
+    await store.get_or_create_conversation("dm:owner", "dm", "owner")
+    await store.save_messages("dm:owner", [Message(role="user", content="hello")])
+    await store.save_memory("diag", "secret")
+    await store.ingest_document("tax.txt", SECRET)
+    await store.add_contact("Dr Rao")
+    await store.close()
+    go_normal()
+    assert storage.local_row_count(db) == 4
+    counts = storage.share_local_history(db)
+    assert (counts["messages"], counts["memories"], counts["document_chunks"], counts["contacts"]) == (1, 1, 1, 1)
+    assert storage.local_row_count(db) == 0
+    store = MemoryStore(db, NullEmbedding())
+    await store.init()
+    assert [m["key"] for m in await store.get_all_memories(include_local=False)] == ["diag"]
+    await store.close()
