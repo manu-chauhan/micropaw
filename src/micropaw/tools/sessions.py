@@ -129,7 +129,7 @@ class SessionsTool(Tool):
 
             db = _store.db
             await db.execute("DELETE FROM messages WHERE conversation_id = ?", (session_id,))
-            await db.commit()
+            await _store.checkpoint()
             return f"Cleared all messages in session: {session_id}"
 
         return f"Unknown action: {action}"

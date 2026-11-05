@@ -379,9 +379,49 @@ def export(conversation_id, fmt, output_file):
 
 
 @main.command()
+@click.option("--all", "everything", is_flag=True, help="Delete every message, memory, document, contact and log.")
+@click.option("--older-than", "older", default="", metavar="AGE", help="Delete what is older than AGE (30d, 4w).")
+@click.option("--yes", is_flag=True, help="Do not ask first.")
+def forget(everything, older, yes):
+    """Delete what MicroPaw remembers, and overwrite the space it used.
+
+    --all stops if the gateway is running. Copies you made (exports) and backups are not touched.
+    """
+    from micropaw import service as svc
+    from micropaw import storage
+    if everything == bool(older):
+        _fail(click.UsageError("Use --all, or --older-than 30d."))
+    if everything:
+        if svc.running_gateway():
+            _fail(click.ClickException("MicroPaw is running. Stop it first: paw service stop"))
+        if not yes:
+            click.confirm("Delete every message, memory, document, contact and log?", abort=True)
+        for problem in storage.forget_all(DB_FILE, CONFIG_DIR):
+            console.print(f"[yellow]{problem}[/yellow]")
+        console.print("Done. Your config and keys are still there. Files you exported are not touched.")
+        return
+    try:
+        days = storage.parse_age(older)
+    except ValueError as e:
+        _fail(click.UsageError(str(e)))
+
+    async def sweep():
+        from micropaw.memory.store import MemoryStore
+        store = MemoryStore(DB_FILE)
+        await store.init()
+        try:
+            return await store.purge_older_than(days)
+        finally:
+            await store.close()
+
+    counts = asyncio.run(sweep())
+    console.print("Removed " + (", ".join(f"{n} {k}" for k, n in counts.items() if n) or "nothing") + ".")
+
+
+@main.command()
 @click.confirmation_option(prompt="This will delete all config and data. Are you sure?")
 def reset():
-    """Reset all configuration and data."""
+    """Reset all configuration and data. This is not a secure wipe: use `paw forget --all` first for that."""
     if CONFIG_DIR.exists():
         shutil.rmtree(CONFIG_DIR)
         console.print("[green]All MicroPaw data has been reset.[/green]")

@@ -25,7 +25,7 @@ def _dir(conv_id: str) -> Path:
     return config.CONFIG_DIR / "outputs" / re.sub(r"[^A-Za-z0-9_.-]", "_", conv_id)
 
 
-def _purge() -> None:
+def purge() -> None:
     """Delete saved outputs older than KEEP_DAYS, and folders that end up empty."""
     root = config.CONFIG_DIR / "outputs"
     cutoff = time.time() - KEEP_DAYS * 86400
@@ -48,7 +48,7 @@ def _save(conv_id: str, text: str) -> int:
     folder = _dir(conv_id)
     if time.time() - _last_purge > 86400:  # at the first save after start, then daily
         _last_purge = time.time()
-        _purge()
+        purge()
     folder.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     folder.mkdir(exist_ok=True, mode=0o700)
     n = max((int(p.stem) for p in folder.glob("*.txt") if p.stem.isdigit()), default=0) + 1

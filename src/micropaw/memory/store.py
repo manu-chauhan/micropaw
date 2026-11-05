@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 from pathlib import Path
 
 import aiosqlite
@@ -262,6 +263,13 @@ class MemoryStore:
             logger.warning("Failed to load sqlite-vec: %s", e)
             return False
 
+    async def _try_load_vec_table(self) -> bool:
+        """True when the database has a vector table and the extension to reach it loaded."""
+        async with self.db.execute("SELECT 1 FROM sqlite_master WHERE name = 'vec_chunks'") as cur:
+            if await cur.fetchone() is None:
+                return False
+        return await self._try_load_vec()
+
     async def _get_meta(self, key: str) -> str | None:
         async with self.db.execute("SELECT value FROM kv_meta WHERE key = ?", (key,)) as cur:
             row = await cur.fetchone()
@@ -516,6 +524,56 @@ class MemoryStore:
         await self._set_meta(f"summary:{conversation_id}", summary)
         await self.db.commit()
 
+    async def checkpoint(self) -> None:
+        """Fold the write-ahead log into the database and empty it, so deleted text is not left in -wal."""
+        await self.db.commit()
+        try:
+            await self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except aiosqlite.Error as e:  # a background task is reading on this connection: the next one will do it
+            logger.debug("Checkpoint skipped: %s", e)
+
+    async def compact_storage(self) -> None:
+        """After a big delete: empty the log, and give the space back when over a tenth of the file is free
+        (VACUUM rewrites the whole file, which costs a Pi a few seconds per 100 MB)."""
+        await self.checkpoint()
+        async with self.db.execute("PRAGMA freelist_count") as cur:
+            free = (await cur.fetchone())[0]
+        async with self.db.execute("PRAGMA page_count") as cur:
+            pages = (await cur.fetchone())[0]
+        if pages and free / pages > 0.10:
+            try:
+                await self.db.execute("VACUUM")
+            except aiosqlite.Error as e:  # another task has a transaction open: the next sweep will do it
+                logger.debug("VACUUM skipped: %s", e)
+
+    async def purge_older_than(self, days: int) -> dict[str, int]:
+        """Delete messages, summaries, document chunks and email records older than `days`.
+        Memories and contacts stay: only the owner removes those (/forget)."""
+        age = f"-{days} days"
+        counts: dict[str, int] = {}
+        cur = await self.db.execute("DELETE FROM messages WHERE created_at < datetime('now', ?)", (age,))
+        counts["messages"] = cur.rowcount  # the full-text index follows through its trigger
+        # A summary is as old as its conversation's last message
+        cur = await self.db.execute(
+            "DELETE FROM kv_meta WHERE key LIKE 'summary%:%' AND substr(key, instr(key, ':') + 1) IN "
+            "(SELECT id FROM conversations WHERE updated_at < datetime('now', ?))", (age,))
+        counts["summaries"] = cur.rowcount
+        async with self.db.execute(
+            "SELECT COUNT(*) FROM document_chunks WHERE created_at < datetime('now', ?)", (age,),
+        ) as cur2:
+            counts["chunks"] = (await cur2.fetchone())[0]
+        await self._delete_chunks("created_at < datetime('now', ?)", (age,))
+        cutoff = time.time() - days * 86400
+        for table in ("email_seen", "email_runs"):
+            try:
+                cur = await self.db.execute(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))
+                counts[table] = cur.rowcount
+            except aiosqlite.Error:
+                pass  # the scheduler has not made its tables yet
+        await self.db.commit()
+        await self.compact_storage()
+        return counts
+
     async def get_summary(self, conversation_id: str, include_local: bool = True) -> str | None:
         """Get the compaction summary for a conversation, if any. A summary that holds local or airgapped
         talk is withheld when include_local is False."""
@@ -603,6 +661,8 @@ class MemoryStore:
         """Delete a memory. Returns True if a row was deleted."""
         cursor = await self.db.execute("DELETE FROM memories WHERE key = ? AND user_id = ?", (key, user_id))
         await self.db.commit()
+        if cursor.rowcount > 0:
+            await self.checkpoint()  # the old text must not stay behind in -wal
         return cursor.rowcount > 0
 
     async def get_recent_memories(
@@ -674,6 +734,8 @@ class MemoryStore:
 
     async def _delete_chunks(self, where: str, args: tuple) -> None:
         """Delete document chunks and their vector rows (the caller commits)."""
+        if not self._has_vec and await self._try_load_vec_table():
+            self._has_vec = True  # a table made while embeddings were on: its rows go too
         if self._has_vec:
             async with self.db.execute(f"SELECT id FROM document_chunks WHERE {where}", args) as cursor:
                 old_ids = [r[0] for r in await cursor.fetchall()]

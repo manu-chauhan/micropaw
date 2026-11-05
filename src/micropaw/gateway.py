@@ -271,6 +271,10 @@ class Gateway:
     async def start(self) -> None:
         """Initialize everything and start all channels."""
         set_known_secrets(config_secrets(self.config))
+        from micropaw import storage
+        from micropaw.tools import tool_output
+        await asyncio.to_thread(storage.harden_home, CONFIG_DIR)  # owner-only files, umask 077
+        await asyncio.to_thread(tool_output.purge)  # saved long outputs older than a week, at every start
         from micropaw.utils import audit
         audit.configure(self.config.storage.audit)
         allow_content(self.config.storage.log_content)
@@ -422,6 +426,9 @@ class Gateway:
 
         # Start bus consumer for background sub-agent results
         self._bus_task = asyncio.create_task(self._bus_consumer())
+        if self.config.storage.retention_days > 0:
+            self.store.spawn(self._retention_loop(self.config.storage.retention_days))
+        await asyncio.to_thread(storage.drop_config_backups, CONFIG_DIR)  # the start worked: no old key copy needed
 
         # Start scheduler for cron jobs + heartbeat
         from micropaw.scheduler import Scheduler
@@ -729,6 +736,16 @@ class Gateway:
             agent.conversations.new_all_sessions(new_id)
             agent.session_usage = {"input": 0, "output": 0}
             agent.message_count = 0
+
+    async def _retention_loop(self, days: int) -> None:
+        """Delete what is older than storage.retention_days, now and then once a day."""
+        while True:
+            try:
+                counts = await self.store.purge_older_than(days)
+                logger.info("Retention: removed %s", ", ".join(f"{n} {k}" for k, n in counts.items() if n) or "nothing")
+            except Exception as e:
+                logger.warning("Retention sweep failed: %s", e)
+            await asyncio.sleep(86400)
 
     async def _bus_consumer(self) -> None:
         """Consume outbound bus messages and route to channels."""
