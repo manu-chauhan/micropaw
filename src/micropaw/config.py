@@ -253,6 +253,16 @@ class PrivacyConfig(BaseModel):
     """
 
     mode: Literal["airgapped", "local", "normal"] = "normal"
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _spelling(cls, value):
+        from micropaw.privacy import PrivacyError, parse_mode
+        try:
+            return (parse_mode(value) or "normal") if isinstance(value, str) else value
+        except PrivacyError as e:
+            raise ValueError(str(e)) from e
+
     allow_lan: bool = True          # private ranges and Tailscale count as "this side" in airgapped and local
     lan_hosts: list[str] = []       # extra host names or CIDRs that count as local (names are never resolved to decide)
     allow_cloud_fallback: bool = False  # a local main model may fail over to a cloud model
@@ -428,8 +438,9 @@ def _apply_env_overrides(raw: dict) -> dict:
         for key in path[:-1]:
             d = d.setdefault(key, {})
         if env_var == "MICROPAW_PRIVACY":  # can only make the mode stricter, never looser
-            from micropaw.privacy import _strictest
-            value = _strictest(str(d.get(path[-1], "normal")), value.strip().lower())
+            from micropaw.privacy import _strictest, parse_mode
+            value = _strictest(parse_mode(d.get(path[-1]), "privacy.mode") or "normal",
+                               parse_mode(value, "MICROPAW_PRIVACY"))
         d[path[-1]] = value
     return raw
 

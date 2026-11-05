@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import re
 import socket
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -30,11 +31,29 @@ def _strictest(*modes: str) -> str:
     return max(valid, key=_ORDER.__getitem__) if valid else "normal"
 
 
+class PrivacyError(Exception):
+    """The config asks for something the privacy mode forbids. The text lists every refusal."""
+
+
+def parse_mode(value: object, where: str = "privacy.mode") -> str:
+    """normal, local or airgapped from what the owner wrote. Case, spaces, '-' and '_' do not matter, so
+    "air-gapped" works. An empty value is "". Anything else is an error: a typo must not mean no guard."""
+    text = re.sub(r"[\s_-]", "", str(value or "").lower())
+    if text and text not in _ORDER:
+        raise PrivacyError(f'{where} is "{value}", which is not a privacy mode. Use normal, local or airgapped. '
+                           "Not starting.")
+    return text
+
+
+def env_mode() -> str:
+    return parse_mode(os.environ.get("MICROPAW_PRIVACY", ""), "MICROPAW_PRIVACY")
+
+
 def freeze(config_mode: str) -> str:
     """Set the mode for this process once. The MICROPAW_PRIVACY env var can only tighten it."""
     global _mode
     if _mode is None:
-        _mode = _strictest(config_mode, os.environ.get("MICROPAW_PRIVACY", "").strip().lower())
+        _mode = _strictest(config_mode, env_mode())
     else:
         _mode = _strictest(_mode, config_mode)  # never loosens while running
     return _mode
@@ -95,10 +114,6 @@ def airgapped() -> bool:
 def local_only() -> bool:
     """True in local and airgapped: models, embeddings and speech must be on this machine or the LAN."""
     return _ORDER[mode()] >= 1
-
-
-class PrivacyError(Exception):
-    """The config asks for something the privacy mode forbids. The text lists every refusal."""
 
 
 # ---------------------------------------------------------------------------

@@ -155,3 +155,36 @@ def test_an_environment_override_does_not_become_the_new_floor(tmp_path):
     assert out.stdout.split()[0] == "local"
     assert not (tmp_path / "home" / "privacy_last_mode").exists()
     assert _run_boot(tmp_path, {}).stdout.split()[0] == "normal"
+
+
+# --- a misspelt mode must not mean "no guard" -------------------------------------------------------------------
+
+@pytest.mark.parametrize("value", ["offline", "airgap", "off", "yes"])
+def test_a_bad_environment_value_stops_the_start_instead_of_running_unguarded(tmp_path, value):
+    out = _run_boot(tmp_path, {}, env={"MICROPAW_PRIVACY": value})
+    assert out.returncode != 0 and out.stdout == ""
+    assert f'MICROPAW_PRIVACY is "{value}"' in out.stderr and "normal, local or airgapped" in out.stderr
+
+
+@pytest.mark.parametrize("value", ["air-gapped", "AIRGAPPED", "Air_Gapped", " airgapped "])
+def test_spellings_of_airgapped_all_mean_airgapped(tmp_path, value):
+    assert _run_boot(tmp_path, {}, env={"MICROPAW_PRIVACY": value}).stdout.split()[0] == "airgapped"
+    assert privacy.parse_mode(value) == "airgapped" and privacy.parse_mode("") == ""
+
+
+def test_a_misspelt_mode_in_config_json_stops_the_start(tmp_path):
+    out = _run_boot(tmp_path, {"privacy": {"mode": "airgaped"}})
+    assert out.returncode != 0 and 'privacy.mode is "airgaped"' in out.stderr
+    assert _run_boot(tmp_path, {"privacy": {"mode": "Local"}}).stdout.split()[0] == "local"
+
+
+def test_load_config_refuses_a_bad_mode_and_a_bad_env_value(monkeypatch, tmp_path):
+    (tmp_path / "config.json").write_text(json.dumps({"privacy": {"mode": "offline"}}))
+    with pytest.raises(ValueError):
+        config_mod.load_config()
+    (tmp_path / "config.json").write_text("{}")
+    monkeypatch.setenv("MICROPAW_PRIVACY", "offline")
+    with pytest.raises(privacy.PrivacyError):
+        config_mod.load_config()
+    with pytest.raises(privacy.PrivacyError):
+        privacy.freeze("normal")
