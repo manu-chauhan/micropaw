@@ -35,7 +35,9 @@ class Vec4(NullEmbedding):
 def _normal_mode():
     privacy._reset_for_tests()
     privacy.freeze("normal")
+    old_umask = os.umask(0o022)  # harden_home sets 077 for the whole process: put it back after each test
     yield
+    os.umask(old_umask)
     privacy._reset_for_tests()
 
 
@@ -358,3 +360,13 @@ def test_models_fetch_runs_in_a_fresh_process_without_the_offline_variable(home,
     assert result.exit_code == 0, result.output
     assert "HF_HUB_OFFLINE" not in seen["env"] and seen["cmd"][-1] == "BAAI/bge-small-en-v1.5"
     assert "fetch_local_model" in seen["cmd"][2] and "Copy that folder" in result.output
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
+def test_a_database_made_by_forget_is_owner_only(home):
+    old_umask = os.umask(0o022)
+    try:
+        assert CliRunner().invoke(cli.main, ["forget", "--older-than", "30d"]).exit_code == 0
+        assert stat.S_IMODE((home / "data.db").stat().st_mode) == 0o600
+    finally:
+        os.umask(old_umask)

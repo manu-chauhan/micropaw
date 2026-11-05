@@ -391,6 +391,7 @@ def forget(everything, older, yes):
     from micropaw import storage
     if everything == bool(older):
         _fail(click.UsageError("Use --all, or --older-than 30d."))
+    storage.harden_home(CONFIG_DIR)  # a database made by this command is owner-only too
     if everything:
         if svc.running_gateway():
             _fail(click.ClickException("MicroPaw is running. Stop it first: paw service stop"))
