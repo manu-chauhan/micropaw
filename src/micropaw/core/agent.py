@@ -99,6 +99,7 @@ class Agent:
         self.turn_usage: dict[str, dict[str, int]] = {}  # conversation id -> usage of its latest turn
         self.ledger = None  # set by the gateway when budgets are on; carries the "budget nearly used" note
         self._compact_tasks: dict[str, asyncio.Task] = {}  # one background compaction per conversation
+        self._bg: set[asyncio.Task] = set()  # auto-ingests: asyncio keeps only weak references to tasks
 
     @property
     def _memory_user(self) -> str:
@@ -120,6 +121,7 @@ class Agent:
             workspace=str(Path(self.config.permissions.workspace).expanduser()),
             memory_user=self._memory_user,
             agent=self.name,
+            local_data=is_local_provider(self.provider),
         )
         if self.approver and platform not in _INTERNAL_PLATFORMS:
             approver = self.approver
@@ -253,12 +255,16 @@ class Agent:
         # Memories and documents belong to the owner's DMs. Group chats never see
         # them, or anything read in private would leak to everyone in the group.
         private = channel_id is None
+        # What was said or saved in local or airgapped mode is never sent to a model that is not local
+        local = is_local_provider(self.provider)
         history, marked, memories, docs, summary = await asyncio.gather(
-            self.conversations.load_history(conv_id, store_platform, user_id),
+            self.conversations.load_history(conv_id, store_platform, user_id, include_local=local),
             self.store.is_marked(conv_id),
-            self.store.get_recent_memories(10, user_id=self._memory_user) if private else nothing(),
-            self.store.search_documents(text, limit=5, user_id=self._memory_user) if private else nothing(),
-            self.store.get_summary(conv_id),
+            self.store.get_recent_memories(10, user_id=self._memory_user, include_local=local) if private
+            else nothing(),
+            self.store.search_documents(text, limit=5, user_id=self._memory_user, include_local=local) if private
+            else nothing(),
+            self.store.get_summary(conv_id, include_local=local),
         )
         # Stored documents came from outside, and memories saved while marked carry that mark
         marked = marked or bool(docs) or any(m.get("marked") for m in memories)
@@ -302,10 +308,11 @@ class Agent:
     async def _compact(self, conv_id: str) -> None:
         window = self._window_tokens()
         try:
-            history = sanitize_history(await self.store.get_messages(conv_id, MAX_HISTORY))
+            local = is_local_provider(self.fast_provider or self.provider)
+            history = sanitize_history(await self.store.get_messages(conv_id, MAX_HISTORY, include_local=local))
             keep = self.context_manager.keep_count(history, window)
             boundary = await self.store.keep_boundary(conv_id, keep)
-            previous = await self.store.get_summary(conv_id)
+            previous = await self.store.get_summary(conv_id, include_local=local)
             _, summary = await self.context_manager.compact(
                 history, self.fast_provider or self.provider, previous, window, force=True,
             )
@@ -487,7 +494,7 @@ class Agent:
         if tool is None:
             logger.warning("Unknown tool called: %s", tc.name)
             return f"Unknown tool: {tc.name}"
-        logger.info("[%s] %s", tc.name, _summarize_args(tc.arguments))
+        logger.info("[%s] %s", tc.name, _summarize_args(tc.arguments))  # argument names only, never their values
         ck = _cache_key(tc.name, tc.arguments) if tc.name in _CACHEABLE_TOOLS else None
         if ck and ck in cache:
             logger.debug("[%s] cache hit", tc.name)
@@ -567,7 +574,9 @@ class Agent:
                 and not content_text.startswith("Error")
             ):
                 source = tc.arguments.get("path") or tc.arguments.get("url") or "unknown"
-                asyncio.create_task(self._auto_ingest(source, content_text, self._memory_user))
+                task = asyncio.create_task(self._auto_ingest(source, content_text, self._memory_user))
+                self._bg.add(task)
+                task.add_done_callback(self._bg.discard)
 
             shown = await shorten(conv_id, content_text)
             tool_msg = Message(role="tool", content=shown, tool_call_id=tc.id, media=media)
@@ -590,10 +599,17 @@ class Agent:
     async def _auto_ingest(self, source: str, content: str, user_id: str) -> None:
         """Background document ingestion for RAG."""
         try:
-            count = await self.store.ingest_document(source, content, user_id)
-            logger.info("RAG: auto-ingested %d chunks from %s", count, source)
+            count = await self.store.ingest_document(
+                source, content, user_id, max_chunks=self.config.storage.auto_ingest_max_chunks)
+            logger.info("RAG: auto-ingested %d chunks", count)
         except Exception as e:
-            logger.error("RAG: auto-ingest failed for %s: %s", source, e)
+            logger.error("RAG: auto-ingest failed: %s", e)
+
+    async def stop_background(self) -> None:
+        """Cancel auto-ingests still running, so the store can close."""
+        for task in list(self._bg):
+            task.cancel()
+        await asyncio.gather(*self._bg, return_exceptions=True)
 
 
 def _read_only(tc: ToolCall) -> bool:
@@ -635,11 +651,5 @@ def _classify_error(e: Exception) -> str:
 
 
 def _summarize_args(args: dict[str, Any]) -> str:
-    """Create a short summary of tool arguments for logging."""
-    parts = []
-    for k, v in args.items():
-        s = str(v)
-        if len(s) > 50:
-            s = s[:47] + "..."
-        parts.append(f"{k}={s}")
-    return ", ".join(parts) if parts else "(no args)"
+    """The argument names of a tool call for the log: values can hold messages, paths and search queries."""
+    return ", ".join(args) if args else "(no args)"

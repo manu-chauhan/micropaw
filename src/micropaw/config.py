@@ -225,6 +225,9 @@ class EmbeddingConfig(BaseModel):
     enabled: str = "auto"  # "auto", "true", "false"
     provider: Literal["auto", "local", "openai", "ollama"] = "auto"
     model: str = ""  # empty = auto-select best model for provider
+    base_url: str = ""  # an embedding server on another machine; "" = the Ollama host, or OpenAI's own address
+    api_key_env: str = ""  # name of the environment variable that holds the key for base_url; "" = none
+    keep_alive: str = "1m"  # how long Ollama keeps the embedding model loaded after the last message
 
     @field_validator("enabled", mode="before")
     @classmethod
@@ -250,6 +253,17 @@ class PrivacyConfig(BaseModel):
     allow_lan: bool = True          # private ranges and Tailscale count as "this side" in airgapped and local
     lan_hosts: list[str] = []       # extra host names or CIDRs that count as local (names are never resolved to decide)
     allow_cloud_fallback: bool = False  # a local main model may fail over to a cloud model
+
+
+class StorageConfig(BaseModel):
+    """What MicroPaw keeps on disk, for how long, and what it writes to logs."""
+
+    retention_days: int = 0         # delete messages, summaries, chunks and email records older than this (0 = keep)
+    secure_delete: bool = True      # overwrite deleted rows instead of leaving them in free database pages
+    auto_ingest_max_chunks: int = 20    # chunks kept from one file or page the agent read (0 = all of it)
+    max_chunks: int = 10000         # most document chunks kept; the oldest go first (0 = no limit)
+    log_content: bool = False       # allow message text in logs, even at DEBUG
+    audit: Literal["full", "names"] = "full"  # names: the audit log keeps tool names and outcomes, no arguments
 
 
 class VoiceConfig(BaseModel):
@@ -325,6 +339,7 @@ class Config(BaseModel):
     models: ModelsConfig = ModelsConfig()
     voice: VoiceConfig = VoiceConfig()
     privacy: PrivacyConfig = PrivacyConfig()
+    storage: StorageConfig = StorageConfig()
     mcp_servers: dict[str, MCPServerConfig] = {}
     fallback_providers: list[str] = []
     budget: BudgetConfig = BudgetConfig()

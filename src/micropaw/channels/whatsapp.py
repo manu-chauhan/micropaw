@@ -153,7 +153,7 @@ class WhatsAppChannel(Channel):
                         "messaging_product": "whatsapp",
                         "to": to,
                         "type": "text",
-                        "text": {"body": text},
+                        "text": {"body": text, "preview_url": False},
                     },
                 )
                 if resp.status_code >= 400:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import importlib.util
 import json
 import logging
 import os
@@ -17,20 +18,30 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+from micropaw import privacy
 from micropaw.channels.base import Channel
 from micropaw.config import CONFIG_DIR, CONFIG_FILE, DB_FILE, Config, load_config
 from micropaw.core.agent import Agent
 from micropaw.core.goal import GoalManager
 from micropaw.core.profile import AgentProfile, AgentRuntime, build_view, providers_in, unknown_tool_names
+from micropaw.memory.embeddings import _DEFAULT_OLLAMA_MODEL, LocalEmbedding, choose_local_model
 from micropaw.memory.ledger import Ledger
 from micropaw.memory.store import MemoryStore
 from micropaw.providers.base import AIProvider
+from micropaw.providers.ollama import ram_bytes
 from micropaw.providers.registry import Registry
 from micropaw.scheduler import AgentGoneError
 from micropaw.tools.base import ToolRegistry
 from micropaw.utils.redact import add_known_secret, config_secrets, redact, secret_env_names, set_known_secrets
 
 logger = logging.getLogger(__name__)
+
+is_local_url = privacy.is_local_url
+
+
+def _loopback(host: str) -> bool:
+    name = (host.split("//")[-1].split("/")[0].rsplit(":", 1)[0]).strip("[]").lower()
+    return name in ("localhost", "127.0.0.1", "::1", "0.0.0.0")
 
 
 
@@ -269,12 +280,11 @@ class Gateway:
         # Create embedding provider (auto-detect or explicit)
         embedding_provider = await self._create_embedding_provider()
 
-        # Pre-load embedding model (downloads from HF on first run)
-        if hasattr(embedding_provider, "warmup"):
-            await embedding_provider.warmup()
-
-        # Init database
-        self.store = MemoryStore(str(DB_FILE), embedding_provider=embedding_provider)
+        # Init database. A local embedding model loads on the first message, not here.
+        self.store = MemoryStore(
+            str(DB_FILE), embedding_provider=embedding_provider,
+            secure_delete=self.config.storage.secure_delete, max_chunks=self.config.storage.max_chunks,
+        )
         await self.store.init()
         self.ledger = Ledger(self.store.db)
         await self.ledger.init()
@@ -716,7 +726,7 @@ class Gateway:
         """Consume outbound bus messages and route to channels."""
         while True:
             try:
-                msg = await self._bus.consume_outbound()
+                msg = await self._bus.consume_outbound(timeout=None)  # stop() cancels this task
                 if msg is None:
                     if self._bus.closed:
                         return
@@ -735,15 +745,7 @@ class Gateway:
                 logger.error("Bus consumer error: %s", e)
 
     async def _create_embedding_provider(self):
-        from micropaw.memory.embeddings import (
-            _DEFAULT_LOCAL_MODEL,
-            _DEFAULT_OLLAMA_MODEL,
-            LocalEmbedding,
-            NullEmbedding,
-            OllamaEmbedding,
-            OpenAIEmbedding,
-            probe_ollama,
-        )
+        from micropaw.memory.embeddings import NullEmbedding, probe_ollama
         cfg = self.config.embedding
 
         if cfg.enabled == "false":
@@ -753,75 +755,77 @@ class Gateway:
         cloud_ok = not any(rt.profile.private for rt in self._runtimes.values())
         if not cloud_ok:
             logger.warning("An agent is private (local models only), so cloud embeddings are off.")
+        if cfg.base_url:
+            self._check_embedding_url(cfg.base_url, cloud_ok)
 
         # Explicit provider (user set provider != auto, or enabled == "true")
         if cfg.provider != "auto":
-            if cfg.provider == "openai" and not cloud_ok:
+            if cfg.provider == "openai" and not cloud_ok and not (cfg.base_url and is_local_url(cfg.base_url)):
                 logger.warning("embedding.provider is openai, but an agent is private: embeddings are off.")
                 return NullEmbedding()
             return self._create_explicit_provider(cfg)
 
-        # Auto-detect: probe available providers
-        ollama_host = self.config.provider_config.ollama.host
-        ollama_model = cfg.model or _DEFAULT_OLLAMA_MODEL
-
-        # 1. Ollama — zero extra deps, local, fast
-        if await probe_ollama(ollama_host, ollama_model):
-            logger.info("Embeddings: auto-detected Ollama (%s)", ollama_model)
-            return OllamaEmbedding(ollama_host, ollama_model)
+        # Auto-detect. A cloud service is never picked: set embedding.provider to openai for that.
+        host = cfg.base_url or self.config.provider_config.ollama.host
+        # 1. Ollama: zero extra deps, on this machine or another one
+        if await probe_ollama(host, cfg.model or _DEFAULT_OLLAMA_MODEL):
+            logger.info("Embeddings: auto-detected Ollama (%s)", cfg.model or _DEFAULT_OLLAMA_MODEL)
+            return self._ollama_embedding(cfg, host)
+        remote = not _loopback(host)
+        # 2. Local fastembed/ONNX: only when the machine can carry it (4 GB or more, or unknown)
+        ram = ram_bytes()
+        if importlib.util.find_spec("fastembed") and (ram is None or ram >= 4 * 1024 ** 3):
+            model = choose_local_model(DB_FILE, cfg.model)
+            logger.info("Embeddings: local model %s (loads on the first message)", model)
+            if remote:
+                logger.warning("The model server at %s did not answer at start, so memory search uses the local "
+                               "model for this run. Set embedding.provider to ollama to wait for it.", host)
+            return LocalEmbedding(model)
+        if remote:
+            logger.warning("The model server at %s did not answer at start, so memory search is off for this run. "
+                           "Set embedding.provider to ollama to wait for it.", host)
         else:
-            logger.debug(
-                "Ollama not available or missing %s; "
-                "run 'ollama pull %s' for local vector search",
-                ollama_model, ollama_model,
-            )
-
-        # 2. OpenAI — zero extra deps, uses existing key
-        openai_key = self.config.provider_config.openai.api_key
-        if openai_key and cloud_ok:
-            logger.info("Embeddings: auto-detected OpenAI (text-embedding-3-small)")
-            return OpenAIEmbedding(openai_key, "text-embedding-3-small")
-
-        # 3. Local fastembed/ONNX — fully offline, no PyTorch
-        try:
-            import fastembed  # noqa: F401
-            logger.info("Embeddings: auto-detected local (%s)", _DEFAULT_LOCAL_MODEL)
-            return LocalEmbedding(_DEFAULT_LOCAL_MODEL)
-        except ImportError:
-            pass
-
-        # 4. Nothing available
-        logger.info("Embeddings: no provider available; text search still works")
+            logger.info("Embeddings: none available; text search still works")
         return NullEmbedding()
 
+    @staticmethod
+    def _check_embedding_url(url: str, cloud_ok: bool) -> None:
+        """Memory text goes to this address: plain http only to this side, and nothing outside for a private agent."""
+        local = is_local_url(url)
+        if not local and (not cloud_ok or privacy.local_only()):
+            raise RuntimeError(
+                f"embedding.base_url {url} is not on this machine or your network, but private agents and local "
+                "mode keep memory text here. Use a local address or turn private mode off.")
+        if not local and url.lower().startswith("http://"):
+            raise RuntimeError(f"embedding.base_url {url} is plain http to a host outside your network. Use https.")
+
+    def _ollama_embedding(self, cfg, host: str):
+        from micropaw.memory.embeddings import OllamaEmbedding
+        return OllamaEmbedding(host, cfg.model or _DEFAULT_OLLAMA_MODEL, cfg.keep_alive)
+
     def _create_explicit_provider(self, cfg):
-        from micropaw.memory.embeddings import (
-            _DEFAULT_LOCAL_MODEL,
-            _DEFAULT_OLLAMA_MODEL,
-            LocalEmbedding,
-            NullEmbedding,
-            OllamaEmbedding,
-            OpenAIEmbedding,
-        )
+        from micropaw.memory.embeddings import NullEmbedding, OpenAIEmbedding
         if cfg.provider == "local":
-            try:
-                import fastembed  # noqa: F401
-            except ImportError:
+            if importlib.util.find_spec("fastembed") is None:
                 logger.warning(
                     "Embeddings: local selected but fastembed not installed; "
                     "falling back to disabled. Install with: pip install 'micropaw[embeddings]'"
                 )
                 return NullEmbedding()
-            return LocalEmbedding(cfg.model or _DEFAULT_LOCAL_MODEL)
+            return LocalEmbedding(choose_local_model(DB_FILE, cfg.model))
         elif cfg.provider == "openai":
-            api_key = self.config.provider_config.openai.api_key
-            if not api_key:
-                logger.warning("Embeddings: OpenAI selected but no API key; disabling")
-                return NullEmbedding()
-            return OpenAIEmbedding(api_key, cfg.model or "text-embedding-3-small")
+            base = cfg.base_url or self.config.provider_config.openai.base_url
+            key = os.environ.get(cfg.api_key_env, "") if cfg.api_key_env else self.config.provider_config.openai.api_key
+            if not cfg.base_url:
+                if privacy.local_only():
+                    logger.warning("Embeddings are off: local mode keeps memory text on this side, and OpenAI is not.")
+                    return NullEmbedding()
+                if not key:
+                    logger.warning("Embeddings: OpenAI selected but no API key; disabling")
+                    return NullEmbedding()
+            return OpenAIEmbedding(key, cfg.model or "text-embedding-3-small", base)
         elif cfg.provider == "ollama":
-            host = self.config.provider_config.ollama.host
-            return OllamaEmbedding(host, cfg.model or _DEFAULT_OLLAMA_MODEL)
+            return self._ollama_embedding(cfg, cfg.base_url or self.config.provider_config.ollama.host)
         return NullEmbedding()
 
     def _main_runtime(self) -> AgentRuntime:
@@ -924,6 +928,8 @@ class Gateway:
             except Exception as e:
                 logger.error("Error closing embedding provider: %s", e)
 
+        for agent in self.agents.values():
+            await agent.stop_background()  # an auto-ingest must not write to a closed database
         if self.store:
             await self.store.close()
 

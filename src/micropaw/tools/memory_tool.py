@@ -66,7 +66,7 @@ class MemoryTool(Tool):
             query = args.get("query", "")
             if not query:
                 return "Error: 'search' requires 'query'."
-            results = await _store.search_memories(query, limit=10, user_id=user_id)
+            results = await _store.search_memories(query, limit=10, user_id=user_id, include_local=context.local_data)
             if not results:
                 return f"No memories found for: {query}"
             if await _store.any_marked_memory([r["key"] for r in results], user_id=user_id):
@@ -78,7 +78,7 @@ class MemoryTool(Tool):
             return "\n".join(lines)
 
         elif action == "list":
-            memories = await _store.get_all_memories(user_id=user_id)
+            memories = await _store.get_all_memories(user_id=user_id, include_local=context.local_data)
             if not memories:
                 return "No memories stored yet."
             if any(m.get("marked") for m in memories):

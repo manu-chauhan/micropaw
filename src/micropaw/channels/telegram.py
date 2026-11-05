@@ -25,14 +25,16 @@ class TelegramChannel(Channel):
 
     async def start(self) -> None:
         try:
-            from telegram import Update
-            from telegram.ext import Application, CallbackQueryHandler, ContextTypes, filters
+            from telegram import LinkPreviewOptions, Update
+            from telegram.ext import Application, CallbackQueryHandler, ContextTypes, Defaults, filters
             from telegram.ext import MessageHandler as TGMsgHandler
         except ImportError:
             raise RuntimeError("python-telegram-bot not installed. Install with: pip install 'micropaw\\[telegram]'")
 
         # Concurrent updates: an approval answer must get through while the turn that asked is waiting
-        self._app = Application.builder().token(self.token).concurrent_updates(True).build()
+        # Link previews are fetched by Telegram's servers, so a URL in a reply would reach them: always off
+        defaults = Defaults(link_preview_options=LinkPreviewOptions(is_disabled=True))
+        self._app = Application.builder().token(self.token).concurrent_updates(True).defaults(defaults).build()
 
         async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             msg = update.message
@@ -101,7 +103,8 @@ class TelegramChannel(Channel):
         logger.info("Telegram channel starting...")
         await self._app.initialize()
         await self._app.start()
-        await self._app.updater.start_polling(drop_pending_updates=True)
+        # A long poll of 50 s (the most Telegram allows) means about one request a minute while idle
+        await self._app.updater.start_polling(timeout=50, drop_pending_updates=True)
         me = await self._app.bot.get_me()
         self._bot_username = me.username
         logger.info("Telegram channel connected: @%s", self._bot_username)

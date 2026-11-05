@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_QUEUE_SIZE = 100
 _DEFAULT_TIMEOUT = 1.0
+_CLASS_TIMEOUT: Any = object()  # "use the bus's own timeout"; None means wait without one
 
 
 # ---------------------------------------------------------------------------
@@ -86,12 +87,19 @@ class MessageBus:
         await self._inbound.put(msg)
         logger.debug("inbound enqueued channel=%s chat=%s qsize=%d", msg.channel, msg.chat_id, self._inbound.qsize())
 
-    async def consume_inbound(self) -> InboundMessage | None:
-        """Dequeue next inbound message, or None on timeout/closed."""
+    async def consume_inbound(self, timeout: float | None = _CLASS_TIMEOUT) -> InboundMessage | None:
+        """Dequeue next inbound message, or None on timeout/closed. timeout=None waits until one arrives."""
+        return await self._consume(self._inbound, timeout)
+
+    async def _consume(self, queue: asyncio.Queue, timeout: float | None) -> Any:
         if self._closed:
             return None
+        if timeout is _CLASS_TIMEOUT:
+            timeout = self._timeout
+        if timeout is None:
+            return await queue.get()  # no timer: an idle consumer never wakes the loop
         try:
-            return await asyncio.wait_for(self._inbound.get(), timeout=self._timeout)
+            return await asyncio.wait_for(queue.get(), timeout=timeout)
         except TimeoutError:
             return None
 
@@ -103,14 +111,9 @@ class MessageBus:
         await self._outbound.put(msg)
         logger.debug("outbound enqueued channel=%s chat=%s qsize=%d", msg.channel, msg.chat_id, self._outbound.qsize())
 
-    async def consume_outbound(self) -> OutboundMessage | None:
-        """Dequeue next outbound message, or None on timeout/closed."""
-        if self._closed:
-            return None
-        try:
-            return await asyncio.wait_for(self._outbound.get(), timeout=self._timeout)
-        except TimeoutError:
-            return None
+    async def consume_outbound(self, timeout: float | None = _CLASS_TIMEOUT) -> OutboundMessage | None:
+        """Dequeue next outbound message, or None on timeout/closed. timeout=None waits until one arrives."""
+        return await self._consume(self._outbound, timeout)
 
     # -- Lifecycle --
 

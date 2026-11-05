@@ -149,6 +149,7 @@ class Scheduler:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._db = await aiosqlite.connect(self.db_path)
         await self._db.execute("PRAGMA journal_mode=WAL")
+        await self._db.execute("PRAGMA synchronous=NORMAL")  # same level as the memory store
         await self._db.executescript(_SCHEMA)
         async with self._db.execute("PRAGMA table_info(cron_jobs)") as cur:
             have = {row[1] for row in await cur.fetchall()}

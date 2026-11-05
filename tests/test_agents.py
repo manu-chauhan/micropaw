@@ -454,6 +454,7 @@ async def test_private_agent_turns_cloud_embeddings_off(monkeypatch):
     def gateway(agents):
         c = cfg(agents=agents)
         c.provider_config.openai.api_key = "k"
+        c.embedding.provider = "openai"  # auto never picks a cloud service; this is the owner's own choice
         return Gateway(c, MagicMock(), MagicMock(), [], runtimes=build_runtimes(c, Registry(c)))
 
     assert isinstance(await gateway({})._create_embedding_provider(), OpenAIEmbedding)
