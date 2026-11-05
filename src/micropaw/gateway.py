@@ -29,6 +29,16 @@ from micropaw.utils.redact import config_secrets, redact, set_known_secrets
 logger = logging.getLogger(__name__)
 
 
+
+def _redacting(on_chunk):
+    """Hide known secrets in streamed text too (a key split across two chunks is caught in the final reply)."""
+    if on_chunk is None:
+        return None
+
+    async def send(chunk: str) -> None:
+        await on_chunk(redact(chunk))
+    return send
+
 class _RateLimiter:
     """Simple per-user rate limiter using a sliding window."""
 
@@ -574,7 +584,7 @@ class Gateway:
         agent = self._route(platform, user_id, channel_id)
         async with self._chat_lock(platform, user_id, channel_id):
             response = await agent.handle_message_stream(
-                text, user_id, platform, channel_id, on_chunk=on_chunk, media=media,
+                text, user_id, platform, channel_id, on_chunk=_redacting(on_chunk), media=media,
             )
         self._track_usage(agent)
         logger.debug("[%s] MicroPaw: %s", platform, response[:80])

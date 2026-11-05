@@ -122,7 +122,7 @@ class ShellTool(Tool):
 
     def __init__(self) -> None:
         dialect = "PowerShell" if shell_dialect() == "powershell" else "sh"
-        self.description = f"{type(self).description} Commands run in {dialect} on this computer."
+        self.description = f"{type(self).description} Commands are written for {dialect}."
 
     def needs_approval(self, args: dict[str, Any], context: ToolContext) -> str | None:
         """Ask before a command runs. Skipped only when confirm_dangerous is off, nothing outside was read,

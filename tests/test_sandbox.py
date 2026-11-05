@@ -278,10 +278,10 @@ def test_failure_detection():
 # --- shell on the host ------------------------------------------------------------
 
 def test_description_names_the_dialect(monkeypatch):
-    assert "sh on this computer" in shell.ShellTool().description
+    assert "written for sh" in shell.ShellTool().description
     monkeypatch.setattr(shell.os, "name", "nt")
     assert shell.shell_dialect() == "powershell"
-    assert "PowerShell on this computer" in shell.ShellTool().description
+    assert "written for PowerShell" in shell.ShellTool().description
 
 
 @pytest.mark.parametrize("cmd", [

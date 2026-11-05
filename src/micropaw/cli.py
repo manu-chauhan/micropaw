@@ -305,6 +305,10 @@ def doctor(quiet):
         f"{DB_FILE.stat().st_size / 1024:.0f} KB" if DB_FILE.exists() else "not created"
     )
     table.add_row("Database", ok(DB_FILE.exists()), db_detail)
+    from micropaw.tools import sandbox
+    sandbox.configure(load_config().permissions)
+    sb_line = sandbox.describe()
+    table.add_row("Shell sandbox", ok(sandbox.resolve().active) if not sandbox.resolve().error else ok(False), sb_line)
 
     provider = config.provider
     has_key = provider == "ollama" or bool(getattr(config.provider_config, provider).api_key)
