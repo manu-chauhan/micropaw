@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -66,15 +67,18 @@ class TestPathSecurity:
     def test_normal_path_allowed(self):
         assert validate_file_path("/tmp/test.txt") is None
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX system paths; Windows resolves /etc to C:\\etc")
     def test_proc_blocked(self):
         err = validate_file_path("/proc/self/environ")
         assert err is not None
         assert "blocked" in err.lower()
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX system paths; Windows resolves /etc to C:\\etc")
     def test_sys_blocked(self):
         err = validate_file_path("/sys/kernel/version")
         assert err is not None
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX system paths; Windows resolves /etc to C:\\etc")
     def test_etc_shadow_blocked(self):
         err = validate_file_path("/etc/shadow")
         assert err is not None
@@ -93,11 +97,13 @@ class TestPathSecurity:
         assert err is not None
 
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX system paths; Windows resolves /etc to C:\\etc")
     def test_etc_passwd_blocked(self):
         err = validate_file_path("/etc/passwd")
         assert err is not None
         assert "protected" in err.lower()
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX system paths; Windows resolves /etc to C:\\etc")
     def test_etc_ssl_private_blocked(self):
         err = validate_file_path("/etc/ssl/private/server.key")
         assert err is not None

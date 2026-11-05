@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from micropaw.security import validate_path, validate_url
@@ -91,10 +93,12 @@ class TestValidatePath:
         assert err is not None
         assert ".." in err
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX system paths; Windows resolves /etc to C:\\etc")
     def test_blocks_etc_shadow(self):
         err = validate_path("/etc/shadow")
         assert err is not None
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX system paths; Windows resolves /etc to C:\\etc")
     def test_blocks_etc_passwd(self):
         err = validate_path("/etc/passwd")
         assert err is not None
