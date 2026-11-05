@@ -87,7 +87,7 @@ def test_docker_refused_inside_container_with_socket(monkeypatch):
 def test_probe_runs_once(monkeypatch):
     calls = []
     monkeypatch.setattr(sandbox.shutil, "which", lambda n: "/x/" + n)
-    monkeypatch.setattr(sandbox, "_run", lambda argv: calls.append(argv) or True)
+    monkeypatch.setattr(sandbox, "_run", lambda argv, timeout=0: calls.append(argv) or True)
     _cfg(sandbox="docker")
     for _ in range(3):
         assert sandbox.resolve().kind == "docker"

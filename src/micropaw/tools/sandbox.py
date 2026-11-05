@@ -19,6 +19,7 @@ from pathlib import Path
 from micropaw.config import CONFIG_DIR, PermissionsConfig
 
 PROBE_TIMEOUT = 0.2
+CONTAINER_PROBE_TIMEOUT = 5.0  # `docker info` talks to the daemon and is slower
 PULL_TIMEOUT = 300
 
 # Only these go into a bwrap sandbox; HOME is set to the workspace
@@ -91,9 +92,9 @@ def mark_failed(kind: str) -> None:
     _probes[kind] = False
 
 
-def _run(argv: list[str]) -> bool:
+def _run(argv: list[str], timeout: float = PROBE_TIMEOUT) -> bool:
     try:
-        return subprocess.run(argv, capture_output=True, timeout=PROBE_TIMEOUT).returncode == 0
+        return subprocess.run(argv, capture_output=True, timeout=timeout).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
 
@@ -108,7 +109,7 @@ def _available(kind: str) -> bool:
         ok = sys.platform == "darwin" and shutil.which("sandbox-exec") is not None and _run(
             ["sandbox-exec", "-p", "(version 1)(allow default)", "/usr/bin/true"])
     else:
-        ok = shutil.which(kind) is not None and _run([kind, "info"])
+        ok = shutil.which(kind) is not None and _run([kind, "info"], CONTAINER_PROBE_TIMEOUT)
     _probes[kind] = ok
     return ok
 
