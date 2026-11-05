@@ -92,7 +92,9 @@ def parse_spec(spec: str) -> tuple[str, str]:
     return name.strip().lower(), model.strip()
 
 
-_PRIVATE_NETS = [ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7")]
+# The last one is Tailscale's CGNAT range.
+_PRIVATE_NETS = [ipaddress.ip_network(n) for n in
+                 ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7", "100.64.0.0/10")]
 
 
 @lru_cache(maxsize=128)
@@ -324,28 +326,30 @@ class Registry:
             self._cache[key] = _Gate(inner, self._sem(ep), ep.name if ep.local else None)
         return self._cache[key]
 
-    def chain(self, specs: list[str]) -> AIProvider | None:
-        """One provider, or a FallbackProvider when several specs build. Specs that cannot build are skipped."""
+    def _built(self, specs: list[str]) -> list[AIProvider]:
+        """The providers that build, in order, without duplicates. Specs that cannot build are skipped."""
         built: list[AIProvider] = []
         for spec in specs:
             p = self.get(spec)
             if p is not None and p not in built:
                 built.append(p)
+        return built
+
+    def chain(self, specs: list[str]) -> AIProvider | None:
+        """One provider, or a FallbackProvider when several build. Not metered: see `role`."""
+        built = self._built(specs)
         if not built:
             return None
         return built[0] if len(built) == 1 else FallbackProvider(built)
 
     def role(self, agent: str, role: str, specs: list[str]) -> AIProvider | None:
-        provider = self.chain(specs)
-        return self._wrap(provider, agent, role) if provider is not None else None
-
-    def _wrap(self, provider: AIProvider, agent: str, role: str) -> AIProvider:
+        """Like `chain`, but every provider is metered on its own, so the ledger records the one that answered."""
         from micropaw.providers.metered import meter
-        return meter(provider, agent=agent, role=role, ledger=self.ledger, budget=self.config.budget)
-
-    def ollama_providers(self) -> list:
-        from micropaw.providers.ollama import OllamaProvider
-        return [p._inner for p in self._cache.values() if isinstance(p._inner, OllamaProvider)]  # type: ignore[attr-defined]
+        metered = [meter(p, agent=agent, role=role, ledger=self.ledger, budget=self.config.budget)
+                   for p in self._built(specs)]
+        if not metered:
+            return None
+        return metered[0] if len(metered) == 1 else FallbackProvider(metered)
 
     async def close(self) -> None:
         for provider in self._cache.values():

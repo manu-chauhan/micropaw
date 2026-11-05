@@ -5,9 +5,7 @@ Unknown model = None (never a guess). Local servers cost 0.
 
 from __future__ import annotations
 
-import ipaddress
 from dataclasses import dataclass
-from urllib.parse import urlparse
 
 LOCAL_PROVIDERS = frozenset({"ollama", "lmstudio", "llamacpp", "vllm", "jan", "koboldcpp", "localai", "local"})
 
@@ -86,19 +84,15 @@ PRICES: dict[tuple[str, str], Price] = {
 
 
 def is_local(where: str) -> bool:
-    """A local server name, or a host or URL that is loopback or on a private network."""
+    """A local server name, or a host or URL on this machine or a private network (the registry's rule)."""
+    from micropaw.providers.registry import is_local_url
+
     where = where.strip().lower()
     if where in LOCAL_PROVIDERS:
         return True
-    host = (urlparse(where).hostname if "://" in where else where.split("/")[0].rsplit(":", 1)[0]) or ""
-    host = host.strip("[]")
-    if host == "localhost" or host.endswith(".localhost"):
-        return True
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        return False
-    return ip.is_loopback or ip.is_private
+    if where != "localhost" and not any(c in where for c in "./:"):
+        return False  # a bare provider name such as "claude", not a host
+    return is_local_url(where)
 
 
 def is_local_provider(provider: object) -> bool:

@@ -9,6 +9,7 @@ from collections.abc import AsyncGenerator
 import httpx
 
 from micropaw.providers.base import NO_RETRY, AIProvider, AIResponse, Message, ToolDef
+from micropaw.providers.metered import BudgetExceeded
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,8 @@ def unwrap(e: Exception) -> Exception:
 def classify(e: Exception) -> str | None:
     """Short reason when another provider could help ("timed out"), None when the request itself is bad."""
     e = unwrap(e)
+    if isinstance(e, BudgetExceeded):
+        return "has reached its daily budget"
     if isinstance(e, httpx.HTTPStatusError):
         status = e.response.status_code
         if status in _FALL_THROUGH or status >= 500:
@@ -87,11 +90,19 @@ def _label(p: AIProvider) -> str:
     return f"{p.name}:{model}" if model else p.name
 
 
+def _shared(p: AIProvider) -> AIProvider:
+    """The provider under a metering wrapper, so every agent that uses it shares one cooldown."""
+    return p.__dict__.get("inner", p)
+
+
 def _cooling(p: AIProvider) -> bool:
-    return getattr(p, "_down_until", 0.0) > _now()
+    return getattr(_shared(p), "_down_until", 0.0) > _now()
 
 
 def _mark_down(p: AIProvider, why: str) -> None:
+    if why.endswith("budget"):
+        return  # the cap is checked on every call, no cooldown needed
+    p = _shared(p)
     p._down_until = _now() + COOLDOWN  # type: ignore[attr-defined]
     p._down_why = why  # type: ignore[attr-defined]
 
@@ -117,7 +128,7 @@ class FallbackProvider(AIProvider):
         first = self.providers[0]
         if answered is first:
             return ""
-        why = failed.get(id(first)) or getattr(first, "_down_why", "failed")
+        why = failed.get(id(first)) or getattr(_shared(first), "_down_why", "failed")
         return f"\n\n[answered by {_label(answered)} because {_label(first)} {why}]"
 
     async def chat(self, messages: list[Message], tools: list[ToolDef] | None = None) -> AIResponse:
@@ -142,6 +153,8 @@ class FallbackProvider(AIProvider):
             if not response.tool_calls:
                 response.content += self._note(provider, failed)
             return response
+        if isinstance(last, BudgetExceeded):
+            raise last  # the chat gets the plain budget message
         raise AllProvidersFailedError(f"All providers failed: {last}") from last
 
     async def chat_stream(
@@ -187,6 +200,8 @@ class FallbackProvider(AIProvider):
                     return
             finally:
                 await stream.aclose()
+        if isinstance(last, BudgetExceeded):
+            raise last  # the chat gets the plain budget message
         raise AllProvidersFailedError(f"All providers failed: {last}") from last
 
     async def close(self) -> None:
