@@ -479,10 +479,12 @@ class MemoryStore:
             messages.append(Message(role=role, content=content, tool_calls=tool_calls, tool_call_id=tool_call_id))
         return messages
 
-    async def keep_boundary(self, conversation_id: str, keep_recent: int) -> int | None:
-        """Id of the oldest of the last `keep_recent` messages (compaction deletes everything before it)."""
+    async def keep_boundary(self, conversation_id: str, keep_recent: int, include_local: bool = True) -> int | None:
+        """Id of the oldest of the last `keep_recent` messages (compaction deletes everything before it).
+        include_local=False counts only what a model that is not local was shown."""
         async with self.db.execute(
-            "SELECT MIN(id) FROM (SELECT id FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?)",
+            "SELECT MIN(id) FROM (SELECT id FROM messages WHERE conversation_id = ?"
+            f"{'' if include_local else ' AND local_only = 0'} ORDER BY id DESC LIMIT ?)",
             (conversation_id, keep_recent),
         ) as cursor:
             row = await cursor.fetchone()
@@ -490,9 +492,12 @@ class MemoryStore:
 
     async def compact_messages(
         self, conversation_id: str, summary: str, keep_recent: int, marked: bool = False,
-        before_id: int | None = None,
+        before_id: int | None = None, include_local: bool = True,
     ) -> None:
         """Delete old messages, keep the last N, and persist the summary.
+
+        include_local=False is a summary made by a model that is not local: it never saw local or airgapped
+        talk, so only the other messages go, and it is kept apart from a summary of local talk.
 
         `before_id` (from keep_boundary, taken before the summary was written) limits the delete to what
         the summary covers, so messages saved meanwhile survive. `marked` keeps the mark on the summary.
@@ -500,24 +505,28 @@ class MemoryStore:
         """
         lock = self._compact_locks.setdefault(conversation_id, asyncio.Lock())
         async with lock:
-            await self._compact_messages_inner(conversation_id, summary, keep_recent, marked, before_id)
+            await self._compact_messages_inner(conversation_id, summary, keep_recent, marked, before_id, include_local)
 
     async def _compact_messages_inner(
         self, conversation_id: str, summary: str, keep_recent: int, marked: bool, before_id: int | None,
+        include_local: bool = True,
     ) -> None:
         if before_id is None:
-            before_id = await self.keep_boundary(conversation_id, keep_recent)
+            before_id = await self.keep_boundary(conversation_id, keep_recent, include_local)
         if before_id is None:
             return
-        async with self.db.execute(
-            "SELECT 1 FROM messages WHERE conversation_id = ? AND id < ? AND local_only = 1 LIMIT 1",
-            (conversation_id, before_id),
-        ) as cursor:
-            local_summary = _local_now() == 1 or await cursor.fetchone() is not None
+        local_summary = False
+        if include_local:
+            async with self.db.execute(
+                "SELECT 1 FROM messages WHERE conversation_id = ? AND id < ? AND local_only = 1 LIMIT 1",
+                (conversation_id, before_id),
+            ) as cursor:
+                local_summary = _local_now() == 1 or await cursor.fetchone() is not None
 
-        # Delete all messages older than the kept ones
+        # Delete the messages older than the kept ones (a summary made without the local ones leaves them)
         await self.db.execute(
-            "DELETE FROM messages WHERE conversation_id = ? AND id < ?",
+            "DELETE FROM messages WHERE conversation_id = ? AND id < ?"
+            f"{'' if include_local else ' AND local_only = 0'}",
             (conversation_id, before_id),
         )
         # Store summary in kv_meta (avoids ID ordering issues with messages table).
@@ -526,7 +535,12 @@ class MemoryStore:
             await self._set_meta(f"summary_marked:{conversation_id}", "1")
         if local_summary:
             await self._set_meta(f"summary_local:{conversation_id}", "1")  # sticky: it holds what the old one held
-        await self._set_meta(f"summary:{conversation_id}", summary)
+        key = f"summary:{conversation_id}"
+        if not include_local and await self._get_meta(f"summary_local:{conversation_id}") is not None:
+            key = f"summary_cloud:{conversation_id}"  # the summary of local talk stays as it is
+        elif include_local:  # this one was made from the other, so it holds it
+            await self.db.execute("DELETE FROM kv_meta WHERE key = ?", (f"summary_cloud:{conversation_id}",))
+        await self._set_meta(key, summary)
         await self.db.commit()
 
     async def checkpoint(self) -> None:
@@ -588,9 +602,12 @@ class MemoryStore:
 
     async def get_summary(self, conversation_id: str, include_local: bool = True) -> str | None:
         """Get the compaction summary for a conversation, if any. A summary that holds local or airgapped
-        talk is withheld when include_local is False."""
-        if not include_local and await self._get_meta(f"summary_local:{conversation_id}") is not None:
-            return None
+        talk is withheld when include_local is False (a summary made since by a non-local model is not)."""
+        cloud = await self._get_meta(f"summary_cloud:{conversation_id}")
+        if await self._get_meta(f"summary_local:{conversation_id}") is not None:
+            if not include_local:
+                return cloud
+            return "\n\n".join(t for t in (await self._get_meta(f"summary:{conversation_id}"), cloud) if t) or None
         return await self._get_meta(f"summary:{conversation_id}")
 
     # --- Memories ---

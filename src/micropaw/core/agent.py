@@ -311,7 +311,7 @@ class Agent:
             local = is_local_provider(self.fast_provider or self.provider)
             history = sanitize_history(await self.store.get_messages(conv_id, MAX_HISTORY, include_local=local))
             keep = self.context_manager.keep_count(history, window)
-            boundary = await self.store.keep_boundary(conv_id, keep)
+            boundary = await self.store.keep_boundary(conv_id, keep, include_local=local)
             previous = await self.store.get_summary(conv_id, include_local=local)
             _, summary = await self.context_manager.compact(
                 history, self.fast_provider or self.provider, previous, window, force=True,
@@ -319,6 +319,7 @@ class Agent:
             if summary:
                 await self.store.compact_messages(
                     conv_id, summary, keep, marked=await self.store.is_marked(conv_id), before_id=boundary,
+                    include_local=local,
                 )
         except Exception as e:
             logger.warning("Background compaction failed for %s: %s", conv_id, e)

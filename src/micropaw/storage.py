@@ -114,6 +114,12 @@ def share_local_history(db_file: Path) -> dict[str, int]:
         for table in ("messages", "memories", "document_chunks"):
             cur = con.execute(f"UPDATE {table} SET local_only = 0 WHERE local_only = 1")
             counts[table] = cur.rowcount
+        for key, text in con.execute("SELECT key, value FROM kv_meta WHERE key LIKE 'summary_cloud:%'").fetchall():
+            conv = key.split(":", 1)[1]  # fold the later summary into the shared one
+            row = con.execute("SELECT value FROM kv_meta WHERE key = ?", (f"summary:{conv}",)).fetchone()
+            con.execute("INSERT OR REPLACE INTO kv_meta (key, value) VALUES (?, ?)",
+                        (f"summary:{conv}", "\n\n".join(t for t in (row and row[0], text) if t)))
+            con.execute("DELETE FROM kv_meta WHERE key = ?", (key,))
         cur = con.execute("DELETE FROM kv_meta WHERE key LIKE 'summary_local:%'")
         counts["summaries"] = cur.rowcount
         con.commit()

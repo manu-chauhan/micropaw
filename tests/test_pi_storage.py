@@ -354,3 +354,82 @@ def test_a_failover_chain_of_local_providers_is_local():
     assert is_local_provider(FallbackProvider(metered))
     assert is_local_provider(meter(FallbackProvider([local, Lan()]), agent="main", role="chat",
                                    ledger=LateLedger(), budget=BudgetConfig()))
+
+
+# --- a model that is not local compacts only what it saw ---
+
+async def _local_then_normal(s: MemoryStore) -> None:
+    privacy._reset_for_tests()
+    privacy.freeze("local")
+    await s.get_or_create_conversation("c1", "dm", "u")
+    await s.save_messages("c1", [Message(role="user", content=f"local{i}") for i in range(6)])
+    await s.compact_messages("c1", "local summary", keep_recent=2)
+    privacy._reset_for_tests()
+    privacy.freeze("normal")
+    await s.save_messages("c1", [Message(role="user", content=f"normal{i}") for i in range(6)])
+
+
+async def test_a_cloud_summary_keeps_the_local_messages_and_the_local_summary(tmp_path):
+    s = MemoryStore(tmp_path / "data.db")
+    await s.init()
+    await _local_then_normal(s)
+    local_kept = [m.content for m in await s.get_messages("c1", 50) if m.content.startswith("local")]
+    boundary = await s.keep_boundary("c1", 2, include_local=False)
+    await s.compact_messages("c1", "cloud summary", keep_recent=2, before_id=boundary, include_local=False)
+    left = [m.content for m in await s.get_messages("c1", 50)]
+    assert [c for c in left if c.startswith("local")] == local_kept  # none of them went
+    assert [c for c in left if c.startswith("normal")] == ["normal4", "normal5"]
+    assert await s.get_summary("c1", include_local=False) == "cloud summary"  # a cloud model gets its own
+    assert await s.get_summary("c1") == "local summary\n\ncloud summary"  # a local one gets both
+    await s.close()
+
+
+async def test_a_local_summary_after_a_cloud_one_folds_it_in(tmp_path):
+    s = MemoryStore(tmp_path / "data.db")
+    await s.init()
+    await _local_then_normal(s)
+    await s.compact_messages("c1", "cloud summary", keep_recent=2,
+                             before_id=await s.keep_boundary("c1", 2, include_local=False), include_local=False)
+    await s.compact_messages("c1", "everything summary", keep_recent=2)  # a local model made it from both
+    assert await s.get_summary("c1") == "everything summary"
+    assert await s.get_summary("c1", include_local=False) is None
+    await s.close()
+
+
+async def test_sharing_history_keeps_the_cloud_summary_too(tmp_path):
+    from micropaw import storage
+
+    s = MemoryStore(tmp_path / "data.db")
+    await s.init()
+    await _local_then_normal(s)
+    await s.compact_messages("c1", "cloud summary", keep_recent=2,
+                             before_id=await s.keep_boundary("c1", 2, include_local=False), include_local=False)
+    await s.close()
+    storage.share_local_history(tmp_path / "data.db")
+    s = MemoryStore(tmp_path / "data.db")
+    await s.init()
+    assert await s.get_summary("c1", include_local=False) == "local summary\n\ncloud summary"
+    await s.close()
+
+
+async def test_the_agent_compacts_with_a_cloud_model_without_touching_local_talk(tmp_path):
+    from micropaw.config import Config
+    from micropaw.core.agent import Agent
+    from micropaw.providers.base import AIResponse
+    from micropaw.tools.base import ToolRegistry
+    from tests.test_agent import MockProvider
+
+    s = MemoryStore(tmp_path / "data.db")
+    await s.init()
+    await _local_then_normal(s)
+    await s.save_messages("c1", [Message(role="user", content=f"later{i}") for i in range(30)])
+    cloud = MockProvider([AIResponse(content="cloud summary", tool_calls=[], usage={})])
+    cloud.name = "claude"
+    agent = Agent(Config(), cloud, ToolRegistry(), s)
+    await agent._compact("c1")
+    left = [m.content for m in await s.get_messages("c1", 100)]
+    assert [c for c in left if c.startswith("local")] == ["local4", "local5"]  # the ones the local summary left
+    assert not [c for c in left if c.startswith("normal")]  # the cloud summary took the old ones
+    assert await s.get_summary("c1", include_local=False) == "cloud summary"
+    assert (await s.get_summary("c1")).startswith("local summary")
+    await s.close()
