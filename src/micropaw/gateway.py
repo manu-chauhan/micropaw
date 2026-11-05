@@ -325,6 +325,12 @@ class Gateway:
             self.agents[name] = agent
         self.agent = self.agents["main"]
         self.goals = GoalManager(lambda: self.agents, self._say, lambda: self.ledger)
+        from micropaw.skills import migrate_legacy
+        try:
+            if notice := migrate_legacy():
+                logger.warning(notice)
+        except OSError as e:
+            logger.warning("Could not move SKILLS.md into skills/: %s", e)
         await self._load_chat_agents()
         self._probe_task = asyncio.create_task(self._probe_models(runtimes))
 

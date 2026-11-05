@@ -96,6 +96,29 @@ def _scan(root: Path, origin: str) -> dict[str, Skill]:
     return {s.name: s for s in found if s}
 
 
+# The SKILLS.md that older setups copied into ~/.micropaw unchanged; only an edited copy is worth keeping
+_OLD_DEFAULT_SHA256 = "f56d471c175abe4c11fb2c47037087a73718dd30556d9c33a82ef94b995b7807"
+
+
+def migrate_legacy() -> str | None:
+    """Move a hand-edited ~/.micropaw/SKILLS.md (v0.3 and older) into skills/my-notes once. Returns a notice."""
+    import hashlib
+
+    old = config.CONFIG_DIR / "SKILLS.md"
+    target = user_dir() / "my-notes"
+    if not old.is_file() or old.is_symlink() or target.exists():
+        return None
+    data = old.read_bytes()
+    if hashlib.sha256(data).hexdigest() == _OLD_DEFAULT_SHA256:
+        old.rename(old.with_name("SKILLS.md.old"))
+        return None
+    target.mkdir(parents=True)
+    head = "---\nname: my-notes\ndescription: Your own workflow notes, moved from SKILLS.md\n---\n\n"
+    (target / "SKILL.md").write_text(head + data.decode("utf-8", errors="replace"), encoding="utf-8")
+    old.rename(old.with_name("SKILLS.md.old"))
+    return "Your SKILLS.md is now the skill 'my-notes' (~/.micropaw/skills/my-notes/SKILL.md)."
+
+
 def discover() -> dict[str, Skill]:
     """Bundled skills, then the owner's (and approved agent proposals) on top. Sorted by name."""
     found = _scan(BUNDLED_DIR, "bundled") | _scan(user_dir(), "owner")

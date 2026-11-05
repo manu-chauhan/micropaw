@@ -289,3 +289,27 @@ async def test_proposal_cannot_use_front_matter_tricks(home):
     await run_tool(SkillTool(), {**PROPOSAL, "body": body}, ctx(yes))
     meta, _ = skills.parse((home / "tea-order" / "SKILL.md").read_text())
     assert set(meta) == {"name", "description"}
+
+
+def test_edited_legacy_skills_md_becomes_a_skill(tmp_path, monkeypatch):
+    from micropaw import config, skills
+    monkeypatch.setattr(config, "CONFIG_DIR", tmp_path)
+    (tmp_path / "SKILLS.md").write_text("# My flows\nAlways check the calendar first.\n")
+    assert "my-notes" in skills.migrate_legacy()
+    assert "my-notes" in skills.discover()
+    assert "calendar first" in skills.read_body(skills.discover()["my-notes"])
+    assert not (tmp_path / "SKILLS.md").exists() and (tmp_path / "SKILLS.md.old").exists()
+    assert skills.migrate_legacy() is None  # once only
+
+
+def test_unedited_legacy_copy_is_retired_quietly(tmp_path, monkeypatch):
+    import subprocess
+
+    from micropaw import config, skills
+    old = subprocess.run(["git", "show", "ceb7432:src/micropaw/SKILLS.md"], capture_output=True)
+    if old.returncode:
+        import pytest
+        pytest.skip("needs git history")
+    monkeypatch.setattr(config, "CONFIG_DIR", tmp_path)
+    (tmp_path / "SKILLS.md").write_bytes(old.stdout)
+    assert skills.migrate_legacy() is None and "my-notes" not in skills.discover()
