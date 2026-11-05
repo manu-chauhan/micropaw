@@ -580,8 +580,9 @@ def load_config() -> Config:
     except ValidationError as e:
         first = e.errors()[0]
         where = ".".join(str(part) for part in first["loc"])
+        why = first["msg"].removeprefix("Value error, ").rstrip(".")
         raise ConfigError(f"The config file {CONFIG_FILE} has a problem at '{where}': "
-                          f"{first['msg'].removeprefix('Value error, ').rstrip('.')}. Fix it, or run: paw setup --reset") from None
+                          f"{why}. Fix it, or run: paw setup --reset") from None
     from micropaw import privacy
     privacy.apply_floor(cfg)  # settings a strict run is holding back stay held in later loads
     return cfg
