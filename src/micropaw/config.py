@@ -159,6 +159,10 @@ class PermissionsConfig(BaseModel):
     confirm_dangerous: bool = True
     disabled_tools: list[str] = []  # tool names to disable, e.g. ["web_search", "http_request"]
     workspace: str = "~/micropaw"  # files written here, and shell runs here, without asking
+    # Where shell commands run: auto, off, bwrap, seatbelt, docker or podman
+    sandbox: Literal["auto", "off", "bwrap", "seatbelt", "docker", "podman"] = "auto"
+    sandbox_network: bool = False  # let sandboxed commands use the network
+    sandbox_image: str = "python:3.13-slim"  # image for docker and podman
 
 
 class PersonaConfig(BaseModel):

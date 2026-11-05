@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-import signal
+import shutil
 from pathlib import Path
 from typing import Any
 
+from micropaw.tools import sandbox
 from micropaw.tools.base import Tool, ToolContext
+from micropaw.utils.redact import SECRET_NAME, redact
 
 TIMEOUT = 30
 MAX_OUTPUT = 10_000
@@ -23,6 +25,10 @@ _DANGEROUS_PATTERNS = [
     r"\bgit\s+push\b", r"\bgit\s+reset\b", r"\bgit\s+checkout\b",
     r"\bcurl\s+.*-[dX]", r"\bwget\b",
     r">\s*/", r">>\s*/",  # redirect to absolute path
+    # Windows (cmd and PowerShell)
+    r"\bRemove-Item\b.*-Recurse", r"\bdel\s+.*/s\b", r"\bformat\s+[a-z]:", r"\b(rd|rmdir)\s+.*/s\b",
+    r"\breg\s+delete\b", r"\bSet-ExecutionPolicy\b",
+    r"\b(iwr|irm|Invoke-WebRequest|Invoke-RestMethod|curl|wget)\b.*\|\s*(iex|Invoke-Expression)\b",
 ]
 _DANGEROUS_RE = [re.compile(p, re.IGNORECASE) for p in _DANGEROUS_PATTERNS]
 
@@ -85,12 +91,21 @@ BLOCKED_PATTERNS = [
 _BLOCKED_RE = [re.compile(p, re.IGNORECASE) for p in BLOCKED_PATTERNS]
 
 # Env var names that usually hold credentials; children never see them
-_SECRET_ENV = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH|COOKIE", re.IGNORECASE)
+_SECRET_ENV = SECRET_NAME
 
 
 def _child_env() -> dict[str, str]:
     """The current environment minus API keys, tokens and other secrets."""
     return {k: v for k, v in os.environ.items() if not _SECRET_ENV.search(k)}
+
+
+def _powershell() -> str:
+    return shutil.which("pwsh") or "powershell"
+
+
+def shell_dialect() -> str:
+    """The language commands are written in on this computer: sh or powershell."""
+    return "powershell" if os.name == "nt" else "sh"
 
 
 class ShellTool(Tool):
@@ -105,16 +120,26 @@ class ShellTool(Tool):
         "required": ["command"],
     }
 
+    def __init__(self) -> None:
+        dialect = "PowerShell" if shell_dialect() == "powershell" else "sh"
+        self.description = f"{type(self).description} Commands run in {dialect} on this computer."
+
     def needs_approval(self, args: dict[str, Any], context: ToolContext) -> str | None:
-        """Every host command asks (confirm_dangerous=False: only after outside content was read)."""
+        """Ask before a command runs. Skipped only when confirm_dangerous is off, nothing outside was read,
+        and the command runs in a sandbox that may skip it (never sandbox-exec) or on a POSIX host."""
         command = args.get("command", "")
         if not context.allow_shell or len(command) > MAX_COMMAND or any(p.search(command) for p in _BLOCKED_RE):
             return None  # execute() refuses these anyway
+        sb = sandbox.resolve()
+        if sb.error:
+            return None  # execute() refuses
         if not context.confirm_dangerous and not context.marked:
-            return None
+            host_always_asks = not sb.active and os.name == "nt"
+            if sb.may_skip_ask and not host_always_asks:
+                return None
         risky = any(p.search(command) for p in _DANGEROUS_RE)
         warning = "Careful: this can delete or change things.\n" if risky else ""
-        return f"{warning}Run on this computer (in {context.workspace or 'the current folder'}):\n{command}"
+        return f"{sb.label} run in {context.workspace or 'the current folder'}\n{warning}{command}"
 
     async def execute(self, args: dict[str, Any], context: ToolContext) -> str:
         if not context.allow_shell:
@@ -127,23 +152,53 @@ class ShellTool(Tool):
         if any(pat.search(command) for pat in _BLOCKED_RE):
             return "Error: This command has been blocked for safety reasons."
 
-        cwd = None
-        if context.workspace:
-            cwd = Path(context.workspace).expanduser()
+        sb = sandbox.resolve()
+        if sb.error:
+            return f"Error: {sb.error} Not run."
+        cwd = Path(context.workspace).expanduser() if context.workspace else None
+        if cwd:
             cwd.mkdir(parents=True, exist_ok=True)
+        note = ""
+        wrapped = None
         try:
-            proc = await asyncio.create_subprocess_shell(
-                command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=_child_env(), cwd=cwd,
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=TIMEOUT)
+            if sb.active:
+                note = await sandbox.prepare(sb)
+                wrapped = sandbox.wrap(sb, command, cwd or Path.cwd(), _child_env())
+                proc = await asyncio.create_subprocess_exec(
+                    *wrapped.argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                    env=wrapped.env, cwd=cwd,
+                )
+            elif os.name == "nt":
+                proc = await asyncio.create_subprocess_exec(
+                    _powershell(), "-NoProfile", "-NonInteractive", "-Command", command,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=_child_env(), cwd=cwd,
+                )
+            else:
+                proc = await asyncio.create_subprocess_shell(
+                    command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=_child_env(), cwd=cwd,
+                )
+        except sandbox.SandboxError as e:
+            return f"Error: {e} Not run."
+        except Exception as e:
+            if sb.active:
+                sandbox.mark_failed(sb.kind)
+                return f"Sandbox failed: {e}. Not run."
+            return f"Error executing command: {e}"
 
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=TIMEOUT)
             output = stdout.decode("utf-8", errors="replace").strip()
             errors = stderr.decode("utf-8", errors="replace").strip()
+            if reason := sandbox.failure(sb, proc.returncode, errors):
+                sandbox.mark_failed(sb.kind)
+                return f"Sandbox failed: {reason}. Not run."
 
             result = output
             if errors:
                 result += f"\n\nSTDERR:\n{errors}" if result else errors
 
+            # Redact before the cut, so a key split at the cut cannot survive
+            result = redact(result)
             if not result:
                 result = "(command completed with no output)"
             elif len(result) > MAX_OUTPUT:
@@ -152,19 +207,23 @@ class ShellTool(Tool):
             if proc.returncode != 0:
                 result = f"Exit code {proc.returncode}:\n{result}"
 
-            return result
+            return note + result
 
         except TimeoutError:
             try:
                 proc.terminate()
                 await asyncio.wait_for(proc.wait(), timeout=3.0)
             except (TimeoutError, ProcessLookupError):
-                # Process didn't die from SIGTERM — force kill
+                # Process didn't die from SIGTERM; force kill (works on Windows too)
                 try:
-                    os.kill(proc.pid, signal.SIGKILL)
+                    proc.kill()
                     await proc.wait()
                 except (ProcessLookupError, OSError):
                     pass
+            if wrapped and wrapped.cleanup:
+                cleanup = await asyncio.create_subprocess_exec(
+                    *wrapped.cleanup, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                await cleanup.wait()
             return f"Error: Command timed out after {TIMEOUT} seconds."
         except Exception as e:
             return f"Error executing command: {e}"
