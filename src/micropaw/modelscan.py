@@ -153,9 +153,17 @@ def provider_root(entry_url: str, kind: str) -> str:
     return url[:-3] if kind != "ollama" and url.endswith("/v1") else url
 
 
+def _entries_know_ollama() -> bool:
+    """True when a providers entry can say it is an Ollama server (it has a `kind`). Without that, the entry is
+    used as an OpenAI-style server, so an Ollama box is saved at its /v1 address, which Ollama also serves."""
+    from micropaw.config import CustomProviderConfig
+    return "kind" in CustomProviderConfig.model_fields
+
+
 def stored_url(url: str, kind: str) -> str:
     """The address saved in config. OpenAI-style servers keep their /v1, like the presets do."""
-    return url if kind == "ollama" or urlparse(url).path.rstrip("/") else f"{url}/v1"
+    native = kind == "ollama" and _entries_know_ollama()
+    return url if native or urlparse(url).path.rstrip("/") else f"{url}/v1"
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +271,7 @@ def write_entry(name: str, url: str, kind: str, key_env: str, use: str, spec: st
     def change(raw: dict) -> None:
         raw.setdefault("schema_version", SCHEMA_VERSION)
         entry: dict = {"base_url": url}
-        if kind == "ollama":
+        if kind == "ollama" and _entries_know_ollama():
             entry["kind"] = "ollama"
         if key_env:
             entry["api_key_env"] = key_env

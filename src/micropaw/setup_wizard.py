@@ -328,7 +328,7 @@ def _add_remote(questionary, config: Config, provider: str) -> None:
         return
     name = _safe_name(modelscan._hostport(url)[0])
     fields = {"base_url": modelscan.stored_url(url, kind)}
-    if "kind" in CustomProviderConfig.model_fields:  # named endpoints that speak Ollama's own API
+    if modelscan._entries_know_ollama():  # named endpoints that speak Ollama's own API
         fields["kind"] = kind
     entry = CustomProviderConfig(**fields)
     config.providers[name] = entry

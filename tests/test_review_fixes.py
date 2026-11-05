@@ -244,3 +244,18 @@ def test_vendor_channels_get_the_name_and_where_but_not_the_address_of_a_network
         assert privacy_report.reply_label("box:m", "hi", reg, c, platform) == "\n\n[via box, your network]"
     assert privacy_report.reply_label("box:m", "hi", reg, c, "webchat").startswith("\n\n[via box (192.168.1.50")
     assert privacy_report.reply_label("claude", "hi", reg, c, "telegram") == "\n\n[via claude (api.anthropic.com)]"
+
+
+# --- an Ollama server saved by paw models add is used as Ollama (or at least works) -------------------
+
+def test_an_ollama_server_saved_by_add_resolves_to_something_that_talks_to_it(lan_home, model_server):
+    from micropaw.config import load_config
+    from micropaw.providers.registry import Registry
+    box = model_server(models=("qwen3:8b",))
+    r = CliRunner().invoke(main, ["models", "add", "box", box.url, "--kind", "ollama"])
+    assert r.exit_code == 0, r.output
+    ep = Registry(load_config()).resolve("box:qwen3:8b")
+    if ms._entries_know_ollama():
+        assert ep.kind == "ollama" and ep.base_url == box.url
+    else:  # no `kind` on entries yet: the /v1 address is the one an OpenAI-style client can use on Ollama
+        assert ep.kind == "compat" and ep.base_url == box.url + "/v1"

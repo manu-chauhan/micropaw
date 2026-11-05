@@ -31,8 +31,9 @@ def test_add_probes_saves_and_prints_the_spec(lan_home, model_server):
     assert r.exit_code == 0, r.output
     assert "box:qwen3.6:27b" in r.output
     entry = saved(lan_home)["providers"]["box"]
-    assert entry == {"base_url": box.url, "kind": "ollama"}
-    assert load_config().providers["box"].base_url == box.url
+    assert entry == ({"base_url": box.url, "kind": "ollama"} if ms._entries_know_ollama()
+                     else {"base_url": box.url + "/v1"})
+    assert load_config().providers["box"].base_url == entry["base_url"]
     assert {p for p, _ in box.requests} >= {"/api/tags"}
 
 
@@ -122,7 +123,8 @@ def test_add_without_a_port_tries_the_known_ports_of_that_host(lan_home, model_s
     monkeypatch.setattr(ms, "KNOWN_PORTS", ((box.port, "Ollama", "ollama"), (1, "vLLM", "openai")))
     r = run("models", "add", "box", "127.0.0.1")
     assert r.exit_code == 0, r.output
-    assert saved(lan_home)["providers"]["box"]["base_url"] == box.url
+    want = box.url if ms._entries_know_ollama() else box.url + "/v1"
+    assert saved(lan_home)["providers"]["box"]["base_url"] == want
 
 
 def test_add_asks_when_more_than_one_port_answers(lan_home, model_server, monkeypatch):
