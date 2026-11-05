@@ -19,6 +19,7 @@ from micropaw.memory.embeddings import (
     cosine_similarity,
     deserialize_embedding,
     deserialize_embedding_blob,
+    is_local_embedder,
     serialize_embedding,
     serialize_embedding_blob,
 )
@@ -353,9 +354,12 @@ class MemoryStore:
                 await self.db.commit()
                 logger.info("Synced %d existing chunks to vec index", count)
 
-            # Re-embed chunks cleared by dimension change
+            # Re-embed chunks cleared by dimension change. Text saved in local mode never goes to an embedder
+            # that is not local: those chunks stay with keyword search only.
+            local = await asyncio.to_thread(is_local_embedder, self.embedder)
             async with self.db.execute(
                 "SELECT id, content FROM document_chunks WHERE embedding IS NULL"
+                + ("" if local else " AND local_only = 0")
             ) as cursor:
                 null_rows = await cursor.fetchall()
 

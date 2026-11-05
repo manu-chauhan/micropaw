@@ -285,6 +285,14 @@ async def probe_ollama(host: str, model: str = _DEFAULT_OLLAMA_MODEL) -> bool:
         return False
 
 
+def is_local_embedder(embedder: EmbeddingProvider) -> bool:
+    """True when the text stays on this machine or network: the built-in model, or a server on a local address."""
+    if embedder.name in ("local", "none"):
+        return True
+    url = getattr(embedder, "host", None) or getattr(embedder, "base_url", None)
+    return bool(url) and privacy.is_local_url(url)
+
+
 def cosine_similarity(a: list[float], b: list[float]) -> float:
     """Cosine similarity between two vectors. Pure Python, no deps."""
     if not a or not b or len(a) != len(b):

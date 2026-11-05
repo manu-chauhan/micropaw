@@ -330,7 +330,7 @@ async def _search_docs(query: str, max_results: int, context: ToolContext) -> li
         return []
     from micropaw import docsearch
     users = tuple(dict.fromkeys((context.memory_user, "_global")))
-    hits = await docsearch.search(_store, query, max_results, users)
+    hits = await docsearch.search(_store, query, max_results, users, context.local_data)
     return [f"- **{h['source']}**  [your documents]\n  {_strip(h['snippet'])}" for h in hits]
 
 
@@ -345,7 +345,8 @@ async def _search_offline(query: str, max_results: int, cfg: Any, backends: list
         sources += ks
     if "docs" in backends and _store is not None:
         from micropaw import docsearch
-        if await docsearch.has_documents(_store, tuple(dict.fromkeys((context.memory_user, "_global")))):
+        if await docsearch.has_documents(_store, tuple(dict.fromkeys((context.memory_user, "_global"))),
+                                         context.local_data):
             blocks += await _search_docs(query, max_results, context)
             sources.append("your documents")
     if not sources:

@@ -1448,7 +1448,10 @@ def docs():
 @docs.command(name="add")
 @click.argument("folder", type=click.Path(exists=True, file_okay=False, path_type=str))
 def docs_add(folder):
-    """Index the .txt, .md and .pdf files in a folder for offline keyword search. Nothing leaves this computer."""
+    """Index the .txt, .md and .pdf files in a folder for offline keyword search.
+
+    Indexing sends nothing. In normal mode a cloud embedder may embed the pieces at the next start.
+    """
     from pathlib import Path
 
     from micropaw import docsearch

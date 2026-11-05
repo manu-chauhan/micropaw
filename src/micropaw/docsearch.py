@@ -40,11 +40,13 @@ async def ensure_index(db) -> bool:
     return True
 
 
-async def search(store, query: str, limit: int = 5, users: tuple[str, ...] = ("_global",)) -> list[dict]:
-    """[{source, snippet}] best first. Falls back to the store's own search when FTS5 is missing."""
+async def search(store, query: str, limit: int = 5, users: tuple[str, ...] = ("_global",),
+                 include_local: bool = True) -> list[dict]:
+    """[{source, snippet}] best first. Falls back to the store's own search when FTS5 is missing.
+    include_local=False leaves out what was indexed in local or air-gapped mode."""
     if not await ensure_index(store.db):
         return [{"source": r["source"], "snippet": r["content"][:300]}
-                for u in users for r in await store.search_documents(query, limit, u)][:limit]
+                for u in users for r in await store.search_documents(query, limit, u, include_local)][:limit]
     fts = store.fts_query(query)
     if not fts:
         return []
@@ -52,15 +54,18 @@ async def search(store, query: str, limit: int = 5, users: tuple[str, ...] = ("_
     async with store.db.execute(
         "SELECT c.source, snippet(chunks_fts, 0, '[', ']', '...', 32) FROM chunks_fts "
         "JOIN document_chunks c ON c.id = chunks_fts.rowid "
-        f"WHERE chunks_fts MATCH ? AND c.user_id IN ({marks}) ORDER BY rank LIMIT ?",
+        f"WHERE chunks_fts MATCH ? AND c.user_id IN ({marks}){'' if include_local else ' AND c.local_only = 0'} "
+        "ORDER BY rank LIMIT ?",
         (fts, *users, limit),
     ) as cur:
         return [{"source": s, "snippet": text} for s, text in await cur.fetchall()]
 
 
-async def has_documents(store, users: tuple[str, ...] = ("_global",)) -> bool:
+async def has_documents(store, users: tuple[str, ...] = ("_global",), include_local: bool = True) -> bool:
     marks = ",".join("?" * len(users))
-    async with store.db.execute(f"SELECT 1 FROM document_chunks WHERE user_id IN ({marks}) LIMIT 1", users) as cur:
+    only = "" if include_local else " AND local_only = 0"
+    sql = f"SELECT 1 FROM document_chunks WHERE user_id IN ({marks}){only} LIMIT 1"
+    async with store.db.execute(sql, users) as cur:
         return await cur.fetchone() is not None
 
 
