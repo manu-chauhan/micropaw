@@ -19,7 +19,7 @@ RUN groupadd --gid 10001 paw \
  && mkdir /home/paw/.micropaw \
  && chown paw:paw /home/paw/.micropaw
 COPY --from=build /opt/venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH" PYTHONUNBUFFERED=1 HOME=/home/paw MICROPAW_HOME=/home/paw/.micropaw MICROPAW_IN_DOCKER=1
+ENV PATH="/opt/venv/bin:$PATH" PYTHONUNBUFFERED=1 HOME=/home/paw MICROPAW_HOME=/home/paw/.micropaw MICROPAW_IN_DOCKER=1 MICROPAW_SANDBOX=off
 USER 10001:10001
 WORKDIR /home/paw
 VOLUME /home/paw/.micropaw

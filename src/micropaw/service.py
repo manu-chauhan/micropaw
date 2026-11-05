@@ -261,7 +261,9 @@ def install(argv: list[str] | None = None) -> list[str]:
     argv = argv or service_argv()
     path_env = os.environ.get("PATH", "")
     if sys.platform == "win32":
-        user = f"{os.environ['USERDOMAIN']}\\{os.environ['USERNAME']}" if "USERDOMAIN" in os.environ else ""
+        # A logon trigger without a user means "any user", which needs admin rights
+        name = os.environ.get("USERNAME", "")
+        user = f"{os.environ['USERDOMAIN']}\\{name}" if "USERDOMAIN" in os.environ and name else name
         xml = config.CONFIG_DIR / "task.xml"
         _write_private(xml, task_xml(argv, user).encode("utf-16"))
         try:

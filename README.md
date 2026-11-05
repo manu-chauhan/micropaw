@@ -629,7 +629,7 @@ docker compose run --rm micropaw paw chat           # chat in a terminal
 docker compose --profile ollama up -d               # add a local model server (Ollama host: http://ollama:11434)
 docker build --build-arg EXTRAS=telegram,pdf,browser .   # choose the extras in the image
 ```
-Compose reads keys from a `.env` file at run time. They are not copied into the image. Ollama's port is not published. WebChat is published on `127.0.0.1` only. The container is the boundary for shell commands, so turn MicroPaw's own sandbox off inside it.
+Compose reads keys from a `.env` file at run time. They are not copied into the image. Ollama's port is not published. WebChat is published on `127.0.0.1` only. The container is the boundary for shell commands, so the image and compose file set `MICROPAW_SANDBOX=off`.
 
 **Hosting.** MicroPaw needs a disk that survives restarts, because the database is SQLite in WAL mode, which does not work on a network filesystem. Check prices on each provider's page before you choose.
 - Fly.io: no free tier for new organizations. Needs a volume mounted at `/home/paw/.micropaw`.

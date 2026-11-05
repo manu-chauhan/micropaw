@@ -204,3 +204,14 @@ class TestHttpRequestPinning:
             assert "private address" in result and "INTERNAL SECRET" not in result
         finally:
             server.shutdown()
+
+
+class TestMoreSecretPaths:
+    @pytest.mark.parametrize("rel", [".mozilla/firefox/x/cookies.sqlite", ".config/google-chrome/Default/Login Data"])
+    def test_browser_profiles_unreadable(self, rel):
+        from micropaw.tools.path_security import validate_file_path
+        assert validate_file_path(os.path.join(os.path.expanduser("~"), rel)) is not None
+
+    def test_sandbox_env_override(self, monkeypatch, cfg_file):
+        monkeypatch.setenv("MICROPAW_SANDBOX", "off")
+        assert config_mod.load_config().permissions.sandbox == "off"

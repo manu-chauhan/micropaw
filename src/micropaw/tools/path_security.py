@@ -23,6 +23,14 @@ BLOCKED_ETC_DIRS = (
 SENSITIVE_DIRS = (
     "/.ssh/", "/.gnupg/", "/.aws/", "/.azure/", "/.config/gcloud/", "/.config/gh/",
     "/.docker/", "/.kube/", "/.password-store/", "/.local/share/keyrings/",
+    # Browser profiles hold cookies and saved passwords
+    "/.mozilla/", "/.config/google-chrome/", "/.config/chromium/", "/.config/microsoft-edge/",
+    # Windows and macOS (compared lowercased there)
+    "/windows/system32/config/", "/appdata/roaming/microsoft/credentials/",
+    "/appdata/local/microsoft/credentials/", "/appdata/roaming/microsoft/protect/",
+    "/appdata/local/google/chrome/user data/", "/appdata/local/microsoft/edge/user data/",
+    "/appdata/roaming/mozilla/firefox/profiles/", "/library/keychains/", "/library/cookies/",
+    "/library/application support/google/chrome/",
 )
 
 SENSITIVE_FILES = (

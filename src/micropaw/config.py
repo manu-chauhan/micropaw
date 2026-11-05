@@ -294,6 +294,8 @@ _ENV_OVERRIDES: list[tuple[str, list[str]]] = [
     # Models for specific jobs ("provider:model")
     ("MICROPAW_FAST_MODEL", ["models", "fast"]),
     ("MICROPAW_VISION_MODEL", ["models", "vision"]),
+    # Shell sandbox (Docker sets "off": the container is the boundary)
+    ("MICROPAW_SANDBOX", ["permissions", "sandbox"]),
     # Location
     ("MICROPAW_LOCATION", ["persona", "location"]),
     # Search
