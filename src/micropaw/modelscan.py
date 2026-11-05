@@ -243,7 +243,7 @@ def read_raw() -> dict:
 
 
 def uses_of(raw: dict, name: str) -> list[str]:
-    """Where a provider name is used as a spec: agents, models slots, fallbacks."""
+    """Where a provider name is used as a spec: agents, models slots, fallbacks, speech."""
     def is_it(spec: object) -> bool:
         return isinstance(spec, str) and parse_spec(spec)[0] == name
 
@@ -261,6 +261,9 @@ def uses_of(raw: dict, name: str) -> list[str]:
         out.append("fallback_providers")
     if is_it(raw.get("provider")):
         out.append("provider")
+    for role in ("stt", "tts"):
+        if is_it((raw.get("voice") or {}).get(role)):
+            out.append(f"voice.{role}")
     return out
 
 

@@ -297,3 +297,32 @@ def test_the_cli_reports_a_cut_off_scan_and_skips_the_install_hint(lan_home, mon
     assert "400 of 700 connection attempts were checked" in r.output
     assert "in the part that was checked" in r.output and "No model server found on 10.0.0.0/23." not in r.output
     assert "Install Ollama" not in r.output
+
+
+def test_remove_refuses_a_server_that_speech_still_uses(lan_home):
+    lan_home.write_text(json.dumps({
+        "providers": {"desktop": {"base_url": "http://127.0.0.1:1/v1"}},
+        "voice": {"stt": "desktop:whisper-large-v3", "tts": "desktop:kokoro"}}))
+    r = CliRunner().invoke(main, ["models", "remove", "desktop"])
+    assert r.exit_code == 1 and "voice.stt, voice.tts" in r.output
+    assert "desktop" in json.loads(lan_home.read_text())["providers"]
+    lan_home.write_text(json.dumps({"providers": {"desktop": {"base_url": "http://127.0.0.1:1/v1"}},
+                                    "voice": {"stt": "openai:whisper-1"}}))
+    assert CliRunner().invoke(main, ["models", "remove", "desktop"]).exit_code == 0
+
+
+# --- the wizard's browser step follows the privacy mode ---------------------------------------------
+
+def test_the_browser_is_not_offered_in_airgapped_mode_and_asks_first_in_local_mode(capsys):
+    c = Config()
+    q = Scripted({"Install web browsing": True, "Allow the web browser": False})
+    assert wiz._ask_browser(q, c, "airgapped") is False
+    assert not q.asked and "off in air-gapped mode" in capsys.readouterr().out
+    assert wiz._ask_browser(q, c, "local") is False  # declined: no install question, nothing allowed
+    assert [m for m, _ in q.asked] == [q.asked[0][0]] and c.privacy.allow == []
+    q = Scripted({"Install web browsing": True, "Allow the web browser": True})
+    assert wiz._ask_browser(q, c, "local") is True and c.privacy.allow == ["web_browse"]
+    q = Scripted({"Install web browsing": True})  # already allowed: only the install question
+    assert wiz._ask_browser(q, c, "local") is True and len(q.asked) == 1 and c.privacy.allow == ["web_browse"]
+    q = Scripted({"Install web browsing": False})
+    assert wiz._ask_browser(q, Config(), "normal") is False and len(q.asked) == 1

@@ -253,6 +253,20 @@ def _ask_search(questionary, config: Config) -> None:
             config.search.provider = "off"
 
 
+def _ask_browser(questionary, config: Config, mode: str) -> bool:
+    """Whether to install the browser. Air-gapped has none. Local mode only has it once privacy.allow names it."""
+    if mode == "airgapped":
+        console.print("[dim]The web browser is off in air-gapped mode, so it is not offered.[/dim]")
+        return False
+    if mode == "local" and "web_browse" not in config.privacy.allow:
+        if not questionary.confirm("Allow the web browser? It reaches the internet, and every page address is shown "
+                                   "to you for approval first.", default=False).ask():
+            return False
+        config.privacy.allow = [*config.privacy.allow, "web_browse"]
+    return bool(questionary.confirm("Install web browsing support? (Playwright + Chromium, ~150MB)",
+                                    default=False).ask())
+
+
 def _ask_retention(questionary, config: Config) -> None:
     """How long messages are kept. Only when this version has the storage setting."""
     storage = getattr(config, "storage", None)
@@ -471,10 +485,7 @@ def run_setup(reset: bool = False) -> None:
         config.permissions.allow_file_write = allow_write
 
     # Browser (optional — Playwright for web browsing/screenshots)
-    install_browser = questionary.confirm(
-        "Install web browsing support? (Playwright + Chromium, ~150MB)",
-        default=False,
-    ).ask()
+    install_browser = _ask_browser(questionary, config, privacy_mode)
     if install_browser:
         console.print("[dim]Installing Playwright...[/dim]")
         import subprocess
