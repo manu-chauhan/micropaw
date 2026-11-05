@@ -23,6 +23,7 @@ from micropaw.core.agent import Agent
 from micropaw.memory.store import MemoryStore
 from micropaw.providers.base import AIProvider
 from micropaw.tools.base import ToolRegistry
+from micropaw.utils.redact import config_secrets, redact, set_known_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -222,6 +223,7 @@ class Gateway:
 
     async def start(self) -> None:
         """Initialize everything and start all channels."""
+        set_known_secrets(config_secrets(self.config))
         # Create embedding provider (auto-detect or explicit)
         embedding_provider = await self._create_embedding_provider()
 
@@ -452,7 +454,7 @@ class Gateway:
         response = await self.agent.handle_message(text, user_id, platform, channel_id, media=media)
         self._track_usage()
         logger.debug("[%s] MicroPaw: %s", platform, response[:80])
-        return response
+        return redact(response)
 
     async def _handle_message_stream(
         self, text: str, user_id: str, platform: str, channel_id: str | None,
@@ -473,7 +475,7 @@ class Gateway:
         )
         self._track_usage()
         logger.debug("[%s] MicroPaw: %s", platform, response[:80])
-        return response
+        return redact(response)
 
     # Internal platforms that should not be registered as real channels
     _INTERNAL_PLATFORMS = frozenset({"heartbeat", "system"})

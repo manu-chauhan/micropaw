@@ -10,12 +10,31 @@ from pathlib import Path
 from rich.console import Console
 from rich.logging import RichHandler
 
+from micropaw.utils.redact import redact
+
 _configured = False
 
 _LOG_DIR = Path.home() / ".micropaw" / "logs"
 _LOG_FILE = _LOG_DIR / "micropaw.log"
 _MAX_LOG_SIZE = 5 * 1024 * 1024  # 5 MB
 _BACKUP_COUNT = 3
+
+
+class RedactFilter(logging.Filter):
+    """Removes known secrets from every record (message and traceback) before a handler sees it."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        clean = redact(msg)
+        if record.exc_info and record.exc_info[0] is not None:
+            trace = logging.Formatter().formatException(record.exc_info)
+            clean_trace = redact(trace)
+            if clean_trace != trace:  # fold the cleaned traceback into the message
+                clean += "\n" + clean_trace
+                record.exc_info = record.exc_text = None
+        if clean != msg:
+            record.msg, record.args = clean, None
+        return True
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -55,6 +74,9 @@ def setup_logging(level: str = "INFO") -> None:
     ))
     file_handler.setLevel(log_level)
     handlers.append(file_handler)
+
+    for h in handlers:
+        h.addFilter(RedactFilter())
 
     logging.basicConfig(
         level=log_level,
