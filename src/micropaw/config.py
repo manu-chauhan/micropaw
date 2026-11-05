@@ -240,6 +240,18 @@ class SearchConfig(BaseModel):
     searxng_url: str = ""  # self-hosted SearXNG URL, e.g. "http://localhost:8888"
 
 
+class PrivacyConfig(BaseModel):
+    """Where data may go. airgapped: nothing leaves this machine (and the LAN, if allowed).
+    local: models, embeddings and speech only on this machine or the LAN; web search only through your own servers.
+    normal: cloud allowed where you configure it, with labels saying where each reply went.
+    """
+
+    mode: Literal["airgapped", "local", "normal"] = "normal"
+    allow_lan: bool = True          # private ranges and Tailscale count as "this side" in airgapped and local
+    lan_hosts: list[str] = []       # extra host names or CIDRs that count as local (names are never resolved to decide)
+    allow_cloud_fallback: bool = False  # a local main model may fail over to a cloud model
+
+
 class VoiceConfig(BaseModel):
     """Speech-to-text for voice notes, via any OpenAI-style /v1/audio/transcriptions endpoint.
 
@@ -312,6 +324,7 @@ class Config(BaseModel):
     google: GoogleConfig = GoogleConfig()
     models: ModelsConfig = ModelsConfig()
     voice: VoiceConfig = VoiceConfig()
+    privacy: PrivacyConfig = PrivacyConfig()
     mcp_servers: dict[str, MCPServerConfig] = {}
     fallback_providers: list[str] = []
     budget: BudgetConfig = BudgetConfig()
@@ -377,6 +390,8 @@ _ENV_OVERRIDES: list[tuple[str, list[str]]] = [
     ("MICROPAW_VISION_MODEL", ["models", "vision"]),
     # Shell sandbox (Docker sets "off": the container is the boundary)
     ("MICROPAW_SANDBOX", ["permissions", "sandbox"]),
+    # Privacy mode (the env var can only make it stricter; see micropaw.privacy)
+    ("MICROPAW_PRIVACY", ["privacy", "mode"]),
     # Location
     ("MICROPAW_LOCATION", ["persona", "location"]),
     # Search
@@ -400,6 +415,9 @@ def _apply_env_overrides(raw: dict) -> dict:
         d = raw
         for key in path[:-1]:
             d = d.setdefault(key, {})
+        if env_var == "MICROPAW_PRIVACY":  # can only make the mode stricter, never looser
+            from micropaw.privacy import _strictest
+            value = _strictest(str(d.get(path[-1], "normal")), value.strip().lower())
         d[path[-1]] = value
     return raw
 
