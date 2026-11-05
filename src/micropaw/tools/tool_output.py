@@ -46,10 +46,11 @@ def _save(conv_id: str, text: str) -> int:
     """Write the text as the next numbered file (mode 0600, folder 0700). Returns its number."""
     global _last_purge
     folder = _dir(conv_id)
-    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     if time.time() - _last_purge > 86400:  # at the first save after start, then daily
         _last_purge = time.time()
         _purge()
+    folder.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    folder.mkdir(exist_ok=True, mode=0o700)
     n = max((int(p.stem) for p in folder.glob("*.txt") if p.stem.isdigit()), default=0) + 1
     while True:
         try:

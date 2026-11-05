@@ -270,9 +270,9 @@ class MemoryStore:
 
     # --- Conversations ---
 
-    async def get_or_create_conversation(
-        self, conv_id: str, platform: str, user_id: str, commit: bool = True,
-    ) -> str:
+    async def get_or_create_conversation(self, conv_id: str, platform: str, user_id: str) -> str:
+        """Create the row on first use. An existing row is left alone (save_messages bumps updated_at),
+        so a normal turn opens no write transaction before the model answers."""
         async with self.db.execute("SELECT id FROM conversations WHERE id = ?", (conv_id,)) as cursor:
             row = await cursor.fetchone()
 
@@ -281,11 +281,6 @@ class MemoryStore:
                 "INSERT INTO conversations (id, platform, user_id) VALUES (?, ?, ?)",
                 (conv_id, platform, user_id),
             )
-        else:
-            await self.db.execute(
-                "UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (conv_id,)
-            )
-        if commit:  # a turn passes False and commits once, when it saves its messages
             await self.db.commit()
         return conv_id
 
