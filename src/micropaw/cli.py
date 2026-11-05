@@ -634,12 +634,17 @@ def models_test(spec):
     table = Table(title="Model test")
     for col in ("Model", "Chat", "Tools", "Vision"):
         table.add_column(col)
-    for sp in specs:
-        table.add_row(sp, *asyncio.run(_test_model(registry, sp)))
+
+    async def run_all() -> list:
+        rows = [(sp, *await _test_model(registry, sp)) for sp in specs]
+        await registry.close()
+        return rows
+
+    for row in asyncio.run(run_all()):
+        table.add_row(*row)
     console.print(table)
     for problem in dict.fromkeys(registry.problems):
         console.print(f"[yellow]{problem}[/yellow]")
-    asyncio.run(registry.close())
 
 
 async def _test_model(registry: Registry, spec: str) -> tuple[str, str, str]:

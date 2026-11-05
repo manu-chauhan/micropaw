@@ -205,3 +205,29 @@ def test_pull_suggestion_follows_ram():
     assert suggest_pull(64 * GIB) == "qwen3.6:35b"
     assert suggest_pull(4 * GIB) == "granite4.1:3b"
     assert suggest_pull(None) == "qwen3.5:4b"
+
+
+async def test_gateway_probes_every_ollama_role_not_only_main(server, caplog):
+    import logging
+    from unittest.mock import MagicMock
+
+    from micropaw.config import Config
+    from micropaw.core.profile import build_runtimes
+    from micropaw.gateway import Gateway
+    from micropaw.providers.registry import Registry
+
+    c = Config(provider="ollama", models={"fast": "ollama:plain", "vision": "ollama:small"},
+               fallback_providers=["ollama:ghost"])
+    c.provider_config.ollama.host = server
+    c.provider_config.ollama.model = "big"
+    reg = Registry(c)
+    rts = build_runtimes(c, reg)  # main is a failover chain, so the old name == "ollama" check would skip it
+    assert rts["main"].provider.name.startswith("failover(")
+    gw = Gateway(c, rts["main"].provider, MagicMock(), [], runtimes=rts, models=reg)
+    with caplog.at_level(logging.INFO):
+        await gw._probe_models(rts)
+    text = caplog.text
+    assert "Ollama model big: tools ok" in text
+    assert "'plain' cannot use tools" in text
+    assert "small: tools ok, vision ok" in text
+    assert "'ghost' is not available" in text and "ollama pull ghost" in text

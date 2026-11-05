@@ -391,3 +391,70 @@ def test_corrupt_config_is_never_overwritten_by_migration(home):
     f.write_text("{not json")
     config_mod.load_config()
     assert f.read_text() == "{not json"
+
+
+# --- the gateway with several agents, end to end ---
+
+async def test_gateway_runs_named_agents_and_probes_ollama_in_the_background(tmp_path, monkeypatch):
+    import asyncio
+
+    import micropaw.gateway as gw_mod
+    from micropaw.providers.base import AIProvider, AIResponse
+
+    class Said(AIProvider):
+        def __init__(self, name):
+            self.name, self.model = name, "m"
+
+        async def chat(self, messages, tools=None):
+            return AIResponse(content=f"hi from {self.name}", tool_calls=[], usage={})
+
+    monkeypatch.setattr(gw_mod, "DB_FILE", tmp_path / "d.db")
+    monkeypatch.setattr(gw_mod, "CONFIG_DIR", tmp_path)
+    c = cfg(agents={"family": LOCAL_AGENT}, routes={"terminal:terminal-user": "family"})
+    c.embedding.enabled = "false"
+    registry = Registry(c)
+    runtimes = build_runtimes(c, registry)
+    runtimes["main"].provider = Said("main")
+    runtimes["family"].provider = Said("family")
+    seen: dict = {}
+
+    class FakeTerminal:
+        name = "terminal"
+
+        def set_handler(self, h): pass
+        def set_stream_handler(self, h): pass
+        def set_access(self, h): pass
+
+        async def stop(self):
+            pass
+
+        async def start(self):
+            seen["agents"] = sorted(gw.agents)
+            seen["reply"] = await gw._handle_message("hello", "terminal-user", "terminal", None)
+            seen["main_reply"] = await gw._handle_message("hello", "someone", "terminal", None)
+            seen["probe"] = gw._probe_task
+
+    tools = base_registry("shell", "file_read")
+    gw = Gateway(c, runtimes["main"].provider, tools, [FakeTerminal()], runtimes=runtimes, models=registry)
+    monkeypatch.setattr("micropaw.scheduler.Scheduler.run", lambda self: asyncio.sleep(0))
+    await gw.start()
+    assert seen["agents"] == ["family", "main"]
+    assert seen["reply"] == "hi from family" and seen["main_reply"] == "hi from main"
+    assert gw.agent is gw.agents["main"]
+
+
+async def test_private_agent_turns_cloud_embeddings_off(monkeypatch):
+    from micropaw.memory.embeddings import NullEmbedding, OpenAIEmbedding
+
+    async def no_ollama(host, model):
+        return False
+
+    monkeypatch.setattr("micropaw.memory.embeddings.probe_ollama", no_ollama)
+
+    def gateway(agents):
+        c = cfg(agents=agents)
+        c.provider_config.openai.api_key = "k"
+        return Gateway(c, MagicMock(), MagicMock(), [], runtimes=build_runtimes(c, Registry(c)))
+
+    assert isinstance(await gateway({})._create_embedding_provider(), OpenAIEmbedding)
+    assert isinstance(await gateway({"family": LOCAL_AGENT})._create_embedding_provider(), NullEmbedding)
