@@ -6,7 +6,7 @@ import os
 import re
 from urllib.parse import urlparse
 
-from micropaw import modelscan, privacy
+from micropaw import modelscan, privacy, webfetch
 from micropaw.config import CONFIG_DIR, CONFIG_FILE, Config
 
 _MODE_TEXT = {
@@ -99,8 +99,7 @@ def rows(config: Config) -> list[tuple[str, str, str]]:
             label, url = names[b]
             where = destination(url)[1] if url else ("this computer" if b == "docs" else "the internet")
             out.append(("web search", label + (f" at {destination(url)[0]}" if url else ""), where))
-    from micropaw import cli
-    allow = cli._privacy_allow(config)
+    allow = webfetch.privacy_allow(config)
     fetch_on = privacy.mode() == "normal" or (privacy.mode() == "local" and "web_fetch" in allow)
     out.append(("web pages (http_request)", "any public site you approve" if fetch_on else "off",
                 "the internet" if fetch_on else "-"))

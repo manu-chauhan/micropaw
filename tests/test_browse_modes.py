@@ -60,11 +60,9 @@ def test_normal_mode_asks_before_browsing_only_in_a_marked_chat(mode):
 
 
 def test_the_tool_list_follows_the_mode(mode, monkeypatch):
-    import micropaw.cli as cli
-
     def names(m, allow=()):
         mode(m)
-        monkeypatch.setattr(cli, "_privacy_allow", lambda config: list(allow))
+        monkeypatch.setattr(webfetch, "privacy_allow", lambda config: list(allow))
         return set(_create_registry(Config()).names)
 
     assert {"web_browse", "http_request", "web_search"} <= names("normal")

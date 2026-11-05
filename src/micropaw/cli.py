@@ -67,11 +67,6 @@ def _make_gateway(config: Config, registry, channels):
     return Gateway(config, main.provider, registry, channels, main.fast, main.vision, runtimes=runtimes, models=models)
 
 
-def _privacy_allow(config: Config) -> list[str]:
-    """The features named in privacy.allow (web_browse, web_fetch, ...)."""
-    return list(getattr(config.privacy, "allow", None) or [])
-
-
 def _create_registry(config: Config):
     """Create and populate the tool registry, respecting disabled_tools config."""
     import logging
@@ -103,12 +98,8 @@ def _create_registry(config: Config):
     if disabled:
         logging.getLogger(__name__).info("Disabled tools: %s", ", ".join(sorted(disabled)))
 
-    from micropaw import privacy
-    mode, allow = privacy.mode(), _privacy_allow(config)
-    if mode == "airgapped" or (mode == "local" and "web_browse" not in allow):
-        disabled.add("web_browse")  # a browser is a child process with its own network
-    if mode == "airgapped" or (mode == "local" and "web_fetch" not in allow):
-        disabled.add("http_request")
+    from micropaw import webfetch
+    disabled |= webfetch.tools_off_by_mode(config)
 
     registry = ToolRegistry()
     for tool in [

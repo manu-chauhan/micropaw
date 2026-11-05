@@ -35,6 +35,24 @@ def allowed(feature: str) -> bool:
     return feature in (getattr(_privacy_config, "allow", None) or [])
 
 
+def privacy_allow(config) -> list[str]:
+    """The features named in privacy.allow (web_browse, web_fetch, ...)."""
+    return list(getattr(config.privacy, "allow", None) or [])
+
+
+def tools_off_by_mode(config) -> set[str]:
+    """Tools that do not exist in this mode: a browser is a child process with its own network, and
+    http_request reaches the open web. Air-gapped has neither; local has them only when named in privacy.allow."""
+    from micropaw import privacy
+    mode, allow = privacy.mode(), privacy_allow(config)
+    off = set()
+    if mode == "airgapped" or (mode == "local" and "web_browse" not in allow):
+        off.add("web_browse")
+    if mode == "airgapped" or (mode == "local" and "web_fetch" not in allow):
+        off.add("http_request")
+    return off
+
+
 class FetchError(Exception):
     """A plain reason, safe to show to the owner and the model."""
 
