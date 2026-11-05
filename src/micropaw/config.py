@@ -13,7 +13,7 @@ from typing import Literal
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from micropaw.providers.registry import BUILTIN, PRESETS, legacy_compat
+from micropaw.providers.registry import BUILTIN, PRESETS
 
 load_dotenv()
 
@@ -56,10 +56,6 @@ class GeminiConfig(BaseModel):
     model: str = "gemini-2.5-flash"
     max_tokens: int = 4096
     base_url: str = "https://generativelanguage.googleapis.com"
-
-
-# v0.3 name for the presets (base URL without /v1, key env). They live in providers/registry.py.
-OPENAI_COMPATIBLE: dict[str, tuple[str, str]] = legacy_compat()
 
 
 class ModelsConfig(BaseModel):

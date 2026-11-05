@@ -23,7 +23,7 @@ def test_stt_endpoint_resolution(monkeypatch):
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     assert voice._endpoint(c) is None
     monkeypatch.setenv("GROQ_API_KEY", "k")
-    assert voice._endpoint(c)[0] == "https://api.groq.com/openai"
+    assert voice._endpoint(c)[0] == "https://api.groq.com/openai/v1"
 
 
 @pytest.mark.asyncio

@@ -9,7 +9,7 @@ import pytest
 from micropaw.config import Config
 from micropaw.providers.base import AIResponse, Message, ToolCall
 from micropaw.providers.openai import OpenAIProvider
-from micropaw.providers.registry import PRESETS, Registry, is_local_url, legacy_compat, parse_spec
+from micropaw.providers.registry import PRESETS, Registry, is_local_url, parse_spec
 
 
 def cfg(**kw) -> Config:
@@ -101,13 +101,6 @@ def test_https_custom_provider_is_cloud(monkeypatch):
     monkeypatch.setenv("K", "k")
     reg = Registry(Config(providers={"far": {"base_url": "https://llm.example.com/v1", "api_key_env": "K"}}))
     assert reg.get("far:m") is not None and not reg.is_local("far:m")
-
-
-def test_legacy_compat_keeps_the_v03_shape():
-    compat = legacy_compat()
-    assert compat["groq"] == ("https://api.groq.com/openai", "GROQ_API_KEY")
-    assert compat["lmstudio"] == ("http://localhost:1234", "")
-    assert set(compat) <= set(PRESETS)
 
 
 def test_every_shipped_preset_has_a_url_with_scheme():

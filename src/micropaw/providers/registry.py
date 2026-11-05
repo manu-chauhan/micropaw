@@ -128,16 +128,6 @@ def is_local_url(url: str) -> bool:
         return parsed.scheme == "http" and _resolves_private(host)
 
 
-def legacy_compat() -> dict[str, tuple[str, str]]:
-    """The v0.3 OPENAI_COMPATIBLE shape (base URL without /v1, key env), for code that still reads it."""
-    out = {}
-    for name, p in PRESETS.items():
-        base = p.base_url[:-3] if p.base_url.endswith("/v1") else p.base_url
-        if "/v" not in urlparse(base).path:
-            out[name] = (base, p.key_env)
-    return out
-
-
 # ---------------------------------------------------------------------------
 # Wrapper: concurrency limit, context-length retry, plain errors for local servers
 # ---------------------------------------------------------------------------

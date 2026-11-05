@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 
 import httpx
 
-from micropaw.config import OPENAI_COMPATIBLE, Config
+from micropaw.config import Config
+from micropaw.providers.registry import PRESETS
 
 logger = logging.getLogger(__name__)
 
@@ -22,12 +24,18 @@ def _endpoint(config: Config) -> tuple[str, str, str] | None:
         return config.voice.stt_url, "", model
     if name == "openai" and config.provider_config.openai.api_key:
         return config.provider_config.openai.base_url, config.provider_config.openai.api_key, model
-    if name in OPENAI_COMPATIBLE:
-        base_url, key_env = OPENAI_COMPATIBLE[name]
+    if name in PRESETS:
+        key_env = PRESETS[name].key_env
         key = os.environ.get(key_env, "") if key_env else ""
         if key or not key_env:
-            return base_url, key, model
+            return PRESETS[name].base_url, key, model
     return None
+
+
+def _audio_url(base_url: str) -> str:
+    """The transcription URL. A base URL that already ends in a version ("/v1") is not given a second one."""
+    base = base_url.rstrip("/")
+    return base + ("/audio/transcriptions" if re.search(r"/v\d+$", base) else "/v1/audio/transcriptions")
 
 
 async def transcribe(data: bytes, mime_type: str, config: Config) -> str | None:
@@ -41,7 +49,7 @@ async def transcribe(data: bytes, mime_type: str, config: Config) -> str | None:
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(
-                f"{base_url.rstrip('/')}/v1/audio/transcriptions",
+                _audio_url(base_url),
                 headers=headers, data={"model": model}, files={"file": (f"voice.{ext}", data, mime_type)},
             )
             resp.raise_for_status()

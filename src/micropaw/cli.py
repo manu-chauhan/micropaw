@@ -30,28 +30,6 @@ from micropaw.utils.logger import quiet_console, setup_logging
 console = Console()
 
 
-def _create_role_provider(spec: str, config: Config):
-    """A model for one job, from "provider:model". None when unset or unusable."""
-    if not spec:
-        return None
-    registry = Registry(config)
-    provider = registry.get(spec)
-    if provider is None:
-        console.print(f"[yellow]Model '{spec}' isn't usable (unknown provider or missing key); "
-                      "using the main model for that job.[/yellow]")
-    return provider
-
-
-def _create_provider(config: Config):
-    """The main agent's provider, with its fallback chain."""
-    registry = Registry(config)
-    provider = registry.role("main", "chat", [config.provider, *config.fallback_providers])
-    if not provider:
-        console.print(f"[red]Error: No API key for {config.provider}. Run 'paw setup'.[/red]")
-        sys.exit(1)
-    return provider
-
-
 def _create_runtimes(config: Config) -> tuple[Registry, dict]:
     """The model registry and one runtime (profile, providers) per agent. Exits with a plain message on failure."""
     registry = Registry(config)

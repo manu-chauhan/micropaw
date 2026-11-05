@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
-from micropaw.cli import _create_role_provider
 from micropaw.config import Config
+from micropaw.providers.registry import Registry
+
+
+def _create_role_provider(spec, config):
+    return Registry(config).get(spec) if spec else None
 
 
 def test_unset_means_main_model():
@@ -44,3 +48,19 @@ def test_env_overrides(monkeypatch, tmp_path):
     monkeypatch.setattr(config_mod, "CONFIG_FILE", tmp_path / "none.json")
     monkeypatch.setenv("MICROPAW_FAST_MODEL", "ollama:qwen3.6")
     assert config_mod.load_config().models.fast == "ollama:qwen3.6"
+
+
+def test_voice_stt_still_resolves_through_the_presets(monkeypatch):
+    from micropaw.utils.voice import _audio_url, _endpoint
+
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    c = Config(voice={"stt": "groq:whisper-large-v3"})
+    base, key, model = _endpoint(c)
+    assert (key, model) == ("gsk-test", "whisper-large-v3")
+    assert _audio_url(base) == "https://api.groq.com/openai/v1/audio/transcriptions"
+    c.voice.stt = "lmstudio:whisper"
+    assert _audio_url(_endpoint(c)[0]) == "http://localhost:1234/v1/audio/transcriptions"
+    monkeypatch.delenv("GROQ_API_KEY")
+    c.voice.stt = "groq:whisper-large-v3"
+    assert _endpoint(c) is None
+    assert _audio_url("http://localhost:8000") == "http://localhost:8000/v1/audio/transcriptions"  # "local:" style
