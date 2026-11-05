@@ -262,6 +262,7 @@ def install(guard: Guard) -> str | None:
     except EgressBlocked:
         _installed = guard
         _wrap_multiprocessing(guard)
+        _wrap_proactor(guard)
         return None
     except Exception:
         pass
@@ -297,3 +298,30 @@ def _wrap_multiprocessing(guard: Guard) -> None:
                 mod.util.spawnv_passfds = spawnv_passfds
     except ImportError:
         pass
+
+
+def _wrap_proactor(guard: Guard) -> None:
+    """On Windows asyncio connects with ConnectEx and may not raise socket.connect for an address literal,
+    so the proactor's connect and sendto ask the guard themselves."""
+    if sys.platform != "win32":
+        return
+    try:
+        from asyncio import windows_events
+    except ImportError:
+        return
+    proactor = windows_events.IocpProactor
+    connect, sendto = proactor.connect, proactor.sendto
+
+    def checked(event: str, conn, address) -> None:
+        if address is not None and (reason := guard.decide(event, (conn, address))):
+            raise EgressBlocked(reason)
+
+    def guarded_connect(self, conn, address):
+        checked("socket.connect", conn, address)
+        return connect(self, conn, address)
+
+    def guarded_sendto(self, conn, buf, flags=0, addr=None):
+        checked("socket.sendto", conn, addr)
+        return sendto(self, conn, buf, flags, addr)
+
+    proactor.connect, proactor.sendto = guarded_connect, guarded_sendto

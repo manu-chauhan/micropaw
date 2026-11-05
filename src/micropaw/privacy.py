@@ -40,6 +40,45 @@ def freeze(config_mode: str) -> str:
     return _mode
 
 
+def _record_file():
+    from micropaw.config import CONFIG_DIR
+    return CONFIG_DIR / "privacy_last_mode"
+
+
+def remembered(chosen: str) -> tuple[str, str]:
+    """The mode to run with and a loud note when it differs from the config. A config that is looser than the
+    last run (a tool or a child process may have rewritten it) is not obeyed until the owner confirms it at a
+    terminal with MICROPAW_CONFIRM_PRIVACY=<mode>. The record is updated to what runs now."""
+    path = _record_file()
+    try:
+        last = path.read_text().strip()
+    except OSError:
+        last = ""
+    note = ""
+    if last in _ORDER and _ORDER[last] > _ORDER[chosen]:
+        if os.environ.get("MICROPAW_CONFIRM_PRIVACY", "").strip().lower() == chosen:
+            note = f"privacy.mode is now {chosen}, as you confirmed (it was {last})."
+        else:
+            note = (f"privacy.mode in config.json is {chosen}, but this install last ran as {last}. Staying at "
+                    f"{last}. To loosen it on purpose, start once with MICROPAW_CONFIRM_PRIVACY={chosen}.")
+            chosen = last
+    if chosen != "normal" or last:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(chosen)
+        except OSError:
+            pass
+    return chosen, note
+
+
+def confirm_mode(chosen: str) -> None:
+    """The owner chose this mode at a terminal (paw setup, paw privacy set): remember it as the new floor."""
+    try:
+        _record_file().write_text(chosen)
+    except OSError:
+        pass
+
+
 def mode() -> str:
     if _mode is None:
         from micropaw.config import load_config

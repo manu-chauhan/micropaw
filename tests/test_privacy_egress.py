@@ -11,6 +11,7 @@ import textwrap
 
 import pytest
 
+from micropaw import egress
 from micropaw.egress import Guard
 
 LAN = [ipaddress.ip_network(n) for n in
@@ -308,3 +309,36 @@ def test_env_is_forced_in_local_and_airgapped(tmp_path):
     """
     out = run_child(code, extra_env={"MICROPAW_HOME": str(tmp_path)})
     assert out.stdout.strip() == "1 1 1 1"
+
+
+def test_windows_proactor_connects_ask_the_guard(monkeypatch):
+    """ConnectEx may not raise socket.connect, so on Windows the proactor wrapper asks the guard itself."""
+    import types
+
+    calls = []
+
+    class Proactor:
+        def connect(self, conn, address):
+            calls.append(("connect", address))
+            return "connected"
+
+        def sendto(self, conn, buf, flags=0, addr=None):
+            calls.append(("sendto", addr))
+            return "sent"
+
+    fake = types.ModuleType("asyncio.windows_events")
+    fake.IocpProactor = Proactor
+    monkeypatch.setitem(sys.modules, "asyncio.windows_events", fake)
+    monkeypatch.setattr(sys, "platform", "win32")
+    import asyncio
+    monkeypatch.setattr(asyncio, "windows_events", fake, raising=False)
+    egress._wrap_proactor(guard())
+    p = Proactor()
+    sock = FakeSock()
+    assert p.connect(sock, ("127.0.0.1", 80)) == "connected"
+    assert p.sendto(sock, b"x", 0, ("127.0.0.1", 80)) == "sent"
+    with pytest.raises(egress.EgressBlocked, match="blocked a connection to 8.8.8.8:53"):
+        p.connect(sock, ("8.8.8.8", 53))
+    with pytest.raises(egress.EgressBlocked):
+        p.sendto(sock, b"x", 0, ("1.1.1.1", 53))
+    assert calls == [("connect", ("127.0.0.1", 80)), ("sendto", ("127.0.0.1", 80))]

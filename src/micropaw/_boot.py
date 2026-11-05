@@ -6,6 +6,18 @@ import os
 import sys
 
 
+def _file_mode() -> str:
+    """privacy.mode as written in config.json (load_config also folds in MICROPAW_PRIVACY, which is per run)."""
+    import json
+
+    from micropaw.config import CONFIG_FILE
+    try:
+        mode = json.loads(CONFIG_FILE.read_text(encoding="utf-8")).get("privacy", {}).get("mode", "normal")
+    except (OSError, ValueError, AttributeError):
+        return "normal"
+    return mode if mode in ("normal", "local", "airgapped") else "normal"
+
+
 def prepare(install_guard: bool = True) -> str:
     """Freeze the mode, set the environment libraries read at import time, and install the guard.
     Returns the mode. Exits with a plain message when air-gapped or local mode cannot be enforced."""
@@ -17,7 +29,10 @@ def prepare(install_guard: bool = True) -> str:
         config = load_config()
     except Exception:
         config = None  # the command itself reports a broken config; the environment can still tighten the mode
-    mode = privacy.freeze(config.privacy.mode if config else "normal")
+    mode, note = privacy.remembered(_file_mode())  # what the file says, not the environment
+    if note:
+        print(note, file=sys.stderr)
+    mode = privacy.freeze(mode)  # the environment may tighten it, never loosen
     privacy.boot_env(mode)
     if install_guard and mode != "normal":
         if config is None:

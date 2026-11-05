@@ -117,3 +117,41 @@ def test_the_console_script_and_python_dash_m_both_go_through_boot():
     assert 'paw = "micropaw._boot:main"' in toml and 'micropaw = "micropaw._boot:main"' in toml
     assert "_boot" in (root / "src" / "micropaw" / "__main__.py").read_text()
 
+
+
+# --- a config that got looser is not obeyed on its own -----------------------------------------------------------
+
+def test_a_looser_config_than_the_last_run_stays_strict_until_confirmed(tmp_path, monkeypatch):
+    monkeypatch.setattr(privacy, "_record_file", lambda: tmp_path / "privacy_last_mode")
+    monkeypatch.delenv("MICROPAW_CONFIRM_PRIVACY", raising=False)
+    assert privacy.remembered("normal") == ("normal", "")                       # nothing recorded, nothing written
+    assert not (tmp_path / "privacy_last_mode").exists()
+    assert privacy.remembered("airgapped") == ("airgapped", "")
+    assert (tmp_path / "privacy_last_mode").read_text() == "airgapped"
+    mode, note = privacy.remembered("normal")                                    # a tool rewrote config.json
+    assert mode == "airgapped" and "Staying at airgapped" in note and "MICROPAW_CONFIRM_PRIVACY=normal" in note
+    assert privacy.remembered("local")[0] == "airgapped"                         # any loosening is held
+    monkeypatch.setenv("MICROPAW_CONFIRM_PRIVACY", "normal")
+    mode, note = privacy.remembered("normal")
+    assert mode == "normal" and "as you confirmed" in note
+    assert (tmp_path / "privacy_last_mode").read_text() == "normal"
+    monkeypatch.delenv("MICROPAW_CONFIRM_PRIVACY")
+    assert privacy.remembered("normal") == ("normal", "")                       # the floor moved down
+    privacy.confirm_mode("airgapped")
+    assert privacy.remembered("airgapped") == ("airgapped", "")
+
+
+def test_boot_holds_the_stricter_mode_and_says_so(tmp_path):
+    (tmp_path / "home").mkdir()
+    (tmp_path / "home" / "privacy_last_mode").write_text("local")
+    out = _run_boot(tmp_path, {"privacy": {"mode": "normal"}})
+    assert out.stdout.split()[0] == "local" and "Staying at local" in out.stderr
+    confirmed = _run_boot(tmp_path, {"privacy": {"mode": "normal"}}, env={"MICROPAW_CONFIRM_PRIVACY": "normal"})
+    assert confirmed.stdout.split()[0] == "normal" and "as you confirmed" in confirmed.stderr
+
+
+def test_an_environment_override_does_not_become_the_new_floor(tmp_path):
+    out = _run_boot(tmp_path, {}, env={"MICROPAW_PRIVACY": "local"})
+    assert out.stdout.split()[0] == "local"
+    assert not (tmp_path / "home" / "privacy_last_mode").exists()
+    assert _run_boot(tmp_path, {}).stdout.split()[0] == "normal"
