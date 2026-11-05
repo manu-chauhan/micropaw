@@ -11,6 +11,7 @@ from typing import Any
 
 import httpx
 
+from micropaw import skills
 from micropaw.config import Config
 from micropaw.core.context import ContextManager
 from micropaw.core.conversation import MAX_HISTORY, ConversationManager, sanitize_history
@@ -35,7 +36,10 @@ _MIN_INGEST_SIZE = 500  # only ingest results larger than this
 _INTERNAL_PLATFORMS = frozenset({"heartbeat", "system"})
 # Calls that only read can run side by side. The rest run one at a time, in the order the model gave.
 _READ_ONLY_TOOLS = frozenset({"web_search", "file_read", "pdf_read", "inspect", "har", "tool_output"})
-_READ_ONLY_ACTIONS = {"memory": frozenset({"search", "list"}), "sessions": frozenset({"list", "info"})}
+_READ_ONLY_ACTIONS = {
+    "memory": frozenset({"search", "list"}), "sessions": frozenset({"list", "info", "search"}),
+    "skill": frozenset({"list", "read"}),
+}
 
 # Approver(platform, chat_id, tool_name, text, marked) -> owner said yes. Set by the gateway.
 Approver = Callable[[str, str, str, str, bool], Awaitable[bool]]
@@ -201,14 +205,8 @@ class Agent:
             "Some actions need the user's approval; if one is declined, say so and don't try another way around it."
         )
 
-        # Skills: user override first, then bundled default
-        from micropaw.config import CONFIG_DIR
-        skills_path = CONFIG_DIR / "SKILLS.md"
-        if not skills_path.exists():
-            skills_path = Path(__file__).resolve().parent.parent / "SKILLS.md"
-        skills = self._cached_file_path(skills_path, max_len=4096)
-        if skills:
-            parts.append(f"\nWorkflow guidelines:\n{skills}")
+        if self.registry.get("skill") is not None and (index := skills.index_text()):
+            parts.append(f"\n{index}")
 
         # Extra instructions
         if self.config.persona.system_prompt_extra:
@@ -240,10 +238,11 @@ class Agent:
         channel_id: str | None = None,
         send_typing: Callable[[], Awaitable[None]] | None = None,
         images: list[MediaItem] | None = None,
+        conv_id: str | None = None,
     ) -> tuple[str, list[Message], bool]:
         """Load history and context. Returns (conv_id, messages, conversation already marked)."""
         await _safe_typing(send_typing)
-        conv_id = self.conversations.get_conversation_id(platform, user_id, channel_id)
+        conv_id = conv_id or self.conversations.get_conversation_id(platform, user_id, channel_id)
         # Use "dm" as platform for unified DM conversations to avoid arbitrary first-writer
         store_platform = "dm" if conv_id.startswith("dm:") else platform
 
@@ -321,9 +320,12 @@ class Agent:
         channel_id: str | None = None,
         send_typing: Callable[[], Awaitable[None]] | None = None,
         media: list[MediaItem] | None = None,
+        conv_id: str | None = None,
     ) -> str:
-        """Process a message and return the response text (non-streaming)."""
-        return await self._run(text, user_id, platform, channel_id, send_typing, None, media)
+        """Process a message and return the response text (non-streaming).
+
+        `conv_id` runs the turn in a conversation of its own (goal rounds) instead of the chat's."""
+        return await self._run(text, user_id, platform, channel_id, send_typing, None, media, conv_id)
 
     async def handle_message_stream(
         self,
@@ -383,6 +385,7 @@ class Agent:
         send_typing: Callable[[], Awaitable[None]] | None,
         on_chunk: Callable[[str], Awaitable[None]] | None,
         media: list[MediaItem] | None = None,
+        conv_id: str | None = None,
     ) -> str:
         """One user turn. All per-turn state lives here, so chats running at once don't mix."""
         images: list[MediaItem] = []
@@ -398,7 +401,8 @@ class Agent:
         usage = {"input": 0, "output": 0}
         cache: dict[tuple, str | ToolResult] = {}
 
-        conv_id, messages, was_marked = await self._prepare(text, user_id, platform, channel_id, send_typing, images)
+        conv_id, messages, was_marked = await self._prepare(
+            text, user_id, platform, channel_id, send_typing, images, conv_id)
         pending = [Message(role="user", content=text)]  # saved together at the end of the turn
         tool_defs = self.registry.to_tool_defs()
         ctx = self._build_tool_context(conv_id, user_id, platform, channel_id)

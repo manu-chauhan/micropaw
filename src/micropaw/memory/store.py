@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 
 import aiosqlite
@@ -100,6 +101,8 @@ class MemoryStore:
         self._compact_locks: dict[str, asyncio.Lock] = {}  # per-conversation compaction locks
         self._has_vec: bool = False
         self._vec_dims: int = 0
+        self.has_fts: bool = False
+        self._fts_task: asyncio.Task | None = None
 
     async def init(self) -> None:
         """Initialize database, load sqlite-vec, create/sync vector index."""
@@ -111,6 +114,7 @@ class MemoryStore:
         await self._db.executescript(_SCHEMA)
         await self._migrate()
         await self._db.commit()
+        await self._ensure_fts()
 
         self._has_vec = await self._try_load_vec()
 
@@ -129,6 +133,74 @@ class MemoryStore:
                 columns = {row[1] for row in await cur.fetchall()}
             if "marked" not in columns:
                 await self.db.execute(f"ALTER TABLE {table} ADD COLUMN marked INTEGER DEFAULT 0")
+
+    async def _ensure_fts(self) -> None:
+        """Full-text index over what people and the assistant said (not tool output), kept in step by triggers.
+
+        An existing database is indexed in the background, a batch at a time, so start never waits for it."""
+        try:
+            async with self.db.execute("SELECT 1 FROM sqlite_master WHERE name = 'messages_fts'") as cur:
+                is_new = await cur.fetchone() is None
+            if is_new:
+                await self.db.execute("CREATE VIRTUAL TABLE messages_fts USING fts5(content)")
+            for name, event, row, body in (
+                ("ai", "INSERT", "new", "INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content)"),
+                ("ad", "DELETE", "old", "DELETE FROM messages_fts WHERE rowid = old.id"),
+            ):
+                await self.db.execute(
+                    f"CREATE TRIGGER IF NOT EXISTS messages_fts_{name} AFTER {event} ON messages "
+                    f"WHEN {row}.role IN ('user', 'assistant') AND {row}.content != '' BEGIN {body}; END"
+                )
+            if is_new:
+                async with self.db.execute("SELECT COALESCE(MAX(id), 0) FROM messages") as cur:
+                    top = (await cur.fetchone())[0]
+                await self._set_meta("fts_backfill_to", str(top))
+                await self._set_meta("fts_backfill_at", "0")
+            await self.db.commit()
+        except Exception as e:  # SQLite built without FTS5
+            logger.warning("Message search is off: %s", e)
+            return
+        self.has_fts = True
+        self._fts_task = asyncio.create_task(self._backfill_fts())
+
+    async def _backfill_fts(self, batch: int = 2000) -> None:
+        try:
+            at = int(await self._get_meta("fts_backfill_at") or 0)
+            top = int(await self._get_meta("fts_backfill_to") or 0)
+            while at < top:
+                end = min(at + batch, top)
+                await self.db.execute("DELETE FROM messages_fts WHERE rowid > ? AND rowid <= ?", (at, end))
+                await self.db.execute(
+                    "INSERT INTO messages_fts(rowid, content) SELECT id, content FROM messages "
+                    "WHERE id > ? AND id <= ? AND role IN ('user', 'assistant') AND content != ''", (at, end))
+                at = end
+                await self._set_meta("fts_backfill_at", str(at))
+                await asyncio.sleep(0)  # let a turn run between batches
+        except Exception as e:
+            logger.warning("Indexing old messages for search failed: %s", e)
+
+    @staticmethod
+    def fts_query(text: str) -> str:
+        """Plain words, each quoted and ANDed, so nothing the user typed is read as MATCH syntax."""
+        clean = ("".join(c for c in w if c.isprintable())[:64] for w in text.split())
+        return " ".join('"' + w.replace('"', '""') + '"' for w in [w for w in clean if re.search(r"\w", w)][:12])
+
+    async def search_messages(self, text: str, scope: str = "", limit: int = 10) -> list[dict]:
+        """Best matches first. `scope` is an agent prefix ("agent:coder:"); "" means the shared history only,
+        so one agent never reads another's conversations."""
+        query = self.fts_query(text)
+        if not (self.has_fts and query):
+            return []
+        where = "substr(m.conversation_id, 1, ?) = ?" if scope else "substr(m.conversation_id, 1, 6) != ?"
+        args = (query, len(scope), scope) if scope else (query, "agent:")
+        async with self.db.execute(
+            "SELECT m.conversation_id, m.role, m.created_at, snippet(messages_fts, 0, '[', ']', '...', 16) "
+            "FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid "
+            f"WHERE messages_fts MATCH ? AND {where} ORDER BY rank LIMIT ?",
+            (*args, limit),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [{"conversation": r[0], "role": r[1], "when": r[2], "snippet": r[3]} for r in rows]
 
     async def is_marked(self, conversation_id: str) -> bool:
         """True once this conversation has read outside content (web, email, files, commands).
@@ -680,5 +752,7 @@ class MemoryStore:
         return cursor.rowcount > 0
 
     async def close(self) -> None:
+        if self._fts_task and not self._fts_task.done():
+            self._fts_task.cancel()
         if self._db:
             await self._db.close()

@@ -412,4 +412,4 @@ class TestWebBrowseNoPlaywright:
         params = tool.parameters
         assert "action" in params["properties"]
         actions = params["properties"]["action"]["enum"]
-        assert set(actions) == {"browse", "click", "type", "scroll", "screenshot"}
+        assert set(actions) == {"browse", "click", "type", "scroll", "screenshot", "preview"}
