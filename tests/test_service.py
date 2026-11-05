@@ -380,3 +380,26 @@ def test_start_without_tty_goes_headless(monkeypatch):
 def test_headless_refuses_second_instance(monkeypatch):
     monkeypatch.setattr(svc, "running_gateway", lambda: 77)
     assert cli._start_headless() == 1
+
+
+def test_private_writers_open_in_binary_mode(tmp_path, monkeypatch):
+    """Windows turns every 0x0A into 0D 0A without O_BINARY, which corrupts UTF-16 task XML."""
+    from micropaw.tools import google_auth
+
+    monkeypatch.setattr(os, "O_BINARY", 0x8000, raising=False)
+    flags = []
+    real_open = os.open
+
+    def spy(path, f, *a, **k):
+        flags.append(f)
+        return real_open(path, f & ~0x8000, *a, **k)
+
+    monkeypatch.setattr(os, "open", spy)
+    data = "<Task>\n<a/>\n</Task>\n".encode("utf-16")
+    svc._write_private(tmp_path / "t.xml", data)
+    config._write_bytes(tmp_path / "c.json", b"{}\n")
+    monkeypatch.setattr(google_auth, "_TOKEN_FILE", tmp_path / "tok.json")
+    monkeypatch.setattr(google_auth, "CONFIG_DIR", tmp_path)
+    google_auth._save_tokens({"a": 1})
+    assert len(flags) == 3 and all(f & 0x8000 for f in flags)
+    assert (tmp_path / "t.xml").read_bytes().decode("utf-16").count("\n") == 3

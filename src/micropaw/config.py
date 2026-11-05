@@ -487,7 +487,7 @@ def _write_bytes(path: Path, data: bytes) -> None:
     """Write 0600 from creation (no world-readable window) through a temp file, then replace."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.tmp")
-    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o600)
     try:
         if hasattr(os, "fchmod"):
             os.fchmod(fd, 0o600)  # the mode above only applies when the file is new

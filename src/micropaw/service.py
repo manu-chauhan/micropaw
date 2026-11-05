@@ -212,7 +212,7 @@ def _check(cmd: list[str]) -> str:
 
 def _write_private(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o600)
     try:
         if hasattr(os, "fchmod"):
             os.fchmod(fd, 0o600)
