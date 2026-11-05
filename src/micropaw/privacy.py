@@ -90,12 +90,106 @@ def remembered(chosen: str) -> tuple[str, str]:
     return chosen, note
 
 
-def confirm_mode(chosen: str) -> None:
-    """The owner chose this mode at a terminal (paw setup, paw privacy set): remember it as the new floor."""
+def confirm_mode(chosen: str, config: Config | None = None) -> None:
+    """The owner chose this mode (and, with `config`, these settings) at a terminal: remember it as the new floor."""
     try:
         _record_file().write_text(chosen)
     except OSError:
         pass
+    if config is not None:
+        _write_settings(chosen, config)
+
+
+# What the guard and the locality rules read. A config that is looser than the last strict run in any of these is
+# held back to the old values until the owner confirms it, like the mode itself.
+_FLAGS = ("allow_lan", "allow_cloud_fallback", "allow_cloud_helpers", "share_with_cloud")
+_LISTS = ("lan_hosts", "allow", "trusted_local_services")
+_floor: dict | None = None
+
+
+def _settings_file():
+    from micropaw.config import CONFIG_DIR
+    return CONFIG_DIR / "privacy_last_settings"
+
+
+def _items(values) -> list[str]:
+    return [str(v).strip().lower() for v in values if str(v).strip()]
+
+
+def _snapshot(config: Config) -> dict:
+    p = config.privacy
+    out: dict = {f: bool(getattr(p, f)) for f in _FLAGS}
+    out.update({f: _items(getattr(p, f)) for f in _LISTS})
+    out["mcp"] = {name: {"network": bool(srv.network), "paths": _items(srv.paths),
+                         "write_paths": _items(srv.write_paths)} for name, srv in config.mcp_servers.items()}
+    return out
+
+
+def _write_settings(mode: str, config: Config) -> None:
+    import json
+    try:
+        path = _settings_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"mode": mode, "settings": _snapshot(config)}))
+    except OSError:
+        pass
+
+
+def _tighten(config: Config, prev: dict) -> list[str]:
+    """Put every setting that is looser than `prev` back to the old value, in place. Returns what was held."""
+    p, held = config.privacy, []
+    for f in _FLAGS:
+        if getattr(p, f) and not prev.get(f, True):
+            setattr(p, f, False)
+            held.append(f)
+    for f in _LISTS:
+        if f not in prev:
+            continue
+        cur = list(getattr(p, f))
+        keep = [x for x in cur if not str(x).strip() or str(x).strip().lower() in prev[f]]
+        if len(keep) != len(cur):
+            setattr(p, f, keep)
+            held.append(f)
+    for name, srv in config.mcp_servers.items():
+        old = prev.get("mcp", {}).get(name, {})
+        if srv.network and not old.get("network"):
+            srv.network = False
+            held.append(f"mcp_servers.{name}.network")
+        for f in ("paths", "write_paths"):
+            cur = list(getattr(srv, f))
+            keep = [x for x in cur if str(x).strip().lower() in old.get(f, ())]
+            if len(keep) != len(cur):
+                setattr(srv, f, keep)
+                held.append(f"mcp_servers.{name}.{f}")
+    return held
+
+
+def hold_loosened(config: Config, mode: str) -> str:
+    """Apply the held-back rule to the guard settings of `config` (in place) and record what runs now. `mode` is
+    the mode this install runs with (after `remembered`). Returns a loud note, or ""."""
+    import json
+    global _floor
+    try:
+        last = json.loads(_settings_file().read_text())
+    except (OSError, ValueError):
+        last = {}
+    prev = last.get("settings") if last.get("mode") in ("local", "airgapped") else None
+    note = ""
+    if prev and os.environ.get("MICROPAW_CONFIRM_PRIVACY", "").strip().lower() != mode:
+        if held := _tighten(config, prev):
+            _floor = prev
+            note = ("These privacy settings in config.json are looser than the last run: " + ", ".join(held)
+                    + f". Keeping the old values. To use them on purpose, start once with "
+                    f"MICROPAW_CONFIRM_PRIVACY={mode}.")
+    if mode != "normal" or last:
+        _write_settings(mode, config)
+    return note
+
+
+def apply_floor(config: Config) -> None:
+    """A config loaded later in a process that is holding settings back gets the same held values."""
+    if _floor is not None:
+        _tighten(config, _floor)
 
 
 def mode() -> str:
@@ -149,7 +243,7 @@ class Settings:
     trusted_services: frozenset = frozenset()
     cloud_fallback: bool = False
     cloud_helpers: bool = False
-    notes: tuple = field(default=())
+    public: tuple = ()                # lan_hosts entries that are not private ranges (left out, refused at start)
 
 
 _settings: Settings | None = None
@@ -158,32 +252,51 @@ _guard: Guard | None = None
 _registry: Registry | None = None
 
 
-def _split_hosts(entries: list[str]) -> tuple[list, set[str]]:
-    """lan_hosts entries: an address or range, a name, or name=address (the name counts, the address is listed)."""
-    nets, names = [], set()
+_LISTABLE = LAN_NETS + tuple(ipaddress.ip_network(n) for n in ("127.0.0.0/8", "::1/128", "169.254.0.0/16", "fe80::/10"))
+
+
+def _listable(net) -> bool:
+    """lan_hosts may list only this machine and private ranges. 0.0.0.0/0 or a public address would turn the
+    guard's connect rule into allow-all."""
+    return any(net.version == r.version and net.subnet_of(r) for r in _LISTABLE)
+
+
+def _split_hosts(entries: list[str]) -> tuple[list, set[str], list[str]]:
+    """lan_hosts entries: an address or range, a name, or name=address (the name counts, the address is listed).
+    Also returns the entries that are not private, which are left out."""
+    nets, names, bad = [], set(), []
+
+    def add(text: str, entry: str) -> bool:
+        try:
+            net = ipaddress.ip_network(text.strip(), strict=False)
+        except ValueError:
+            return False
+        if isinstance(net, ipaddress.IPv6Network) and net.network_address.ipv4_mapped:
+            net = ipaddress.ip_network(f"{net.network_address.ipv4_mapped}/{max(net.prefixlen - 96, 0)}", strict=False)
+        if _listable(net):
+            nets.append(net)
+        else:
+            bad.append(entry)
+        return True
+
     for raw in entries:
         entry = raw.strip().lower()
         if not entry:
             continue
         if "=" in entry:
             entry, _, pinned = entry.partition("=")
-            try:
-                nets.append(ipaddress.ip_network(pinned.strip(), strict=False))
-            except ValueError:
-                pass
-        try:
-            nets.append(ipaddress.ip_network(entry, strict=False))
-        except ValueError:
+            add(pinned, raw.strip())
+        if not add(entry, raw.strip()):
             names.add(entry.rstrip("."))
-    return nets, names
+    return nets, names, bad
 
 
 def configure(privacy: PrivacyConfig) -> Settings:
     """Read the owner's lists. Call once at start; the guard and the locality rules use the result."""
     global _settings, _guard, _registry
-    nets, names = _split_hosts(privacy.lan_hosts)
+    nets, names, bad = _split_hosts(privacy.lan_hosts)
     _settings = Settings(
-        allow_lan=privacy.allow_lan, nets=tuple(nets), names=frozenset(names),
+        allow_lan=privacy.allow_lan, nets=tuple(nets), names=frozenset(names), public=tuple(bad),
         allow=frozenset(a.lower() for a in privacy.allow),
         trusted_services=frozenset(t.lower() for t in privacy.trusted_local_services),
         cloud_fallback=privacy.allow_cloud_fallback, cloud_helpers=privacy.allow_cloud_helpers,
@@ -209,8 +322,8 @@ def bind_config(config: Config) -> None:
 
 
 def _reset_for_tests() -> None:
-    global _mode, _settings, _config, _guard, _registry
-    _mode = _settings = _config = _guard = _registry = None
+    global _mode, _settings, _config, _guard, _registry, _floor
+    _mode = _settings = _config = _guard = _registry = _floor = None
 
 
 # ---------------------------------------------------------------------------
@@ -526,6 +639,10 @@ def check_config(config: Config, channels: list | None = None) -> Report:
     if config.embedding.provider == "openai":
         rep.refusals.append("embedding.provider is openai, which would send every message and file to OpenAI. "
                             "Use ollama or local embeddings.")
+    for entry in settings().public:
+        rep.refusals.append(f'privacy.lan_hosts has "{entry}", which is not on this machine or a private network. '
+                            "Only private ranges (10.x, 172.16-31.x, 192.168.x, Tailscale 100.64-127.x) and names "
+                            "can be listed.")
     rep.refusals += _voice_refusals(config)
     names = {c.name for c in channels} if channels is not None else {
         n for n in _VENDORS if getattr(config.channels, n).enabled}

@@ -36,6 +36,8 @@ def prepare(install_guard: bool = True) -> str:
     except Exception:
         config = None  # the command itself reports a broken config; the environment can still tighten the mode
     mode, note = privacy.remembered(file_mode)  # what the file says, not the environment
+    if config is not None:
+        note = "\n".join(n for n in (note, privacy.hold_loosened(config, mode)) if n)  # before the guard reads it
     if note:
         print(note, file=sys.stderr)
     mode = privacy.freeze(mode)  # the environment may tighten it, never loosen

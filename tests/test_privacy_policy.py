@@ -528,3 +528,22 @@ async def test_scan_goes_around_environment_proxies(monkeypatch):
     monkeypatch.setattr(registry.net, "client", lambda *a, **k: seen.append(k.get("local")) or real(*a, **k))
     assert await registry.scan_local({"x": ("ollama", "http://127.0.0.1:1")}) == []
     assert seen == [True]
+
+
+@pytest.mark.parametrize("entry", ["0.0.0.0/0", "::/0", "8.8.8.8", "8.8.8.0/24", "192.168.0.0/15", "100.128.0.0/10",
+                                   "::ffff:0.0.0.0/96", "name=1.1.1.1", "2001:db8::/32"])
+def test_lan_hosts_cannot_list_public_or_too_wide_ranges(entry):
+    set_mode("airgapped", lan_hosts=[entry, "192.168.7.0/24"])
+    s = privacy.settings()
+    assert s.public == (entry,) and [str(n) for n in s.nets] == ["192.168.7.0/24"]
+    g = privacy.build_guard()
+    assert not g.address_ok("8.8.8.8") and not g.address_ok("2606:4700::1") and g.address_ok("192.168.7.5")
+    c = config(privacy_kw={"mode": "airgapped", "lan_hosts": [entry]})
+    assert any(f'"{entry}"' in r and "private" in r for r in privacy.check_config(c).refusals)
+
+
+def test_private_lan_hosts_entries_are_not_refused():
+    set_mode("airgapped", lan_hosts=["10.0.0.0/8", "192.168.1.0/24", "100.64.0.0/10", "fd00::/8", "127.0.0.0/8",
+                                     "fe80::/10", "box", "::ffff:192.168.1.5"])
+    assert privacy.settings().public == ()
+    assert privacy.check_config(config(privacy_kw={"mode": "airgapped", "lan_hosts": ["10.0.0.0/8"]})).refusals == []

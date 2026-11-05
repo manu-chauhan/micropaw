@@ -188,3 +188,87 @@ def test_load_config_refuses_a_bad_mode_and_a_bad_env_value(monkeypatch, tmp_pat
         config_mod.load_config()
     with pytest.raises(privacy.PrivacyError):
         privacy.freeze("normal")
+
+
+# --- the other guard settings are held like the mode ----------------------------------------------------------------
+
+def _cfg(**kw):
+    mcp = kw.pop("mcp", {})
+    return config_mod.Config(privacy=config_mod.PrivacyConfig(mode="airgapped", **kw),
+                             mcp_servers={n: config_mod.MCPServerConfig(command="x", **v) for n, v in mcp.items()})
+
+
+@pytest.fixture
+def settings_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(privacy, "_settings_file", lambda: tmp_path / "privacy_last_settings")
+    monkeypatch.delenv("MICROPAW_CONFIRM_PRIVACY", raising=False)
+    return tmp_path / "privacy_last_settings"
+
+
+def test_loosened_guard_settings_are_held_until_confirmed(settings_file, monkeypatch):
+    strict = _cfg(allow_lan=False, lan_hosts=["192.168.7.0/24"], mcp={"srv": {"paths": ["/data"]}})
+    assert privacy.hold_loosened(strict, "airgapped") == "" and settings_file.exists()
+    loose = _cfg(allow_lan=True, lan_hosts=["192.168.7.0/24", "10.0.0.0/8", "box"], allow=["shell_network"],
+                 trusted_local_services=["evil"], allow_cloud_fallback=True, allow_cloud_helpers=True,
+                 share_with_cloud=True,
+                 mcp={"srv": {"network": True, "paths": ["/data", "/home"], "write_paths": ["/"]},
+                      "new": {"network": True}})
+    strict.privacy.share_with_cloud = False
+    privacy.hold_loosened(strict, "airgapped")  # record share_with_cloud off too
+    note = privacy.hold_loosened(loose, "airgapped")
+    p = loose.privacy
+    assert not p.allow_lan and not p.allow_cloud_fallback and not p.allow_cloud_helpers and not p.share_with_cloud
+    assert p.lan_hosts == ["192.168.7.0/24"] and p.allow == [] and p.trusted_local_services == []
+    srv = loose.mcp_servers["srv"]
+    assert not srv.network and srv.paths == ["/data"] and srv.write_paths == []
+    assert not loose.mcp_servers["new"].network
+    assert "lan_hosts" in note and "mcp_servers.srv.network" in note and "MICROPAW_CONFIRM_PRIVACY=airgapped" in note
+    # the record keeps the strict values, so a later start is held the same way
+    again = _cfg(lan_hosts=["0.0.0.0/0"], allow_lan=True)
+    assert privacy.hold_loosened(again, "airgapped") != "" and again.privacy.lan_hosts == []
+
+
+def test_tightening_or_equal_settings_are_not_held(settings_file):
+    privacy.hold_loosened(_cfg(lan_hosts=["192.168.7.0/24", "box"], allow=["telegram"]), "airgapped")
+    tighter = _cfg(lan_hosts=["box"], allow=[])
+    assert privacy.hold_loosened(tighter, "airgapped") == "" and tighter.privacy.lan_hosts == ["box"]
+    assert privacy.hold_loosened(_cfg(lan_hosts=["BOX "]), "airgapped") == ""  # same entry, spelt differently
+    assert privacy.hold_loosened(_cfg(lan_hosts=["box", "nas"]), "airgapped") != ""
+
+
+def test_confirming_lets_the_looser_settings_run_and_becomes_the_new_floor(settings_file, monkeypatch):
+    privacy.hold_loosened(_cfg(), "airgapped")
+    monkeypatch.setenv("MICROPAW_CONFIRM_PRIVACY", "airgapped")
+    loose = _cfg(lan_hosts=["box"])
+    assert privacy.hold_loosened(loose, "airgapped") == "" and loose.privacy.lan_hosts == ["box"]
+    monkeypatch.delenv("MICROPAW_CONFIRM_PRIVACY")
+    assert privacy.hold_loosened(_cfg(lan_hosts=["box"]), "airgapped") == ""
+
+
+def test_a_fresh_normal_install_writes_no_record_and_nothing_is_held_after_a_normal_run(settings_file):
+    assert privacy.hold_loosened(_cfg(lan_hosts=["box"]), "normal") == "" and not settings_file.exists()
+    privacy.hold_loosened(_cfg(allow=["telegram"]), "normal")  # a normal run (confirmed or first) records loose values
+    assert privacy.hold_loosened(_cfg(allow=["telegram", "slack"]), "local") == ""
+
+
+def test_a_load_in_a_holding_process_gets_the_held_values(settings_file, tmp_path, monkeypatch):
+    monkeypatch.setattr(config_mod, "CONFIG_FILE", tmp_path / "config.json")
+    privacy.hold_loosened(_cfg(), "airgapped")
+    (tmp_path / "config.json").write_text(json.dumps({"privacy": {"mode": "airgapped", "lan_hosts": ["box"]}}))
+    assert config_mod.load_config().privacy.lan_hosts == ["box"]  # not holding yet
+    privacy.hold_loosened(config_mod.load_config(), "airgapped")
+    assert config_mod.load_config().privacy.lan_hosts == []
+
+
+def test_boot_does_not_obey_a_config_that_listed_everything_as_local(tmp_path):
+    """The reported route: the config of a strict install is rewritten with lan_hosts 0.0.0.0/0 and ::/0."""
+    probe = ("import socket\nfor host in ('8.8.8.8',):\n    try:\n        socket.create_connection((host, 53), 0.2)\n"
+             "        print(host, 'CONNECTED')\n    except OSError as e:\n        print(host, type(e).__name__)\n")
+    out = _run_boot(tmp_path, {"privacy": {"mode": "airgapped"}}, code=probe)
+    assert out.stdout.split("\n")[1].startswith("8.8.8.8 EgressBlocked"), out.stdout + out.stderr
+    evil = {"privacy": {"mode": "airgapped", "lan_hosts": ["0.0.0.0/0", "::/0"], "allow": ["shell_network"],
+                        "allow_cloud_fallback": True}}
+    out = _run_boot(tmp_path, evil, code=probe)
+    assert out.stdout.split()[0] == "airgapped"
+    assert "8.8.8.8 EgressBlocked" in out.stdout, out.stdout + out.stderr
+    assert "looser than the last run" in out.stderr and "lan_hosts" in out.stderr

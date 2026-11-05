@@ -486,7 +486,10 @@ def load_config() -> Config:
         raw = _migrate_file(raw)
     _apply_env_overrides(raw)
     raw.pop("config_version", None)
-    return Config(**raw)
+    cfg = Config(**raw)
+    from micropaw import privacy
+    privacy.apply_floor(cfg)  # settings a strict run is holding back stay held in later loads
+    return cfg
 
 
 def _migrate(raw: dict) -> dict:
