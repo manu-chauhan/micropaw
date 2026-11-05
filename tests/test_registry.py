@@ -152,10 +152,12 @@ async def test_qwen_tools_turn_is_not_streamed():
     assert seen == ["chat"] and items[0] == "hi"
 
 
-def test_meter_hook_returns_the_provider_unchanged():
+def test_role_providers_are_metered_around_the_shared_provider():
+    from micropaw.providers.metered import MeteredProvider
     reg = Registry(cfg())
     p = reg.get("claude")
-    assert reg.role("main", "chat", ["claude"]) is p
+    role = reg.role("main", "chat", ["claude"])
+    assert isinstance(role, MeteredProvider) and role.inner is p
 
 
 def test_registry_model_dump_roundtrip():

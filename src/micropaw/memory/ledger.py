@@ -41,6 +41,21 @@ def day_start(days_ago: int = 0) -> float:
     return (midnight - timedelta(days=days_ago)).timestamp()
 
 
+class LateLedger:
+    """A ledger slot filled once the database is open. Until then metered providers pass calls straight through."""
+
+    def __init__(self) -> None:
+        self.target: Ledger | None = None
+
+    def bind(self, ledger: Ledger) -> None:
+        self.target = ledger
+
+    def __getattr__(self, attr: str):
+        if self.target is None:
+            raise AttributeError(attr)
+        return getattr(self.target, attr)
+
+
 class Ledger:
     """Takes the store's aiosqlite connection. Holds are in-memory and shared by every meter on this ledger."""
 

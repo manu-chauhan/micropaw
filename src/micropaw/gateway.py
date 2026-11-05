@@ -247,6 +247,10 @@ class Gateway:
         # Init database
         self.store = MemoryStore(str(DB_FILE), embedding_provider=embedding_provider)
         await self.store.init()
+        self.ledger = Ledger(self.store.db)
+        await self.ledger.init()
+        if self.models:
+            self.models.ledger.bind(self.ledger)
 
         # Wire tools that need runtime dependencies
         from micropaw.tools.memory_tool import set_store as set_memory_store
@@ -302,6 +306,7 @@ class Gateway:
             agent.approver = self._approve
             agent.fast_provider = rt.fast
             agent.vision_provider = rt.vision
+            agent.ledger = self.ledger
             self.agents[name] = agent
         self.agent = self.agents["main"]
         await self._load_chat_agents()

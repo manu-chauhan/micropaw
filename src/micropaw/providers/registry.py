@@ -237,6 +237,8 @@ class Registry:
         self.problems: list[str] = []  # why a spec could not be built, for the caller to show
         self._cache: dict[str, AIProvider] = {}
         self._sems: dict[str, asyncio.Semaphore] = {}
+        from micropaw.memory.ledger import LateLedger
+        self.ledger = LateLedger()  # bound by the gateway once the database is open
         self.presets = {**PRESETS, **self._custom()}
 
     def _custom(self) -> dict[str, Preset]:
@@ -338,8 +340,8 @@ class Registry:
         return self._wrap(provider, agent, role) if provider is not None else None
 
     def _wrap(self, provider: AIProvider, agent: str, role: str) -> AIProvider:
-        # HOOK: metering is wired here at merge: return meter(provider, agent=agent, role=role)
-        return provider
+        from micropaw.providers.metered import meter
+        return meter(provider, agent=agent, role=role, ledger=self.ledger, budget=self.config.budget)
 
     def ollama_providers(self) -> list:
         from micropaw.providers.ollama import OllamaProvider

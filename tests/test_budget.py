@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator
+from unittest.mock import AsyncMock, MagicMock
 
 import aiosqlite
 import pytest
@@ -257,3 +258,33 @@ class TestUsageCommand:
         c = Config()
         assert (c.budget.daily_usd, c.budget.daily_tokens, c.budget.warn_at) == (0, 2_000_000, 0.8)
         assert Config.model_validate({"provider": "ollama"}).budget.daily_usd == 0
+
+
+class TestRegistryMetering:
+    @pytest.mark.asyncio
+    async def test_registry_meters_once_the_ledger_is_bound(self, tmp_path):
+        import aiosqlite
+
+        from micropaw.config import Config
+        from micropaw.memory.ledger import Ledger
+        from micropaw.providers.metered import MeteredProvider
+        from micropaw.providers.registry import Registry
+
+        reg = Registry(Config())
+        fake = MagicMock()
+        fake.name, fake.model, fake.max_tokens = "ollama", "gemma4:e4b", 1000
+        fake.chat = AsyncMock(return_value=AIResponse(content="hi", tool_calls=[], usage={"input": 5, "output": 2}))
+        wrapped = reg._wrap(fake, "main", "chat")
+        assert isinstance(wrapped, MeteredProvider)
+        msgs = [Message(role="user", content="hello")]
+        await wrapped.chat(msgs)  # unbound: passes straight through
+        db = await aiosqlite.connect(str(tmp_path / "u.db"))
+        try:
+            ledger = Ledger(db)
+            await ledger.init()
+            reg.ledger.bind(ledger)
+            await wrapped.chat(msgs)
+            rows = await ledger.breakdown(1)
+            assert sum(t.calls for *_, t in rows) == 1
+        finally:
+            await db.close()

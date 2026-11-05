@@ -130,7 +130,13 @@ class MeteredProvider(AIProvider):
                     f"Heads up: ${spent:.2f} of the ${cap:.2f} daily budget{who} is used. It resets at midnight.",
                 )
 
+    @property
+    def _unbound(self) -> bool:
+        return getattr(self.ledger, "target", self.ledger) is None
+
     async def chat(self, messages: list[Message], tools: list[ToolDef] | None = None) -> AIResponse:
+        if self._unbound:  # no database yet (paw models test, setup): nothing to meter against
+            return await self.inner.chat(messages, tools)
         hold, est_in = await self._reserve(messages, tools)
         response: AIResponse | None = None
         try:
@@ -145,6 +151,10 @@ class MeteredProvider(AIProvider):
     async def chat_stream(
         self, messages: list[Message], tools: list[ToolDef] | None = None,
     ) -> AsyncGenerator[str | AIResponse, None]:
+        if self._unbound:
+            async for item in self.inner.chat_stream(messages, tools):
+                yield item
+            return
         hold, est_in = await self._reserve(messages, tools)
         usage: dict[str, int] | None = None
         received = 0
