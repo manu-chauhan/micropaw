@@ -301,6 +301,10 @@ class SearchConfig(BaseModel):
     proxy: str = ""        # socks5h:// or socks5:// proxy for your own SearXNG (needs: pip install micropaw[tor])
 
 
+class DisplayConfig(BaseModel):
+    show_provider: bool = True  # end each reply with a line naming the model server that answered
+
+
 class PrivacyConfig(BaseModel):
     """Where data may go. airgapped: nothing leaves this machine (and the LAN, if allowed).
     local: models, embeddings and speech only on this machine or the LAN; web search only through your own servers.
@@ -393,6 +397,7 @@ class Config(BaseModel):
     agents: dict[str, AgentConfig] = {}  # absent = one agent "main" built from the fields above
     routes: dict[str, str] = {}          # "telegram:-100123" or "discord:*" -> agent name
     providers: dict[str, CustomProviderConfig] = {}
+    display: DisplayConfig = DisplayConfig()
 
     @model_validator(mode="after")
     def _check_agents(self) -> Config:

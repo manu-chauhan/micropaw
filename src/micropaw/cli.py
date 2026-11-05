@@ -294,6 +294,9 @@ def status():
         else:
             table.add_row(f"  {ch_name}", "disabled")
 
+    from micropaw import privacy_report
+    table.add_row("Privacy", privacy_report.status_line(config).removeprefix("Privacy: "))
+
     # Database
     db_exists = DB_FILE.exists()
     table.add_row("Database", f"{DB_FILE.stat().st_size / 1024:.0f} KB" if db_exists else "not created")
@@ -302,9 +305,17 @@ def status():
     console.print(table)
 
 
+@main.command(name="privacy")
+def privacy_cmd():
+    """Show where your data goes: the mode, every model, search, channel and server, and file permissions."""
+    from micropaw import privacy_report
+    click.echo(privacy_report.render(load_config()))
+
+
 @main.command()
 @click.option("--quiet", is_flag=True, help="No output. Exit 0 if the gateway runs and the database opens, else 1.")
-def doctor(quiet):
+@click.option("--search", is_flag=True, help="Also run one test search (asks first, shows the query).")
+def doctor(quiet, search):
     """Run diagnostics and check system health."""
     if quiet:
         from micropaw.service import healthy
@@ -358,8 +369,14 @@ def doctor(quiet):
     table.add_row("Disk space", ok(free_mb > 100), f"{free_mb:.0f} MB free")
     _doctor_install_rows(table, config)
     _doctor_server_rows(table, config)
+    from micropaw import privacy_report
+    for name, mark, detail in privacy_report.advice(config):
+        table.add_row(name, {"pass": "[green]pass[/green]", "warn": "[yellow]warn[/yellow]"}.get(
+            mark, "[dim]note[/dim]"), detail)
 
     console.print(table)
+    if search:
+        _doctor_search(config)
 
 
 @main.command()
@@ -684,6 +701,26 @@ def _doctor_install_rows(table: Table, config: Config) -> None:
     web = config.channels.webchat
     if web.enabled and web.host in ("0.0.0.0", "::", ""):
         row("WebChat bind", None, f"{web.host}:{web.port} is open to your network; use 127.0.0.1 unless you need it")
+
+
+def _doctor_search(config: Config) -> None:
+    """One test query through the configured search, after the owner says yes."""
+    from micropaw import privacy
+    from micropaw.tools import web_search
+    from micropaw.tools.base import ToolContext
+    web_search.set_search_config(config.search, config.privacy)
+    tool = web_search.WebSearchTool()
+    ctx = ToolContext(conversation_id="doctor", user_id="owner", platform="terminal", marked=True,
+                      approve=lambda *_: asyncio.sleep(0, True))
+    args = {"query": "MicroPaw test search", "max_results": 1}
+    if ask := tool.needs_approval(args, ctx):
+        click.echo(ask)
+        if not click.confirm("Send this test search?"):
+            return
+    out = asyncio.run(tool.execute(args, ctx))
+    click.echo(out.splitlines()[0] if out else "No answer.")
+    if config.search.proxy and privacy.local_only():
+        click.echo(f"The request was sent through {config.search.proxy.split('@')[-1]}.")
 
 
 def _doctor_server_rows(table: Table, config: Config) -> None:
