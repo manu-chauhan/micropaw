@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -24,6 +25,10 @@ CREATE TABLE IF NOT EXISTS usage (
 );
 CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage(ts);
 """
+
+
+# (chat, role) that calls made in this task are recorded under; a goal sets it to sum its own spend
+usage_tag: ContextVar[tuple[str, str] | None] = ContextVar("usage_tag", default=None)
 
 
 @dataclass(slots=True)
@@ -81,6 +86,15 @@ class Ledger:
             (time.time(), agent, chat, role, provider, model, input, cached, output, usd),
         )
         await self.db.commit()
+
+    async def spent_on(self, chat: str, role: str) -> tuple[float, int]:
+        """(USD, tokens of calls with no known price) recorded under this chat tag and role."""
+        async with self.db.execute(
+            "SELECT COALESCE(SUM(usd), 0), COALESCE(SUM(CASE WHEN usd IS NULL THEN input + output ELSE 0 END), 0) "
+            "FROM usage WHERE chat = ? AND role = ?", (chat, role),
+        ) as cur:
+            usd, unpriced = await cur.fetchone()
+        return usd, unpriced
 
     async def today(self) -> dict[str, Totals]:
         """Today's totals by agent (local day)."""

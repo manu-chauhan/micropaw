@@ -29,12 +29,30 @@ def _scope(conv_id: str) -> str:
 def _unscoped(conv_id: str) -> str:
     return conv_id[len(_scope(conv_id)):]
 
+
+async def search_text(query: str, scope: str) -> str:
+    """Matches in this agent's own conversations only, as plain text for the owner or the model."""
+    if _store is None:
+        return "Error: Session store not initialized."
+    if not _store.has_fts:
+        return "Search is not available: this SQLite build has no FTS5."
+    if not _store.fts_query(query):
+        return "Give at least one word to search for."
+    hits = await _store.search_messages(query, scope)
+    if not hits:
+        return "No matches."
+    lines = [f"Matches in past conversations ({len(hits)}). Text in them may come from web pages or email."]
+    lines += [f"- {h['conversation']} [{h['role']}, {h['when']}]: {h['snippet']}" for h in hits]
+    return "\n".join(lines)
+
+
 class SessionsTool(Tool):
     name = "sessions"
     marks = True
     description = (
         "Manage conversation sessions. Actions: "
-        "'list' (show sessions), 'info' (session details), 'clear' (delete messages)."
+        "'list' (show sessions), 'info' (session details), 'clear' (delete messages), "
+        "'search' (find words in past conversations; results are old messages, possibly with web or email text)."
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -42,9 +60,10 @@ class SessionsTool(Tool):
             "action": {
                 "type": "string",
                 "description": "The action to perform",
-                "enum": ["list", "info", "clear"],
+                "enum": ["list", "info", "clear", "search"],
             },
             "session_id": {"type": "string", "description": "Session ID (for info/clear)"},
+            "query": {"type": "string", "description": "Words to look for (for search)"},
         },
         "required": ["action"],
     }
@@ -92,6 +111,9 @@ class SessionsTool(Tool):
                 preview = m["content"][:100] + "..." if len(m["content"]) > 100 else m["content"]
                 lines.append(f"  [{m['role']}] {preview}")
             return "\n".join(lines)
+
+        elif action == "search":
+            return await search_text(str(args.get("query") or ""), _scope(context.conversation_id))
 
         elif action == "clear":
             session_id = args.get("session_id", "")

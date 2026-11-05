@@ -7,7 +7,7 @@ import logging
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from micropaw.memory.ledger import Totals
+from micropaw.memory.ledger import Totals, usage_tag
 from micropaw.providers.base import AIProvider, AIResponse, Message, ToolDef
 from micropaw.utils.prices import cost, is_local_provider
 
@@ -105,9 +105,10 @@ class MeteredProvider(AIProvider):
         if not usage.get("output"):
             usage["output"] = received_chars // 4
         usd = self._price(usage)
+        chat, role = usage_tag.get() or (self.chat_id, self.role)
         try:
             await self.ledger.record(
-                agent=self.agent, chat=self.chat_id, role=self.role, provider=self.inner.name,
+                agent=self.agent, chat=chat, role=role, provider=self.inner.name,
                 model=self.inner.model, input=usage["input"], cached=usage.get("cache_read", 0) or 0,
                 output=usage["output"], usd=usd,
             )

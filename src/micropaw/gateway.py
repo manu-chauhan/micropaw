@@ -18,6 +18,7 @@ from typing import Any
 from micropaw.channels.base import Channel
 from micropaw.config import CONFIG_DIR, CONFIG_FILE, DB_FILE, Config, load_config
 from micropaw.core.agent import Agent
+from micropaw.core.goal import GoalManager
 from micropaw.core.profile import AgentProfile, AgentRuntime, build_view, providers_in, unknown_tool_names
 from micropaw.memory.ledger import Ledger
 from micropaw.memory.store import MemoryStore
@@ -197,6 +198,8 @@ class _Approvals:
 _CRON_CMD = re.compile(r"^/cron\s+(enable|disable)\s+#?(\d+)$", re.IGNORECASE)
 _FORGET_CMD = re.compile(r"^/forget\s+(.+)$", re.IGNORECASE)
 _AGENT_CMD = re.compile(r"^/agent(?:\s+(\S+))?$", re.IGNORECASE)
+_GOAL_CMD = re.compile(r"^/goal(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
+_SEARCH_CMD = re.compile(r"^/search\s+(.+)$", re.IGNORECASE | re.DOTALL)
 
 
 class Gateway:
@@ -231,6 +234,8 @@ class Gateway:
         self._approvals = _Approvals(CONFIG_DIR / "approved_actions.json")
         self._chat_locks: dict[Any, asyncio.Lock] = {}  # one turn at a time per conversation
         self.ledger: Ledger | None = None  # usage ledger; created on first /usage if nobody set it
+        self.goals: GoalManager | None = None
+        self.first_command = ""  # run once the channels are up (paw goal)
 
     async def start(self) -> None:
         """Initialize everything and start all channels."""
@@ -309,6 +314,7 @@ class Gateway:
             agent.ledger = self.ledger
             self.agents[name] = agent
         self.agent = self.agents["main"]
+        self.goals = GoalManager(lambda: self.agents, self._say, lambda: self.ledger)
         await self._load_chat_agents()
         self._probe_task = asyncio.create_task(self._probe_models(runtimes))
 
@@ -381,6 +387,9 @@ class Gateway:
         from micropaw.tools.cron_tool import set_scheduler
         set_scheduler(self._scheduler)
 
+        if self.first_command:
+            self._first_task = asyncio.create_task(self._run_first_command())
+
         if terminal_coro:
             # Terminal blocks — run it as the main loop
             await terminal_coro[1]
@@ -402,6 +411,16 @@ class Gateway:
 
             await stop_event.wait()
             await self.stop()
+
+    async def _say(self, platform: str, chat_id: str, text: str) -> None:
+        """Send a message to a chat from a background task (goal reports)."""
+        channel = next((c for c in self.channels if c.name == platform), None)
+        if channel is not None:
+            await channel.send_message(chat_id, text)
+
+    async def _run_first_command(self) -> None:
+        reply = await self._handle_message(self.first_command, "terminal-user", "terminal", None)
+        await self._say("terminal", "terminal", reply)
 
     def _get_terminal_channel(self):
         """Find the terminal channel for usage tracking."""
@@ -509,6 +528,15 @@ class Gateway:
         if (m := _FORGET_CMD.match(text)) and self.store:
             key = m.group(1).strip()
             return f"Forgot: {key}" if await self.store.delete_memory(key) else f"Nothing saved as: {key}"
+        if (m := _GOAL_CMD.match(text)) and self.goals:
+            agent = self._route(platform, user_id, channel_id)
+            return await self.goals.command(m.group(1) or "", agent, platform, user_id, channel_id)
+        if (m := _SEARCH_CMD.match(text)) and self.store:
+            from micropaw.tools.sessions import search_text
+            return await search_text(m.group(1), self._route(platform, user_id, channel_id).conversations.prefix)
+        if text.lower() == "/skills":
+            from micropaw import skills
+            return "Skills:\n" + skills.listing()
         m = _CRON_CMD.match(text)
         if not m or not hasattr(self, "_scheduler"):
             return None
@@ -780,6 +808,8 @@ class Gateway:
                 pass
 
     async def stop(self) -> None:
+        if self.goals:
+            await self.goals.close()
         if hasattr(self, "_scheduler"):
             self._scheduler._running = False
         await self._cancel_task(getattr(self, "_scheduler_task", None))
