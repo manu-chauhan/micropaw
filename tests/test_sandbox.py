@@ -241,7 +241,8 @@ def test_skip_rules(monkeypatch):
     monkeypatch.setattr(sandbox, "resolve", lambda: Sandbox("seatbelt"))
     assert tool.needs_approval({"command": "ls"}, _ctx(**skip))  # experimental: always asks
     monkeypatch.setattr(sandbox, "resolve", lambda: Sandbox("none"))
-    monkeypatch.setattr(shell, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))  # not os.name itself: pathlib would build WindowsPath
+    # not os.name itself: pathlib would build WindowsPath
+    monkeypatch.setattr(shell, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
     assert tool.needs_approval({"command": "ls"}, _ctx(**skip))  # Windows host: always asks
     monkeypatch.setattr(shell, "os", os)
     assert tool.needs_approval({"command": "ls"}, _ctx(**skip)) is None

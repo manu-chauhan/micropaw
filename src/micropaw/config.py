@@ -99,7 +99,8 @@ def _coerce(tp: Any, v: Any) -> Any:
         if isinstance(v, str) and v in get_args(tp):
             return v
         choices = [repr(a) for a in get_args(tp)]
-        raise ConfigValueError([], "Input should be " + ", ".join(choices[:-1]) + (" or " if len(choices) > 1 else "") + choices[-1])
+        head = ", ".join(choices[:-1]) + " or " if len(choices) > 1 else ""
+        raise ConfigValueError([], "Input should be " + head + choices[-1])
     if origin is list:
         if not isinstance(v, (list, tuple)):
             raise ConfigValueError([], "Input should be a valid list")
@@ -137,7 +138,8 @@ def _coerce(tp: Any, v: Any) -> Any:
             return True
         if word in _FALSE or word == 0:
             return False
-        raise ConfigValueError([], "Input should be a valid boolean" + (", unable to interpret input" if word is not None else ""))
+        tail = ", unable to interpret input" if word is not None else ""
+        raise ConfigValueError([], "Input should be a valid boolean" + tail)
     if tp is int:
         if isinstance(v, str):  # "5" and "5.0" are fine, "1e3" is not
             text = v.strip()

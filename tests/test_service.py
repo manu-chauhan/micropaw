@@ -432,7 +432,8 @@ def test_doctor_sandbox_row_is_a_warning_on_windows_and_the_report_does_not_fail
     monkeypatch.setattr(sandbox, "resolve", lambda: Sandbox("none", host_asks=True))
     monkeypatch.setattr(sandbox, "configure", lambda p: None)
     monkeypatch.setattr(svc, "running_gateway", lambda: None)  # gateway stopped
-    monkeypatch.setattr(cli, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))  # not os.name: pathlib would build WindowsPath
+    # not os.name itself: pathlib would build WindowsPath
+    monkeypatch.setattr(cli, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
     out = CliRunner().invoke(cli.main, ["doctor"])
     row = next(line for line in out.output.splitlines() if "Shell sandbox" in line)
     assert "warn" in row and "FAIL" not in row
