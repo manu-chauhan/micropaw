@@ -201,6 +201,8 @@ async def test_the_gateway_sweeps_now_and_daily(monkeypatch):
         return {"messages": 1}
 
     gw.store.purge_older_than = purge
+    files = []
+    monkeypatch.setattr(storage, "purge_old_files", lambda home, days: files.append((home, days)) or 0)
     sleeps = []
 
     async def fake_sleep(seconds):
@@ -210,7 +212,7 @@ async def test_the_gateway_sweeps_now_and_daily(monkeypatch):
     monkeypatch.setattr("micropaw.gateway.asyncio.sleep", fake_sleep)
     with pytest.raises(asyncio.CancelledError):
         await gw._retention_loop(30)
-    assert calls == [30] and sleeps == [86400]
+    assert calls == [30] and sleeps == [86400] and files == [(config.CONFIG_DIR, 30)]
 
 
 def test_retention_is_off_by_default():
@@ -259,6 +261,7 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "CONFIG_DIR", tmp_path)
     monkeypatch.setattr(cli, "DB_FILE", tmp_path / "data.db")
     monkeypatch.setattr(config, "DB_FILE", tmp_path / "data.db")
+    monkeypatch.setattr("micropaw.utils.audit.AUDIT_FILE", tmp_path / "audit.jsonl")  # never the real log
     return tmp_path
 
 
@@ -433,3 +436,57 @@ async def test_an_old_database_gets_secure_delete_on_its_search_index(tmp_path):
     await store.checkpoint()
     await store.close()
     assert not any(w in _raw(db) for w in WORDS)
+
+
+# --- retention reaches the audit log and rotated logs ---
+
+def _audit_line(days_ago: float, tool: str) -> str:
+    import json
+    import time
+    ts = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(time.time() - days_ago * 86400))
+    return json.dumps({"ts": ts, "tool": tool, "args": {"q": "zebraquartz"}}) + "\n"
+
+
+def test_retention_drops_old_audit_lines_and_old_log_rotations(tmp_path, monkeypatch):
+    import time
+
+    from micropaw.utils import audit
+
+    monkeypatch.setattr(audit, "AUDIT_FILE", tmp_path / "audit.jsonl")
+    (tmp_path / "audit.jsonl").write_text(_audit_line(40, "old") + _audit_line(1, "new"))
+    (tmp_path / "audit.jsonl.1").write_text(_audit_line(90, "older") + _audit_line(35, "stale"))
+    (tmp_path / "audit.jsonl.2").write_text(_audit_line(50, "gone"))
+    (tmp_path / "logs").mkdir()
+    for name, age in (("gateway.log", 90), ("gateway.log.1", 40), ("gateway.log.2", 2)):
+        f = tmp_path / "logs" / name
+        f.write_text("x")
+        os.utime(f, (time.time() - age * 86400,) * 2)
+    removed = storage.purge_old_files(tmp_path, 30)
+    kept = "".join(p.read_text() for p in sorted(tmp_path.glob("audit.jsonl*")))
+    assert '"new"' in kept and not any(f'"{w}"' in kept for w in ("old", "older", "stale", "gone"))
+    assert sorted(p.name for p in (tmp_path / "logs").iterdir()) == ["gateway.log", "gateway.log.2"]
+    assert removed == 5  # four audit lines and one log file
+
+
+def test_retention_leaves_a_recent_audit_log_alone(tmp_path, monkeypatch):
+    from micropaw.utils import audit
+
+    monkeypatch.setattr(audit, "AUDIT_FILE", tmp_path / "audit.jsonl")
+    text = _audit_line(2, "a") + _audit_line(1, "b")
+    (tmp_path / "audit.jsonl").write_text(text)
+    assert storage.purge_old_files(tmp_path, 30) == 0
+    assert (tmp_path / "audit.jsonl").read_text() == text and not (tmp_path / "audit.jsonl.1").exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
+def test_hardening_keeps_the_owner_execute_bit(tmp_path):
+    script = tmp_path / "skills" / "x" / "scripts" / "run.sh"
+    script.parent.mkdir(parents=True)
+    script.write_text("#!/bin/sh\n")
+    script.chmod(0o755)
+    plain = tmp_path / "notes.txt"
+    plain.write_text("x")
+    plain.chmod(0o644)
+    storage.harden_home(tmp_path)
+    assert stat.S_IMODE(script.stat().st_mode) == 0o700 and os.access(script, os.X_OK)
+    assert stat.S_IMODE(plain.stat().st_mode) == 0o600

@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import time
+from datetime import datetime
 from typing import Any
 
 from micropaw.config import CONFIG_DIR, private_dir
@@ -35,10 +36,10 @@ def _cut(v: Any) -> Any:
     return (v[:_MAX_VALUE] + "...") if isinstance(v, str) and len(v) > _MAX_VALUE else v
 
 
-def _rotate() -> None:
+def _rotate(force: bool = False) -> None:
     """Keep the log bounded. Each process opens the file for every line, so none keeps writing to a moved file."""
     try:
-        if AUDIT_FILE.stat().st_size < _MAX_BYTES:
+        if not force and AUDIT_FILE.stat().st_size < _MAX_BYTES:
             return
     except OSError:
         return
@@ -47,6 +48,46 @@ def _rotate() -> None:
         if older.exists():
             os.replace(older, AUDIT_FILE.with_name(f"{AUDIT_FILE.name}.{i}"))
     os.replace(AUDIT_FILE, AUDIT_FILE.with_name(f"{AUDIT_FILE.name}.1"))
+
+
+def _stamp(line: str) -> float | None:
+    try:
+        return datetime.strptime(json.loads(line)["ts"], "%Y-%m-%dT%H:%M:%S%z").timestamp()
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
+def drop_older_than(days: int) -> int:
+    """Retention for the log: lines older than `days` go (a line with no readable time stays). The live file is
+    first moved aside when it holds old lines, so no process is writing to a file that gets rewritten.
+    Returns how many lines were removed."""
+    cutoff = time.time() - days * 86400
+    try:
+        with open(AUDIT_FILE, encoding="utf-8", errors="replace") as f:
+            first = f.readline()
+    except OSError:
+        first = ""
+    if first and (stamp := _stamp(first)) is not None and stamp < cutoff:
+        try:
+            _rotate(force=True)
+        except OSError as e:
+            logger.warning("Audit log rotation failed: %s", e)
+    removed = 0
+    for i in range(1, _KEEP + 1):
+        path = AUDIT_FILE.with_name(f"{AUDIT_FILE.name}.{i}")
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+            keep = [ln for ln in lines if (st := _stamp(ln)) is None or st >= cutoff]
+            if len(keep) == len(lines):
+                continue
+            removed += len(lines) - len(keep)
+            if keep:
+                path.write_text("".join(keep), encoding="utf-8")
+            else:
+                path.unlink()
+        except OSError as e:
+            logger.warning("Audit log retention failed for %s: %s", path.name, e)
+    return removed
 
 
 def record(tool: str, args: dict[str, Any], outcome: str, conversation: str, approval: str = "") -> None:

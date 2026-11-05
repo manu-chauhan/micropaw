@@ -11,6 +11,8 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
+import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -33,7 +35,8 @@ def parse_age(text: str) -> int:
 
 
 def harden_home(home: Path) -> None:
-    """Owner-only from now on (umask 077) and for what is already there: files 0600, folders 0700.
+    """Owner-only from now on (umask 077) and for what is already there: files 0600 (0700 when the owner can
+    run them, such as skill scripts), folders 0700.
     POSIX only: Windows files take their rights from the folder, and nothing is changed there."""
     if os.name == "nt":
         return
@@ -46,9 +49,27 @@ def harden_home(home: Path) -> None:
         try:
             if p.is_symlink():
                 continue
-            p.chmod(0o700 if p.is_dir() else 0o600)
+            mode = p.stat().st_mode
+            p.chmod(0o700 if p.is_dir() or mode & stat.S_IXUSR else 0o600)
         except OSError:
             pass  # a drive that has no modes (WSL on /mnt, a FAT stick)
+
+
+def purge_old_files(home: Path, days: int) -> int:
+    """Retention for the files: lines of audit.jsonl and rotated logs (gateway.log.1 and so on) older than `days`.
+    The live log is rotated by size and holds no message text, so it stays. Returns what was removed."""
+    from micropaw.utils import audit
+
+    removed = audit.drop_older_than(days)
+    cutoff = time.time() - days * 86400
+    for f in (home / "logs").glob("*.log.*") if (home / "logs").is_dir() else []:
+        try:
+            if f.stat().st_mtime < cutoff:
+                f.unlink()
+                removed += 1
+        except OSError:
+            pass
+    return removed
 
 
 def drop_config_backups(home: Path) -> None:

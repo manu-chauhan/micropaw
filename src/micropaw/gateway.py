@@ -740,9 +740,11 @@ class Gateway:
 
     async def _retention_loop(self, days: int) -> None:
         """Delete what is older than storage.retention_days, now and then once a day."""
+        from micropaw import storage
         while True:
             try:
                 counts = await self.store.purge_older_than(days)
+                counts["log lines and files"] = await asyncio.to_thread(storage.purge_old_files, CONFIG_DIR, days)
                 logger.info("Retention: removed %s", ", ".join(f"{n} {k}" for k, n in counts.items() if n) or "nothing")
             except Exception as e:
                 logger.warning("Retention sweep failed: %s", e)

@@ -416,6 +416,7 @@ def forget(everything, older, yes):
             await store.close()
 
     counts = asyncio.run(sweep())
+    counts["log lines and files"] = storage.purge_old_files(CONFIG_DIR, days)
     console.print("Removed " + (", ".join(f"{n} {k}" for k, n in counts.items() if n) or "nothing") + ".")
 
 
