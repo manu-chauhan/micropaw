@@ -4,6 +4,50 @@ All entries in reverse chronological order. LOC = source lines (excluding tests/
 
 ---
 
+### 2026-11-05: v0.4.0 privacy modes, models on any computer, agents, goals, a Raspberry Pi guide
+
+Upgrade note: nothing to do. `privacy.mode` is `normal` unless you change it, as before. Three changes you will notice. Each reply now ends with a line such as `[via claude (api.anthropic.com)]` (`display.show_provider` turns it off). A configured search provider no longer falls back to another service by itself, and once a chat has read outside content, a search asks first. Your first run after the upgrade prints a one-time note about `privacy.mode`.
+
+Privacy:
+- `privacy.mode`: `normal`, `local` or `airgapped`, read once at start and only ever tightened by `MICROPAW_PRIVACY`. `paw privacy`, `paw status`, `paw doctor`, `/privacy` and `/status` show the mode, where each model, search, channel, MCP server and speech service sends data, and file permissions. Local and air-gapped modes accept only this computer, and your network when `privacy.allow_lan` is on.
+- Air-gapped mode is enforced in the process, in the programs MicroPaw starts, and by a CI test that fails if a connection leaves loopback. Cloud models, vendor chat apps, Google tools, updates and downloads are refused with a message that says why.
+- `paw setup` asks how private to be first, preselects local when it finds a model server on this computer, and asks where your models run. Search is off by default for new installs, and a cloud fallback for a local main model has to be allowed in plain words.
+- Offline search: `web_search` answers from Kiwix archives (`search.kiwix_url`, `search.kiwix_books`) and your own files (`paw docs add <folder>` for `.txt`, `.md` and `.pdf`) with no internet. Results name the source and snapshot date. The model can read a whole article by id, never by an address it makes up.
+- Local mode searches only through your own SearXNG (`search.searxng_url`), optionally through a SOCKS proxy such as Tor (`search.proxy`, install `micropaw[tor]`). Every query is shown before it is sent, and the next one asks again. A down server is reported, never replaced by DuckDuckGo. `paw doctor --search` runs one test query after asking.
+- Web pages are fetched without cookies, referrers or tracking parameters, and every redirect is checked. In local mode `web_browse` and `http_request` are off unless named in `privacy.allow`, the browser can load only the page you approved, and Chromium's own background traffic is off in every mode. Chromium closes after 10 idle minutes.
+- Link previews are off on Telegram, Slack and Discord, and Markdown images are removed from replies, because the company's server would fetch any address in a reply. `paw connect` says that vendor chat apps see every message.
+- README: a Privacy section with what is and is not checked (a local address can still be a proxy to the cloud), the cloud providers' data terms as of today, and how to move models and packages onto an offline machine. The old "no data leaves your machine" claim is gone.
+
+Models on any computer:
+- `paw models add NAME ADDRESS` tests a server on your network or tailnet and saves it (`--key-env`, `--use main|fast|vision|fallback`). It only lists models, never runs one. `paw models remove` refuses while something uses the server. `paw models scan` also checks your config and `--host`, and `--lan` or `--range` look at your own network on the usual model ports, after asking first. `paw doctor` checks every model, memory-search and speech server you use.
+- One rule for typed addresses: `192.168.1.50` and Ollama's own `0.0.0.0:11434` format both work in `OLLAMA_HOST` and the config. Tailscale addresses and `*.ts.net` names count as your own network for models and speech, and a LAN name that did not resolve at start is tried again later. The agent's own tools still cannot reach LAN hosts.
+- Plain messages name the other machine when it is asleep, firewalled or wants a key. LAN traffic skips HTTP proxies. Speech servers on another computer work by provider name, and a voice note that cannot be heard says which server did not answer.
+- README: how to open Ollama, llama.cpp, vLLM, LM Studio, Jan and KoboldCpp to the network per OS, with the security warnings, Tailscale, and a Raspberry Pi section with measured numbers marked as desktop numbers.
+
+Models and agents:
+- A model registry with presets (openrouter, groq, deepseek, mistral, together, xai, cerebras, fireworks and more, plus lmstudio, llamacpp, vllm, jan, koboldcpp) and your own servers under `providers`. One `provider:model` spec everywhere, one shared connection per spec, fallbacks in order, and local servers get one request at a time.
+- Named agents (`paw agent add`) with their own model, persona, tools, workspace and chats, routed per chat or with `/agent`. A local agent never takes a cloud model unless you say so.
+- Local model care: context size by RAM, Ollama capability checks, size-aware picks, a first-run scan, and an offer to pull a model sized for your memory.
+- Budgets and a usage ledger: `/usage`, `paw usage`, a daily cap, and every agent role metered on its own.
+- Faster turns: read-only tools run side by side, one turn at a time per chat, summaries in the background, one commit per turn, and large tool output saved for `tool_output`.
+
+Tools and skills:
+- MCP servers over streamable HTTP (https only for remote ones) and `paw mcp add|list|test|trust`. Inspect and HAR tools for reverse engineering. Email-triggered jobs with sender and DMARC checks.
+- Skills in the agentskills layout with a prompt index and a `skill` tool where you approve proposals. `/search` and a session search tool over past conversations (SQLite FTS5).
+- Goal loops: `/goal` and `paw goal` work in rounds until a check command passes, with limits on rounds, time, spend and repeats.
+- `web_browse` preview serves a workspace page on loopback and reports errors, state and a screenshot.
+
+Shell, install and service:
+- The shell runs in a sandbox (bubblewrap, sandbox-exec, Docker or Podman) with secrets redacted from output. PowerShell on Windows.
+- `install.sh` and `install.ps1` with uv, `paw service` (systemd, launchd, Windows logon task), `paw update`, `paw extras add`, a headless `paw start` with a supervisor, a uv-built Docker image and a compose file with an Ollama profile.
+- Channels: approval buttons, Discord and Slack media, Telegram voice replies.
+
+Fixes: scheduler jobs run on the agent that created them; the Gmail ids a job handled are remembered per job; Ollama numeric `keep_alive` and stream errors; saved turns after side effects; owner-only config and log folders; env secrets that the config names are hidden from child processes.
+
+Tests: TESTCOUNT passed.
+
+---
+
 ### 2026-11-01: v0.3.0 approvals, any-model roles, MCP, photos and voice
 
 Upgrade note: actions that change things now ask you first (reply `yes <id>`). Shell runs and relative file writes land in `~/micropaw`. fastembed is no longer installed by default: Ollama or OpenAI embeddings work as before, or `pip install "micropaw[embeddings]"` for offline ONNX embeddings.

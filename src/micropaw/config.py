@@ -315,6 +315,7 @@ class PrivacyConfig(BaseModel):
     allow_lan: bool = True          # private ranges and Tailscale count as "this side" in airgapped and local
     lan_hosts: list[str] = []       # extra host names or CIDRs that count as local (names are never resolved to decide)
     allow_cloud_fallback: bool = False  # a local main model may fail over to a cloud model
+    allow: list[str] = []           # features turned on in local mode: "web_fetch", "web_browse"
 
 
 class VoiceConfig(BaseModel):
