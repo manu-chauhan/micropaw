@@ -162,10 +162,32 @@ def test_an_agent_with_an_unknown_key_says_extra_inputs():
         Config.from_dict({"agents": {"a": {"users": ["1"]}}})
 
 
+def test_an_unknown_key_is_reported_after_a_bad_field():
+    raw = {"agents": {"a": {"fast": {"x": "y"}, "model_x": {}}}}
+    with pytest.raises(Exception) as was:
+        _load_old(raw)
+    with pytest.raises(ConfigValueError) as now:
+        _load_new(raw)
+    assert [str(p) for p in was.value.errors()[0]["loc"]] == [str(p) for p in now.value.loc] == ["agents", "a", "fast"]
+
+
+@pytest.mark.parametrize("raw", [
+    {"storage": {"retention_days": "abc"}}, {"storage": {"retention_days": 1.5}}, {"google": {"enabled": "maybe"}},
+    {"budget": {"warn_at": "x"}}, {"permissions": {"sandbox": "nope"}}, {"channels": 5}, {"budget": {"warn_at": []}},
+])
+def test_error_wording_keeps_the_pydantic_reason(raw):
+    with pytest.raises(Exception) as was:
+        _load_old(raw)
+    with pytest.raises(ConfigValueError) as now:
+        _load_new(raw)
+    assert now.value.why == was.value.errors()[0]["msg"]
+
+
 # Scalar rules: for each field type, many inputs, same answer or both refuse.
 SCALARS = [0, 1, 2, -1, 5, 5.0, 5.5, 0.0, 1.0, True, False, "0", "1", "5", " 5 ", "+5", "-5", "5.0", "5.5", "1e3",
            "1_000", "", "abc", "true", "True", "TRUE", "yes", "no", "off", "on", "y", "n", "t", "f", "false", "2",
-           None, [], [1], {}, {"a": 1}, "nan", "inf", 10**20]
+           None, [], [1], {}, {"a": 1}, "nan", "inf", 10**20,
+           "\u0663", "\uff11\uff12", "1.", "5.", " true ", "1_000.0", "\u0663.\u0660", "+5.00", "1__0"]
 
 
 def _same(section, key, value, make_old, make_new):

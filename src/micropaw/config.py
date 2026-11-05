@@ -87,7 +87,7 @@ class ConfigValueError(ValueError):
 
 _TRUE = frozenset({"1", "on", "t", "true", "y", "yes"})
 _FALSE = frozenset({"0", "off", "f", "false", "n", "no"})
-_WHOLE = re.compile(r"[+-]?\d+\.0*")
+_WHOLE = re.compile(r"[+-]?[0-9]+(?:_[0-9]+)*(?:\.0+)?")  # ASCII only: "5" and "5.0" are whole numbers, "5." is not
 
 
 def _coerce(tp: Any, v: Any) -> Any:
@@ -98,7 +98,8 @@ def _coerce(tp: Any, v: Any) -> Any:
     if origin is Literal:
         if isinstance(v, str) and v in get_args(tp):
             return v
-        raise ConfigValueError([], "Input should be " + " or ".join(repr(a) for a in get_args(tp)))
+        choices = [repr(a) for a in get_args(tp)]
+        raise ConfigValueError([], "Input should be " + ", ".join(choices[:-1]) + (" or " if len(choices) > 1 else "") + choices[-1])
     if origin is list:
         if not isinstance(v, (list, tuple)):
             raise ConfigValueError([], "Input should be a valid list")
@@ -131,28 +132,30 @@ def _coerce(tp: Any, v: Any) -> Any:
     if tp is bool:
         if isinstance(v, bool):
             return v
-        word = v.strip().lower() if isinstance(v, str) else v if isinstance(v, (int, float)) else None
+        word = v.lower() if isinstance(v, str) else v if isinstance(v, (int, float)) else None
         if word in _TRUE or word == 1:
             return True
         if word in _FALSE or word == 0:
             return False
-        raise ConfigValueError([], "Input should be a valid boolean")
+        raise ConfigValueError([], "Input should be a valid boolean" + (", unable to interpret input" if word is not None else ""))
     if tp is int:
         if isinstance(v, str):  # "5" and "5.0" are fine, "1e3" is not
             text = v.strip()
-            try:
-                v = int(text) if text.lstrip("+-").isdecimal() else float(text) if _WHOLE.fullmatch(text) else int(text)
-            except ValueError:
-                raise ConfigValueError([], "Input should be a valid integer") from None
+            if not _WHOLE.fullmatch(text):
+                raise ConfigValueError([], "Input should be a valid integer, unable to parse string as an integer")
+            return int(text.split(".")[0].replace("_", ""))
         if isinstance(v, int) or (isinstance(v, float) and v.is_integer()):
             return int(v)
-        raise ConfigValueError([], "Input should be a valid integer")
+        raise ConfigValueError([], "Input should be a valid integer" + (
+            ", got a number with a fractional part" if isinstance(v, float) else ""))
     if tp is float:
         if isinstance(v, str):
             try:
-                return float(v.strip())
+                if v.isascii():
+                    return float(v.strip())
             except ValueError:
-                raise ConfigValueError([], "Input should be a valid number") from None
+                pass
+            raise ConfigValueError([], "Input should be a valid number, unable to parse string as a number")
         if isinstance(v, (int, float)):
             return float(v)
         raise ConfigValueError([], "Input should be a valid number")
@@ -197,16 +200,21 @@ class _Model:
     def from_dict(cls, raw: Any):
         """Build from a dict. Unknown keys are ignored (an agent entry rejects them); a missing required key fails."""
         if not isinstance(raw, dict):
-            raise ConfigValueError([], "Input should be a valid dictionary")
+            raise ConfigValueError([], f"Input should be a valid dictionary or instance of {cls.__name__}")
         names = {f.name for f in dataclasses.fields(cls)}
-        if cls._forbid_extra:
-            for k in raw:
-                if k not in names:
-                    raise ConfigValueError([k], "Extra inputs are not permitted")
+        extra = [k for k in raw if k not in names] if cls._forbid_extra else []
         for f in dataclasses.fields(cls):
             if f.default is dataclasses.MISSING and f.default_factory is dataclasses.MISSING and f.name not in raw:
                 raise ConfigValueError([f.name], "Field required")
-        return cls(**{k: v for k, v in raw.items() if k in names})
+        try:
+            obj = cls(**{k: v for k, v in raw.items() if k in names})
+        except ConfigValueError as e:
+            if extra and not e.loc:  # a rule across fields: an unknown key is reported first, a bad field before it
+                raise ConfigValueError([extra[0]], "Extra inputs are not permitted") from None
+            raise
+        if extra:
+            raise ConfigValueError([extra[0]], "Extra inputs are not permitted")
+        return obj
 
 
 def changed_fields(obj: _Model) -> dict:
