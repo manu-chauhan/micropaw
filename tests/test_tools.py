@@ -578,6 +578,74 @@ class TestDocumentIngest:
         await store.close()
 
     @pytest.mark.asyncio
+    async def test_failed_embedding_keeps_the_old_chunks(self, tmp_path):
+        from micropaw.memory.embeddings import NullEmbedding
+        from micropaw.memory.store import MemoryStore
+
+        class Flaky(NullEmbedding):
+            fail = False
+
+            async def embed(self, text):
+                if self.fail:
+                    raise RuntimeError("embedding server down")
+                return []
+
+        embedder = Flaky()
+        store = MemoryStore(str(tmp_path / "test.db"), embedder)
+        await store.init()
+        await store.ingest_document("/tmp/f.txt", "Old content here", "u")
+        embedder.fail = True
+        with pytest.raises(RuntimeError):
+            await store.ingest_document("/tmp/f.txt", "New content replaced", "u")
+        assert "Old content here" in " ".join(r["content"] for r in await store.search_documents("content", 5, "u"))
+        await store.close()
+
+    @pytest.mark.asyncio
+    async def test_old_chunks_stay_visible_while_the_new_ones_embed(self, tmp_path):
+        import asyncio
+
+        from micropaw.memory.embeddings import NullEmbedding
+        from micropaw.memory.store import MemoryStore
+
+        gate = asyncio.Event()
+
+        class Slow(NullEmbedding):
+            async def embed(self, text):
+                if "New" in text:
+                    await gate.wait()
+                return []
+
+        store = MemoryStore(str(tmp_path / "test.db"), Slow())
+        await store.init()
+        await store.ingest_document("/tmp/f.txt", "Old content here", "u")
+        task = asyncio.create_task(store.ingest_document("/tmp/f.txt", "New content replaced", "u"))
+        await asyncio.sleep(0.05)
+        assert "Old content here" in " ".join(r["content"] for r in await store.search_documents("content", 5, "u"))
+        gate.set()
+        await task
+        await store.close()
+
+    @pytest.mark.asyncio
+    async def test_two_ingests_of_one_source_do_not_duplicate_chunks(self, tmp_path):
+        import asyncio
+
+        from micropaw.memory.embeddings import NullEmbedding
+        from micropaw.memory.store import MemoryStore
+
+        class Yielding(NullEmbedding):
+            async def embed(self, text):
+                await asyncio.sleep(0.01)
+                return []
+
+        store = MemoryStore(str(tmp_path / "test.db"), Yielding())
+        await store.init()
+        text = "\n\n".join(f"Paragraph {i} " + "word " * 150 for i in range(6))
+        counts = await asyncio.gather(*(store.ingest_document("/tmp/f.txt", text, "u") for _ in range(2)))
+        async with store.db.execute("SELECT COUNT(*) FROM document_chunks WHERE source = '/tmp/f.txt'") as cur:
+            assert (await cur.fetchone())[0] == counts[0] > 1
+        await store.close()
+
+    @pytest.mark.asyncio
     async def test_empty_content_not_ingested(self, tmp_path):
         from micropaw.memory.embeddings import NullEmbedding
         from micropaw.memory.store import MemoryStore
