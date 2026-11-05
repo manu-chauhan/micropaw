@@ -308,6 +308,7 @@ def guard() -> Guard:
 
 
 _FORCED_ENV = {"HF_HUB_OFFLINE": "1", "OLLAMA_NO_CLOUD": "1", "HF_HUB_DISABLE_XET": "1"}
+_PROXY_ENV = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "FTP_PROXY", "WS_PROXY", "WSS_PROXY")
 _ALL_ENV = {"HF_HUB_DISABLE_TELEMETRY": "1", "DO_NOT_TRACK": "1", "HF_HUB_DISABLE_IMPLICIT_TOKEN": "1",
             "HF_HUB_DISABLE_UPDATE_CHECK": "1"}
 
@@ -320,6 +321,11 @@ def boot_env(chosen: str | None = None) -> None:
         os.environ.setdefault(key, value)
     if chosen in ("local", "airgapped"):
         os.environ.update(_FORCED_ENV)
+        # A proxy would hide the real target from the guard: the guard sees only the proxy's address.
+        for key in _PROXY_ENV:
+            os.environ.pop(key, None)
+            os.environ.pop(key.lower(), None)
+        os.environ["NO_PROXY"] = os.environ["no_proxy"] = "*"  # also stops system proxy settings in httpx
     if chosen == "airgapped":
         os.environ["PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD"] = "1"
 

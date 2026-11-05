@@ -10,7 +10,8 @@ def _audit_to_tmp(tmp_path, monkeypatch):
     monkeypatch.setattr(audit, "AUDIT_FILE", tmp_path / "audit.jsonl")
 
 
-_BOOT_ENV = ("HF_HUB_OFFLINE", "OLLAMA_NO_CLOUD", "HF_HUB_DISABLE_XET", "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD",
+_BOOT_ENV = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy",
+             "HF_HUB_OFFLINE", "OLLAMA_NO_CLOUD", "HF_HUB_DISABLE_XET", "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD",
              "HF_HUB_DISABLE_TELEMETRY", "DO_NOT_TRACK", "HF_HUB_DISABLE_IMPLICIT_TOKEN", "HF_HUB_DISABLE_UPDATE_CHECK")
 
 
