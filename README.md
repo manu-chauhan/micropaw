@@ -118,7 +118,7 @@ MicroPaw:                "Revenue grew 23% in Q4, driven by..."
 
 - **Proactive heartbeat** — Drop tasks in `~/.micropaw/HEARTBEAT.md` and MicroPaw picks them up every 30 minutes. No prompting needed — it just does the work.
 
-- **Custom persona & skills** — Create `~/.micropaw/SOUL.md` for personality, `~/.micropaw/USER.md` for user context, and `~/.micropaw/SKILLS.md` for multi-step workflow hints. Your assistant, your rules.
+- **Custom persona & skills** — Create `~/.micropaw/SOUL.md` for personality, `~/.micropaw/USER.md` for user context, and skills in `~/.micropaw/skills/<name>/SKILL.md` for multi-step how-tos (bundled ones ship with MicroPaw; `/skills` lists them). Your assistant, your rules.
 
 ### Reliability
 
@@ -488,9 +488,12 @@ MicroPaw > [delegate] "Research quantum computing breakthroughs"
 | `paw cron enable <id>` | Turn on a task the assistant scheduled (`--off` to pause) |
 | `paw allow <channel> <id>` | Let one of your accounts use the assistant (`--remove` to revoke) |
 | `paw export` | Export conversations (JSON/Markdown) |
+| `paw goal "<task>" --check "<cmd>"` | Work on a task in rounds until the check passes (`--max`, `--budget`, `--agent`) |
 | `paw reset` | Delete all config and data |
 
-Terminal commands: `/help`, `/new` (fresh conversation, this channel), `/rejoin` (back to shared), `/new all` (fresh everywhere), `/tools`, `/usage`, `/clear`, `/config`, `/memory` (what it remembers), `/forget <key>`, `/cron enable <id>`, `!cmd` (shell escape), `quit`
+Terminal commands: `/help`, `/new` (fresh conversation, this channel), `/rejoin` (back to shared), `/new all` (fresh everywhere), `/tools`, `/usage`, `/clear`, `/config`, `/memory` (what it remembers), `/forget <key>`, `/cron enable <id>`, `/search <words>` (past conversations), `/skills`, `/goal <task> [--check "<cmd>"] [--max N] [--budget USD]` (also `/goal status`, `/goal stop`), `!cmd` (shell escape), `quit`
+
+Goals: each round starts fresh from the goal, a progress file and the last check output. Only the check command's exit code 0 ends it as done. It also stops at `--max` rounds (default 20), 2 hours, `--budget`, the same tool call three times in a row, or three rounds with no change. A goal that uses a cloud model needs `--budget`. If any round reads outside content, every later round asks before side effects.
 
 ---
 
@@ -544,7 +547,7 @@ Config file: `~/.micropaw/config.json` (0600 permissions).
 Or use persona files for richer customization:
 - `~/.micropaw/SOUL.md` — personality, values, behavioral guidelines (overrides `personality` field)
 - `~/.micropaw/USER.md` — user preferences, timezone, language, personal context
-- `~/.micropaw/SKILLS.md` — multi-step workflow hints (e.g., "when asked to email someone by name, search contacts first")
+- `~/.micropaw/skills/<name>/SKILL.md` — a skill: front matter with `name` and `description`, then the steps (e.g., "when asked to email someone by name, search contacts first"). The prompt lists names and one-line descriptions; the agent loads a body when it fits. The agent can propose a skill; it only takes effect after you approve the full text.
 
 ### Custom API Base URLs
 

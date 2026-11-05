@@ -93,6 +93,7 @@ def _create_registry(config: Config):
     from micropaw.tools.pdf_read import PdfReadTool
     from micropaw.tools.sessions import SessionsTool
     from micropaw.tools.shell import ShellTool
+    from micropaw.tools.skill_tool import SkillTool
     from micropaw.tools.tool_output import ToolOutputTool
     from micropaw.tools.vision import VisionTool
     from micropaw.tools.web_browse import WebBrowseTool
@@ -108,7 +109,7 @@ def _create_registry(config: Config):
         ShellTool(), HttpRequestTool(), MemoryTool(), PdfReadTool(),
         VisionTool(), SessionsTool(), DelegateTool(), CronTool(),
         EmailTool(), CalendarTool(), ContactsTool(), FilesTool(),
-        ChannelSendTool(), InspectTool(), HarTool(), ToolOutputTool(),
+        ChannelSendTool(), InspectTool(), HarTool(), ToolOutputTool(), SkillTool(),
     ]:
         if tool.name not in disabled:
             registry.register(tool)
@@ -194,6 +195,37 @@ def chat():
     registry = _create_registry(config)
     channels = _create_channels(config)
     asyncio.run(_make_gateway(config, registry, channels).start())
+
+
+def _quoted(text: str) -> str:
+    """The text in quotes for a /goal line (double quotes unless it holds one)."""
+    return f"'{text}'" if '"' in text else f'"{text}"'
+
+
+@main.command()
+@click.argument("task", nargs=-1, required=True)
+@click.option("--check", default="", help="A command that exits 0 when the goal is done.")
+@click.option("--max", "max_rounds", type=int, default=0, help="Most rounds (default 20).")
+@click.option("--budget", type=float, default=None, help="Spending limit in USD. Required for cloud models.")
+@click.option("--agent", "agent_name", default="", help="Which agent works on it (default main).")
+def goal(task, check, max_rounds, budget, agent_name):
+    """Work on a goal in rounds in a terminal chat, until the check passes or a limit is hit."""
+    from micropaw.core.goal import parse_args
+    line = "/goal " + " ".join(task)
+    for flag, value in (("--check", check and _quoted(check)), ("--max", max_rounds or ""),
+                        ("--budget", "" if budget is None else budget), ("--agent", agent_name)):
+        if value != "":
+            line += f" {flag} {value}"
+    if isinstance(error := parse_args(line.removeprefix("/goal ")), str):
+        _fail(click.UsageError(error))
+    quiet_console()
+    config = load_config()
+    config.channels.terminal.enabled = True
+    for name in ("telegram", "discord", "slack", "whatsapp", "webchat"):
+        getattr(config.channels, name).enabled = False
+    gw = _make_gateway(config, _create_registry(config), _create_channels(config))
+    gw.first_command = line
+    _run_single(gw)
 
 
 @main.command()

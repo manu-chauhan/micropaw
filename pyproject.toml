@@ -71,7 +71,7 @@ exclude = ["DECISIONS.md", "CHANGELOG.md", "ROADMAP_WEB.md", "tests/", ".env.exa
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/micropaw"]
-artifacts = ["src/micropaw/SKILLS.md"]
+artifacts = ["src/micropaw/skills/*/*.md"]
 
 [tool.ruff]
 target-version = "py311"
