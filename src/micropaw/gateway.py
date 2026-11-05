@@ -186,6 +186,10 @@ class _Approvals:
             self._remember(rule)
         return reply in ("yes", "always")
 
+    def waiting(self, chat: str) -> str | None:
+        """The id of the approval this chat is waiting on, if any."""
+        return next((i for i, (c, fut, _) in self._pending.items() if c == chat and not fut.done()), None)
+
     def answer(self, chat: str, text: str) -> str | None:
         """Handle "yes/no/always <id>" from the owner. None if the message isn't an answer."""
         m = self._REPLY.match(text.strip())
@@ -555,26 +559,18 @@ class Gateway:
     async def _handle_message(
         self, text: str, user_id: str, platform: str, channel_id: str | None, media: list | None = None,
     ) -> str:
-        if (answer := self._approval_answer(text, user_id, platform, channel_id)) is not None:
-            return answer
-        err = self._validate(text, user_id, platform, bool(media))
-        if err is not None:
-            return err
-        if (reply := await self._owner_command(text, platform, user_id, channel_id)) is not None:
-            return reply
-        self._record_channel_activity(platform, user_id, channel_id)
-        logger.debug("[%s] %s: %s", platform, user_id, text[:80])
-        agent = self._route(platform, user_id, channel_id)
-        async with self._chat_lock(platform, user_id, channel_id):
-            response = await agent.handle_message(text, user_id, platform, channel_id, media=media)
-        self._track_usage(agent)
-        logger.debug("[%s] MicroPaw: %s", platform, response[:80])
-        return redact(response)
+        return await self._handle(text, user_id, platform, channel_id, media, streaming=False)
 
     async def _handle_message_stream(
         self, text: str, user_id: str, platform: str, channel_id: str | None,
         on_chunk=None,
         media: list | None = None,
+    ) -> str:
+        return await self._handle(text, user_id, platform, channel_id, media, streaming=True, on_chunk=on_chunk)
+
+    async def _handle(
+        self, text: str, user_id: str, platform: str, channel_id: str | None, media: list | None,
+        *, streaming: bool, on_chunk=None,
     ) -> str:
         if (answer := self._approval_answer(text, user_id, platform, channel_id)) is not None:
             return answer
@@ -583,13 +579,18 @@ class Gateway:
             return err
         if (reply := await self._owner_command(text, platform, user_id, channel_id)) is not None:
             return reply
+        if (waiting := self._approvals.waiting(f"{platform}:{channel_id or user_id}")) is not None:
+            return f"Waiting for your answer to [{waiting}]: reply yes {waiting} or no {waiting}."
         self._record_channel_activity(platform, user_id, channel_id)
         logger.debug("[%s] %s: %s", platform, user_id, text[:80])
         agent = self._route(platform, user_id, channel_id)
         async with self._chat_lock(platform, user_id, channel_id):
-            response = await agent.handle_message_stream(
-                text, user_id, platform, channel_id, on_chunk=_redacting(on_chunk), media=media,
-            )
+            if streaming:
+                response = await agent.handle_message_stream(
+                    text, user_id, platform, channel_id, on_chunk=_redacting(on_chunk), media=media,
+                )
+            else:
+                response = await agent.handle_message(text, user_id, platform, channel_id, media=media)
         self._track_usage(agent)
         logger.debug("[%s] MicroPaw: %s", platform, response[:80])
         return redact(response)
