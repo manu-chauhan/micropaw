@@ -632,13 +632,19 @@ def update_command(method: str) -> list[str] | None:
 
 
 def latest_version() -> str | None:
-    """Latest release on PyPI (read-only, 5 s timeout), or None."""
+    """Latest release on PyPI (read-only, 5 s timeout), or None. None at once in air-gapped mode; in local
+    mode the owner's command opens pypi.org for a short time."""
     import httpx
+
+    from micropaw import net, privacy
+    if privacy.owner_command_gate("The update check", ("pypi.org",)):
+        return None
     try:
-        r = httpx.get("https://pypi.org/pypi/micropaw/json", timeout=5)
+        with net.sync_client("https://pypi.org", timeout=5) as client:
+            r = client.get("https://pypi.org/pypi/micropaw/json")
         r.raise_for_status()
         return r.json()["info"]["version"]
-    except (httpx.HTTPError, ValueError, KeyError):
+    except (httpx.HTTPError, ValueError, KeyError, OSError):
         return None
 
 

@@ -54,7 +54,8 @@ class Guard:
 
     def __init__(
         self, mode: str, *, allow_lan: bool = True, nets: Iterable[object] = (), lan_nets: Iterable[object] = (),
-        names: Iterable[str] = (), own_names: Iterable[str] = (), clock: Callable[[], float] = time.monotonic,
+        names: Iterable[str] = (), own_names: Iterable[str] = (), open_suffixes: Iterable[str] = (),
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.mode = mode
         self.allow_lan = allow_lan
@@ -62,6 +63,9 @@ class Guard:
         self.lan_nets = tuple(lan_nets)    # the private ranges that count as "my network" when allow_lan is on
         self.names = frozenset(n.lower() for n in names)  # owner-listed names, never decided by DNS
         self.own = frozenset(n.lower() for n in own_names)
+        # Vendors the owner switched on in local mode (privacy.allow): their names resolve, and the addresses
+        # that come back are permitted for a while (see learn)
+        self.open_suffixes = tuple(s.lower() for s in open_suffixes)
         self.clock = clock
         self.denied: collections.deque[str] = collections.deque(maxlen=50)  # hosts only, for /privacy
         self._names_ok: dict[str, float] = {}
@@ -78,6 +82,15 @@ class Guard:
             self._names_ok[_clean(host)] = until
         for ip in ips:
             self._ips_ok[str(parse_ip(ip) or ip)] = until
+
+    def is_open(self, host: object) -> bool:
+        name = _clean(host)
+        return any(name == s.lstrip(".") or name.endswith(s if s.startswith(".") else "." + s)
+                   for s in self.open_suffixes)
+
+    def learn(self, ips: Iterable[str], ttl: float = 600.0) -> None:
+        """Remember the addresses a vendor name resolved to, so the connect that follows is allowed."""
+        self.permit("", ttl, ips)
 
     def _live(self, table: dict[str, float], key: str) -> bool:
         until = table.get(key)
@@ -112,7 +125,8 @@ class Guard:
             return True
         if parse_ip(name) is not None:
             return self.address_ok(name)
-        return name in self.names or name in self.own or self._live(self._names_ok, name)
+        return (name in self.names or name in self.own or self._live(self._names_ok, name)
+                or self.is_open(name))
 
     def host_ok(self, host: object) -> bool:
         return self.address_ok(host) if parse_ip(host) is not None else self.name_ok(host)

@@ -76,6 +76,13 @@ _VENDORS = {
     "telegram": ("Telegram", "api.telegram.org"), "discord": ("Discord", "discord.com"),
     "slack": ("Slack", "slack.com"), "whatsapp": ("WhatsApp", "graph.facebook.com"),
 }
+# The hosts each vendor's libraries talk to (for the owner who allowed it in local mode)
+_VENDOR_SUFFIXES = {
+    "telegram": (".telegram.org",), "discord": (".discord.com", ".discord.gg", ".discordapp.com", ".discordapp.net"),
+    "slack": (".slack.com", ".slack-edge.com", ".slack-files.com"),
+    "whatsapp": (".facebook.com", ".whatsapp.net", ".fbcdn.net"),
+    "google": (".googleapis.com", "accounts.google.com"),
+}
 _CLOUD_TAG = (":cloud", "-cloud")
 
 
@@ -231,7 +238,23 @@ def build_guard() -> Guard:
         own = {socket.gethostname()}
     except OSError:
         own = set()
-    return Guard(mode(), allow_lan=s.allow_lan, nets=s.nets, lan_nets=LAN_NETS, names=s.names, own_names=own)
+    suffixes = [x for v in sorted(s.allow) if not airgapped() for x in _VENDOR_SUFFIXES.get(v, ())]
+    return Guard(mode(), allow_lan=s.allow_lan, nets=s.nets, lan_nets=LAN_NETS, names=s.names, own_names=own,
+                 open_suffixes=suffixes)
+
+
+def _learn_vendor_addresses(g: Guard) -> None:
+    """Record the addresses a vendor name resolves to. The hook allows the lookup (the name is open) but cannot
+    see the answer, so the lookup function itself reports it."""
+    real = socket.getaddrinfo
+
+    def getaddrinfo(host, *args, **kwargs):
+        found = real(host, *args, **kwargs)
+        if g.is_open(host):
+            g.learn({a[4][0] for a in found})
+        return found
+
+    socket.getaddrinfo = getaddrinfo
 
 
 def guard() -> Guard:
@@ -288,6 +311,8 @@ def ensure_guard(config: Config | None = None) -> str | None:
         return why
     global _guard
     _guard = egress.installed()
+    if g.open_suffixes:
+        _learn_vendor_addresses(g)
     return None
 
 
@@ -335,7 +360,7 @@ def disabled_tools() -> set[str]:
     if airgapped() or "web_browse" not in allow:
         out.add("web_browse")
     if airgapped() or "google" not in allow:
-        out |= {"email", "calendar", "gmail", "google_calendar"}
+        out |= {"email", "calendar"}
     return out
 
 

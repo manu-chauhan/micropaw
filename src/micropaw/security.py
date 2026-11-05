@@ -9,6 +9,8 @@ import socket
 from pathlib import Path
 from urllib.parse import urlparse
 
+from micropaw import privacy
+
 BLOCKED_HOSTS = frozenset({
     "localhost",
     "127.0.0.1",
@@ -70,6 +72,11 @@ async def validate_url(url: str) -> str | None:
     for suffix in BLOCKED_DOMAIN_SUFFIXES:
         if lower_host.endswith(suffix):
             return f"Blocked internal domain: {hostname}"
+
+    # Local and airgapped mode: a name the owner has not just approved is refused before any lookup,
+    # so a refused host cannot leak through DNS either
+    if privacy.local_only() and (why := privacy.guard().check_host(hostname)):
+        return f"Blocked by privacy mode: {why}"
 
     # DNS resolution check — prevent DNS rebinding
     try:
