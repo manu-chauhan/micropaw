@@ -185,7 +185,8 @@ class OllamaProvider(AIProvider):
             "messages": api_messages,
             "stream": stream,
             "options": {"num_predict": self.max_tokens, "num_ctx": self._ctx()},
-            "keep_alive": self.keep_alive,
+            # "-1" must go as the number -1: Ollama rejects it as a string without a unit
+            "keep_alive": int(self.keep_alive) if str(self.keep_alive).lstrip("-").isdigit() else self.keep_alive,
         }
         if tools:
             body["tools"] = [
@@ -257,6 +258,8 @@ class OllamaProvider(AIProvider):
                 chunk = parse_sse(line, prefix="")
                 if chunk is None:
                     continue
+                if chunk.get("error"):
+                    raise RuntimeError(f"Ollama error: {chunk['error']}")  # lets a fallback take over
 
                 msg = chunk.get("message", {})
                 if msg.get("content"):
