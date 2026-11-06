@@ -1,15 +1,13 @@
 """Async message bus connecting channels to the agent core.
 
-The bus owns two bounded asyncio.Queue instances — one for inbound traffic
-(channel → agent) and one for outbound traffic (agent → channel).
-Channels publish inbound, consume outbound; the agent does the reverse.
+The bus owns one bounded asyncio.Queue for outbound traffic (agent → channel).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -24,18 +22,6 @@ _CLASS_TIMEOUT: Any = object()  # "use the bus's own timeout"; None means wait w
 # ---------------------------------------------------------------------------
 
 @dataclass(slots=True)
-class InboundMessage:
-    """A message from an external channel destined for the agent."""
-    channel: str
-    sender_id: str
-    chat_id: str
-    content: str
-    session_key: str  # typically "<channel>:<chat_id>"
-    media: list[str] = field(default_factory=list)
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(slots=True)
 class OutboundMessage:
     """A message from the agent to be delivered via a channel."""
     channel: str
@@ -48,24 +34,13 @@ class OutboundMessage:
 # ---------------------------------------------------------------------------
 
 class MessageBus:
-    """Async message bus with bounded queues and backpressure.
+    """Async message bus with a bounded queue and backpressure.
 
     Usage::
 
         bus = MessageBus()
-
-        # Channel publishes user message:
-        await bus.publish_inbound(msg)
-
-        # Agent consumes it:
-        msg = await bus.consume_inbound()
-
-        # Agent publishes reply:
         await bus.publish_outbound(reply)
-
-        # Channel picks it up:
         reply = await bus.consume_outbound()
-
         bus.close()
     """
 
@@ -74,22 +49,9 @@ class MessageBus:
         maxsize: int = _DEFAULT_QUEUE_SIZE,
         timeout: float = _DEFAULT_TIMEOUT,
     ) -> None:
-        self._inbound: asyncio.Queue[InboundMessage] = asyncio.Queue(maxsize=maxsize)
         self._outbound: asyncio.Queue[OutboundMessage] = asyncio.Queue(maxsize=maxsize)
         self._timeout = timeout
         self._closed = False
-
-    # -- Inbound (channel → agent) --
-
-    async def publish_inbound(self, msg: InboundMessage) -> None:
-        """Enqueue an inbound message. Awaits if queue is full (backpressure)."""
-        self._assert_open()
-        await self._inbound.put(msg)
-        logger.debug("inbound enqueued channel=%s chat=%s qsize=%d", msg.channel, msg.chat_id, self._inbound.qsize())
-
-    async def consume_inbound(self, timeout: float | None = _CLASS_TIMEOUT) -> InboundMessage | None:
-        """Dequeue next inbound message, or None on timeout/closed. timeout=None waits until one arrives."""
-        return await self._consume(self._inbound, timeout)
 
     async def _consume(self, queue: asyncio.Queue, timeout: float | None) -> Any:
         if self._closed:

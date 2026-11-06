@@ -1150,18 +1150,14 @@ class TestMessageBus:
         bus = MessageBus()
         bus.close()
         assert await bus.consume_outbound() is None
-        assert await bus.consume_inbound() is None
 
     @pytest.mark.asyncio
     async def test_publish_on_closed_bus_raises(self):
-        from micropaw.bus import InboundMessage, MessageBus
+        from micropaw.bus import MessageBus, OutboundMessage
         bus = MessageBus()
         bus.close()
         with pytest.raises(RuntimeError, match="closed"):
-            await bus.publish_inbound(InboundMessage(
-                channel="test", sender_id="u1", chat_id="c1",
-                content="hi", session_key="test:c1",
-            ))
+            await bus.publish_outbound(OutboundMessage(channel="test", chat_id="c1", content="hi"))
 
     @pytest.mark.asyncio
     async def test_publish_and_consume_roundtrip(self):
