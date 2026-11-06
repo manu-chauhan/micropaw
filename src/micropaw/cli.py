@@ -284,6 +284,24 @@ def show_config():
     console.print_json(json.dumps(data, indent=2))
 
 
+def _main_model(config: Config) -> str:
+    """The model the main agent really uses, for example 'ollama' or 'box:qwen3'."""
+    return (config.agents["main"].model if "main" in config.agents else "") or config.provider
+
+
+def _key_state(config: Config, model: str) -> bool | None:
+    """Whether the cloud key for this model is set. None when the model needs no key (local or custom server)."""
+    name = model.split(":")[0]
+    return bool(getattr(config.provider_config, name).api_key) if name in ("claude", "openai", "gemini") else None
+
+
+def _sandbox_mark(sb, windows: bool) -> str:
+    """Windows has no sandbox to find, and air-gapped mode there turns shell off on purpose: notes, not failures."""
+    from micropaw import privacy
+    deliberate = windows and not sb.active and (not sb.error or privacy.airgapped())
+    return "[yellow]warn[/yellow]" if deliberate else "[green]pass[/green]" if sb.active else "[red]FAIL[/red]"
+
+
 @main.command()
 def status():
     """Show system status."""
@@ -293,10 +311,12 @@ def status():
     table.add_column("Component", style="cyan")
     table.add_column("Status", style="green")
 
-    # Provider
-    provider = config.provider
-    has_key = provider == "ollama" or bool(getattr(config.provider_config, provider).api_key)
-    table.add_row("AI Provider", f"{provider} {'✓' if has_key else '✗ (no key)'}")
+    from micropaw import service as svc
+    main_model = _main_model(config)
+    key = _key_state(config, main_model)
+    table.add_row("AI Model", f"{main_model} {'✓' if key is not False else '✗ (no key)'}")
+    pid = svc.running_gateway()
+    table.add_row("Gateway", f"running, PID {pid}" if pid else "not running")
 
     # Channels
     for ch_name in ("terminal", "telegram", "discord", "slack", "whatsapp", "webchat"):
@@ -398,22 +418,19 @@ def doctor(quiet, search):
     py_ver = plat.python_version()
     py_ok = tuple(int(x) for x in py_ver.split(".")[:2]) >= (3, 11)
     table.add_row("Python version", ok(py_ok), py_ver)
-    table.add_row("Config file", ok(config_exists()), str(CONFIG_FILE))
-    db_detail = (
-        f"{DB_FILE.stat().st_size / 1024:.0f} KB" if DB_FILE.exists() else "not created"
-    )
-    table.add_row("Database", ok(DB_FILE.exists()), db_detail)
+    have_config = config_exists()
+    table.add_row("Config file", ok(have_config), str(CONFIG_FILE) if have_config else "not found. Run 'paw setup'")
+    table.add_row("Database", "[green]pass[/green]" if DB_FILE.exists() else "[dim]note[/dim]",
+                  f"{DB_FILE.stat().st_size / 1024:.0f} KB" if DB_FILE.exists() else "created on the first chat")
     from micropaw.tools import sandbox
     sandbox.configure(load_config().permissions)
-    sb_line = sandbox.describe()
     sb = sandbox.resolve()
-    # Windows has no sandbox to find: every command asks, so that is a note, not a failure
-    sb_mark = "[yellow]warn[/yellow]" if not sb.active and not sb.error and os.name == "nt" else ok(sb.active)
-    table.add_row("Shell sandbox", sb_mark, sb_line)
+    table.add_row("Shell sandbox", _sandbox_mark(sb, os.name == "nt"), sandbox.describe())
 
-    provider = config.provider
-    has_key = provider == "ollama" or bool(getattr(config.provider_config, provider).api_key)
-    table.add_row(f"Provider ({provider})", ok(has_key), "API key configured" if has_key else "no API key")
+    main_model = _main_model(config)
+    key = _key_state(config, main_model)
+    table.add_row(f"Provider ({main_model})", ok(key is not False),
+                  "no API key needed" if key is None else "API key configured" if key else "no API key")
 
     # Optional dependencies
     optional_deps = [
@@ -548,20 +565,30 @@ def _interactive() -> bool:
     return sys.stdin is not None and sys.stdin.isatty()  # None under pythonw
 
 
+NO_BACKGROUND_CHANNEL = ("Nothing to run in the background: only the terminal chat is on. Add a channel with "
+                         "'paw connect telegram' (or discord, slack, whatsapp, webchat), or use 'paw chat'.")
+
+
+def _headless_channels() -> tuple[Config, list]:
+    config = load_config()
+    config.channels.terminal.enabled = False  # not built at all: it would load rich for nothing
+    return config, _create_channels(config)
+
+
 def _start_headless() -> int:
     """Gateway without the terminal channel, restarted after a crash, one instance per machine."""
     from micropaw import service as svc
 
     def make():
-        config = load_config()
-        config.channels.terminal.enabled = False  # not built at all: it would load rich for nothing
-        channels = _create_channels(config)
+        config, channels = _headless_channels()
         if not channels:
-            console.print("[red]No channels enabled. Run 'paw setup' to configure.[/red]")
-            sys.exit(1)
+            raise svc.ServiceError(NO_BACKGROUND_CHANNEL)
         return _make_gateway(config, _create_registry(config), channels)
 
     try:
+        if not _headless_channels()[1]:
+            console.print(NO_BACKGROUND_CHANNEL, markup=False)
+            return 1
         return svc.run_headless(make)
     except svc.ServiceError as e:
         console.print(f"[red]{e}[/red]")
@@ -782,7 +809,7 @@ def _doctor_install_rows(table: Table, config: Config) -> None:
         service_state = svc.state()
     except svc.ServiceError as e:
         service_state = f"unknown ({e})"
-    row("Service", True if service_state not in ("not installed",) else None, service_state)
+    row("Service", None if service_state.startswith(("not installed", "unknown")) else True, service_state)
     if sys.platform == "linux" and svc.unit_path().exists() and shutil.which("loginctl"):
         try:
             linger = svc.linger_enabled()

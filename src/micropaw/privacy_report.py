@@ -113,6 +113,9 @@ def rows(config: Config, hide_lan: bool = False) -> list[tuple[str, str, str, st
                  "duckduckgo": ("DuckDuckGo", "")}
         for b in plan.backends:
             label, url = names[b]
+            if b == "kiwix" and not url:
+                add("web search", "Kiwix: not set up (off)", "-")
+                continue
             where = destination(url)[1] if url else ("this computer" if b == "docs" else "the internet")
             add("web search", label + (at(destination(url)[0], where) if url else ""), where)
     allow = webfetch.privacy_allow(config)
