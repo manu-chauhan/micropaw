@@ -285,3 +285,50 @@ def test_models_remove_in_use_says_how_to_change_it(home):
     text = " ".join(r.output.split())
     assert r.exit_code == 1 and "agents.main.model" in text
     assert "paw models add <name> <address> --use main" in text and "Change those first" not in text
+
+
+def test_service_stop_still_stops_a_running_gateway_when_the_service_query_is_blocked(monkeypatch):
+    from micropaw import service as svc
+    killed = []
+
+    def blocked():
+        raise svc.ServiceError("air-gapped mode blocked a new program schtasks")
+
+    monkeypatch.setattr(svc, "existing_definition", blocked)
+    monkeypatch.setattr(svc, "running_gateway", lambda: 4242)
+    monkeypatch.setattr(svc, "request_stop", lambda: killed.append("stop-file"))
+    monkeypatch.setattr(svc.os, "kill", lambda pid, sig: killed.append(pid))
+    monkeypatch.setattr(svc, "wait_exit", lambda pid, timeout: True)
+    assert svc.stop() is True
+    assert killed in (["stop-file"], [4242])  # Windows writes the stop file, the others send a signal
+
+
+def test_service_status_prints_the_gateway_line_even_when_the_service_query_is_blocked(monkeypatch):
+    from micropaw import service as svc
+
+    def blocked():
+        raise svc.ServiceError("air-gapped mode blocked schtasks")
+
+    monkeypatch.setattr(svc, "state", blocked)
+    monkeypatch.setattr(svc, "healthy", lambda: (True, "running, PID 7"))
+    r = run("service", "status")
+    assert r.exit_code == 0 and "Service: unknown" in r.output and "Gateway: running, PID 7" in r.output
+
+
+def test_update_does_not_offer_a_downgrade_when_pypi_is_behind(monkeypatch):
+    from micropaw import service as svc
+    ran = []
+    monkeypatch.setattr(svc, "install_method", lambda: "uv")
+    monkeypatch.setattr(svc, "latest_version", lambda: "0.0.1")
+    monkeypatch.setattr(cli, "_run_install_command", lambda cmd: ran.append(cmd))
+    r = run("update", input="y\n")
+    assert not ran and "Upgrade now?" not in r.output and "up to date" in r.output
+    assert cli._version_key("0.10.0") > cli._version_key("0.9.9")
+
+
+def test_paw_stop_is_the_same_as_paw_service_stop(monkeypatch):
+    from micropaw import service as svc
+    monkeypatch.setattr(svc, "stop", lambda: True)
+    r = run("stop")
+    assert r.exit_code == 0 and "Stopped." in r.output
+    assert "paw stop" in run("start", "--help").output

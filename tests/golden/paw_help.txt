@@ -28,6 +28,7 @@ Commands:
   setup    Run the interactive setup wizard.
   start    Start the gateway with all enabled channels.
   status   Show system status.
+  stop     Stop the gateway.
   test     Test connectivity to all configured channels and AI provider.
   update   Show the latest version and upgrade the way MicroPaw was installed.
   usage    Show model usage and spend by day, agent and model.

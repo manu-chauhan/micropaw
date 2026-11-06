@@ -270,7 +270,7 @@ def goal(task, check, max_rounds, budget, agent_name):
 @main.command()
 @click.option("--headless", is_flag=True, help="No terminal channel; restart after a crash. For services and Docker.")
 def start(headless):
-    """Start the gateway with all enabled channels."""
+    """Start the gateway with all enabled channels. Stop it with 'paw stop'."""
     from micropaw.utils.logger import quiet_console
     quiet_console()  # suppress INFO logs — details go to ~/.micropaw/logs/
     if headless or not _interactive():
@@ -727,11 +727,18 @@ def service_status():
     from micropaw import service as svc
     try:
         console.print(f"Service: {svc.state()}", markup=False)
-    except svc.ServiceError as e:
-        _fail(e)
+    except svc.ServiceError as e:  # air-gapped mode can block the service manager: the gateway line still helps
+        console.print(f"Service: unknown ({e})", markup=False)
     good, detail = svc.healthy()
     console.print(f"Gateway: {detail}", markup=False)
     sys.exit(0 if good else 1)
+
+
+@main.command(name="stop")
+@click.pass_context
+def stop_cmd(ctx):
+    """Stop the gateway. Same as 'paw service stop'."""
+    ctx.invoke(service_stop)
 
 
 @service.command(name="logs")
@@ -776,6 +783,11 @@ def _run_install_command(cmd: list[str]) -> bool:
     return ok
 
 
+def _version_key(version: str) -> tuple[int, ...]:
+    import re
+    return tuple(int(n) for n in re.findall(r"\d+", version)[:3])
+
+
 @main.command()
 @click.option("--yes", "-y", is_flag=True, help="Do not ask before upgrading.")
 def update(yes):
@@ -791,7 +803,7 @@ def update(yes):
                 "editable": "From source: git pull, then pip install -e . in the repo."}
         console.print(hint.get(method, "No update command for this install."), markup=False)
         return
-    if latest and latest == __version__:
+    if latest and _version_key(latest) <= _version_key(__version__):
         console.print("Already up to date.")
         return
     console.print(f"Command: {' '.join(cmd)}", markup=False)
