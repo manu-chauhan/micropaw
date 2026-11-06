@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import pytest
 from click.testing import CliRunner
 
-from micropaw import cli, config
+from micropaw import cli, config, health
 from micropaw import service as svc
 
 
@@ -178,10 +178,10 @@ def test_acquire_refuses_second_gateway_and_release_removes(monkeypatch):
     svc.pid_file().parent.mkdir(parents=True)
     svc.pid_file().write_text("4242")
     monkeypatch.setattr(svc, "pid_alive", lambda pid: True)
-    monkeypatch.setattr(svc, "_process_name", lambda pid: "/x/python /x/bin/paw start --headless")
+    monkeypatch.setattr(health, "process_name", lambda pid: "/x/python /x/bin/paw start --headless")
     with pytest.raises(svc.ServiceError, match="already running"):
         svc.acquire_pid()
-    monkeypatch.setattr(svc, "_process_name", lambda pid: "/usr/bin/vim notes")  # PID reused by something else
+    monkeypatch.setattr(health, "process_name", lambda pid: "/usr/bin/vim notes")  # PID reused by something else
     svc.acquire_pid()
     assert svc.read_pid() == os.getpid()
     svc.release_pid()
