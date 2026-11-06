@@ -93,6 +93,7 @@ class Agent:
         self.fast_provider: AIProvider | None = None  # summaries; None = main provider
         self.vision_provider: AIProvider | None = None  # describes photos when set
         self.last_usage: dict[str, int] = {"input": 0, "output": 0}
+        self.last_failed = False  # the last turn's reply was an error message, so no model answered
         self.session_usage: dict[str, int] = {"input": 0, "output": 0}
         self.message_count: int = 0
         self._file_cache: dict[str, tuple[float, str]] = {}  # path → (mtime, content)
@@ -393,7 +394,10 @@ class Agent:
         final: AIResponse | None = None
         async for item in self.provider.chat_stream(messages, tool_defs):
             if isinstance(item, str):
-                await on_chunk(item)
+                try:
+                    await on_chunk(item)
+                except (OSError, UnicodeError) as e:
+                    raise OutputError(str(e)) from e  # the screen failed, not the model
             elif isinstance(item, AIResponse):
                 final = item
         return final or AIResponse(content="", tool_calls=[], usage={})
@@ -435,12 +439,16 @@ class Agent:
 
         response: AIResponse | None = None
         note = ""  # which fallback answered: shown, not saved
+        failed = False
         try:
             for _ in range(self.max_tool_iterations):
                 try:
                     response = await self._call(messages, tool_defs, on_chunk)
+                except OutputError:
+                    raise
                 except Exception as e:
-                    logger.error("AI provider error: %s", e)
+                    logger.log(logging.INFO if _is_friendly(e) else logging.ERROR, "AI provider error: %s", e)
+                    failed = True  # a message the user is shown anyway: the log file keeps it, the console does not
                     reply = _classify_error(e)
                     if on_chunk:
                         await on_chunk(reply)
@@ -470,6 +478,7 @@ class Agent:
             return reply
         finally:
             self.last_usage = self.turn_usage[conv_id] = usage
+            self.last_failed = failed
             for k in usage:
                 self.session_usage[k] += usage[k]
             try:
@@ -636,10 +645,23 @@ _HTTP_ERRORS = {
 }
 
 
+class OutputError(Exception):
+    """Writing the reply to the user failed. It is not a provider error and must not be reported as one."""
+
+
+def _root_error(e: Exception) -> Exception:
+    if isinstance(e, AllProvidersFailedError) and e.__cause__ is not None:
+        return e.__cause__  # say what went wrong with the last provider
+    return e
+
+
+def _is_friendly(e: Exception) -> bool:
+    return isinstance(_root_error(e), (FriendlyError, BudgetExceeded))
+
+
 def _classify_error(e: Exception) -> str:
     """Turn a provider exception into a user-friendly message."""
-    if isinstance(e, AllProvidersFailedError) and e.__cause__ is not None:
-        e = e.__cause__  # say what went wrong with the last provider
+    e = _root_error(e)
     if isinstance(e, (FriendlyError, BudgetExceeded)):
         return str(e)
     if isinstance(e, httpx.ConnectError):

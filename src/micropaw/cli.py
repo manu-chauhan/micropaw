@@ -167,10 +167,18 @@ class PawGroup(click.Group):
             raise click.ClickException(str(e)) from None
 
 
+def _safe_streams() -> None:
+    """A Windows pipe is cp1252: a check mark or an emoji in the output must become '?', not a crash."""
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(AttributeError, OSError, ValueError):  # None under pythonw
+            stream.reconfigure(errors="replace")
+
+
 @click.group(cls=PawGroup)
 @click.version_option(version=__version__, prog_name="MicroPaw")
 def main():
     """MicroPaw — Your AI. Your machine. Your keys."""
+    _safe_streams()
     from micropaw.utils.logger import setup_logging
     setup_logging()
 
@@ -199,7 +207,7 @@ def chat():
 
     registry = _create_registry(config)
     channels = _create_channels(config)
-    asyncio.run(_make_gateway(config, registry, channels).start())
+    _run_gateway(_make_gateway(config, registry, channels))
 
 
 def _quoted(text: str) -> str:
@@ -595,6 +603,16 @@ def _start_headless() -> int:
         return 1
 
 
+def _run_gateway(gw) -> None:
+    from micropaw.core.agent import OutputError
+    try:
+        asyncio.run(gw.start())
+    except (OSError, OutputError) as e:  # for example the output is a closed pipe or a full disk
+        with contextlib.suppress(OSError):
+            click.echo(f"Stopped: {e}", err=True)
+        sys.exit(1)
+
+
 def _run_single(gw) -> None:
     """Run a gateway in the foreground, refusing when another one already runs."""
     from micropaw import service as svc
@@ -604,7 +622,7 @@ def _run_single(gw) -> None:
         console.print(f"[red]{e}[/red]")
         sys.exit(1)
     try:
-        asyncio.run(gw.start())
+        _run_gateway(gw)
     finally:
         svc.release_pid()
 

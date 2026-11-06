@@ -475,7 +475,10 @@ async def test_private_main_agent_also_turns_cloud_embeddings_off(monkeypatch, c
         c.provider_config.openai.api_key = "sk-fake"
         return Gateway(c, MagicMock(), MagicMock(), [], runtimes=build_runtimes(c, Registry(c)))
 
-    assert not isinstance(await gateway()._create_embedding_provider(), OpenAIEmbedding)  # auto
+    with caplog.at_level("WARNING"):
+        assert not isinstance(await gateway()._create_embedding_provider(), OpenAIEmbedding)  # auto
+    assert "cloud embeddings" not in caplog.text  # a local-model user did not ask for them: no warning at every start
+    caplog.clear()
     with caplog.at_level("WARNING"):
         got = await gateway(embedding={"provider": "openai"})._create_embedding_provider()  # explicit
     assert isinstance(got, NullEmbedding) and "embeddings are off" in caplog.text

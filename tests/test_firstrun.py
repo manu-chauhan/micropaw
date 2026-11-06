@@ -100,3 +100,139 @@ def test_doctor_service_state_unknown_is_a_warning_not_a_pass(home, monkeypatch)
     monkeypatch.setattr(svc, "state", lambda: (_ for _ in ()).throw(svc.ServiceError("schtasks blocked")))
     row = next(line for line in run("doctor").output.splitlines() if "Service" in line)
     assert "warn" in row and "unknown" in row
+
+
+class _Model:
+    """A model that answers, or fails with `error`."""
+
+    name, model = "ollama", "m"
+
+    def __init__(self, error=None):
+        self.error = error
+
+    async def chat(self, messages, tools=None):
+        from micropaw.providers.base import AIResponse
+        if self.error:
+            raise self.error
+        return AIResponse(content="hello", tool_calls=[], usage={"input": 1, "output": 1})
+
+    async def chat_stream(self, messages, tools=None):
+        resp = await self.chat(messages, tools)
+        yield resp.content
+        yield resp
+
+
+def _gateway(tmp_path, monkeypatch, terminal, model):
+    import asyncio
+
+    import micropaw.gateway as gw_mod
+    from micropaw.config import Config
+    from micropaw.core.profile import build_runtimes
+    from micropaw.providers.registry import Registry
+    from micropaw.tools.base import ToolRegistry
+
+    monkeypatch.setattr(gw_mod, "DB_FILE", tmp_path / "d.db")
+    monkeypatch.setattr(gw_mod, "CONFIG_DIR", tmp_path)
+    c = Config(provider="ollama")
+    c.embedding.enabled = "false"
+    monkeypatch.setattr("micropaw.scheduler.Scheduler.run", lambda self: asyncio.sleep(0))
+    registry = Registry(c)
+    runtimes = build_runtimes(c, registry)
+    runtimes["main"].provider = model
+    return gw_mod.Gateway(c, model, ToolRegistry(), [terminal], runtimes=runtimes, models=registry)
+
+
+class _Terminal:
+    name = "terminal"
+
+    def __init__(self, work):
+        self.work, self.stopped = work, False
+
+    def set_handler(self, h):
+        self.handler = h
+
+    def set_stream_handler(self, h):
+        self.stream = h
+
+    def set_access(self, h): ...
+
+    async def stop(self):
+        self.stopped = True
+
+    async def start(self):
+        await self.work(self)
+
+
+async def test_a_failing_terminal_still_stops_the_gateway_so_the_process_can_exit(tmp_path, monkeypatch):
+    async def work(t):
+        raise BrokenPipeError("closed")
+
+    term = _Terminal(work)
+    gw = _gateway(tmp_path, monkeypatch, term, _Model())
+    stops = []
+    real_stop = gw.stop
+
+    async def stop():
+        stops.append(1)
+        await real_stop()
+
+    gw.stop = stop
+    with pytest.raises(BrokenPipeError):
+        await gw.start()
+    assert stops == [1]
+
+
+async def test_an_error_reply_has_no_via_line_and_a_good_reply_has(tmp_path, monkeypatch, caplog):
+    from micropaw.providers.failover import FriendlyError
+    got = {}
+
+    async def work(t):
+        got["bad"] = await t.handler("hi", "u", "terminal", None)
+
+    down = _Model(FriendlyError("The box is not running.", OSError("refused")))
+    gw = _gateway(tmp_path, monkeypatch, _Terminal(work), down)
+    with caplog.at_level("INFO"):
+        await gw.start()
+    assert got["bad"] == "The box is not running."
+    assert not [r for r in caplog.records if r.levelname == "ERROR" and "AI provider error" in r.message]
+    assert [r for r in caplog.records if r.levelname == "INFO" and "AI provider error" in r.message]
+
+    async def good(t):
+        got["good"] = await t.handler("hi", "u", "terminal", None)
+
+    await _gateway(tmp_path, monkeypatch, _Terminal(good), _Model()).start()
+    assert "[via" in got["good"]
+
+
+async def test_a_screen_error_is_not_blamed_on_the_provider(tmp_path, monkeypatch):
+    async def work(t):
+        async def chunk(text):
+            raise UnicodeEncodeError("charmap", "x", 0, 1, "cannot encode")
+        await t.stream("hi", "u", "terminal", None, chunk)
+
+    from micropaw.core.agent import OutputError
+    gw = _gateway(tmp_path, monkeypatch, _Terminal(work), _Model())
+    with pytest.raises(OutputError):
+        await gw.start()
+
+
+def test_run_gateway_exits_one_when_the_output_fails():
+    class Gw:
+        async def start(self):
+            raise BrokenPipeError("closed")
+
+    with pytest.raises(SystemExit) as e:
+        cli._run_gateway(Gw())
+    assert e.value.code == 1
+
+
+def test_output_that_cannot_hold_a_check_mark_or_emoji_is_replaced_not_a_crash(monkeypatch):
+    import io
+    import sys
+    raw = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(raw, encoding="cp1252"))
+    monkeypatch.setattr(sys, "stderr", io.TextIOWrapper(io.BytesIO(), encoding="cp1252"))
+    cli._safe_streams()
+    sys.stdout.write("ollama \u2713 caf\u00e9 \U0001f43e")
+    sys.stdout.flush()
+    assert raw.getvalue().decode("cp1252") == "ollama ? caf\u00e9 ?"
