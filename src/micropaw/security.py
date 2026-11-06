@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
-import os
 import socket
-from pathlib import Path
 from urllib.parse import urlparse
 
 from micropaw import privacy
@@ -93,37 +91,3 @@ async def validate_url(url: str) -> str | None:
         return f"Blocked: cannot resolve hostname {hostname}"
 
     return None
-
-
-def validate_path(path: str, allowed_root: str | None = None) -> str | None:
-    """Validate a file path for path traversal attacks.
-
-    Returns an error string if blocked, None if safe.
-    """
-    resolved = Path(path).resolve()
-
-    # Block obvious bad patterns
-    if ".." in Path(path).parts:
-        return f"Blocked: path contains '..': {path}"
-
-    # If an allowed root is specified, ensure the path is under it
-    if allowed_root:
-        root = Path(allowed_root).resolve()
-        try:
-            resolved.relative_to(root)
-        except ValueError:
-            return f"Blocked: path {resolved} is outside allowed root {root}"
-
-    # Block sensitive system paths
-    sensitive = ["/etc/shadow", "/etc/passwd", "/etc/sudoers"]
-    if str(resolved) in sensitive:
-        return f"Blocked sensitive path: {resolved}"
-
-    return None
-
-
-def safe_workspace_path(workspace: str | None = None) -> Path:
-    """Return a safe workspace root directory."""
-    if workspace:
-        return Path(workspace).resolve()
-    return Path(os.getcwd()).resolve()

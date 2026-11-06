@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
-from micropaw.security import validate_path, validate_url
+from micropaw.security import validate_url
 from micropaw.tools.shell import _BLOCKED_RE, _DANGEROUS_RE
 
 
@@ -93,34 +91,6 @@ class TestValidateUrl:
     async def test_blocks_localhost_mixed_case(self):
         err = await validate_url("http://Localhost:3000/")
         assert err is not None
-
-
-class TestValidatePath:
-    def test_normal_path(self):
-        assert validate_path("/tmp/somefile.txt") is None
-
-    def test_blocks_traversal(self):
-        err = validate_path("/tmp/../etc/shadow")
-        assert err is not None
-        assert ".." in err
-
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX system paths; Windows resolves /etc to C:\\etc")
-    def test_blocks_etc_shadow(self):
-        err = validate_path("/etc/shadow")
-        assert err is not None
-
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX system paths; Windows resolves /etc to C:\\etc")
-    def test_blocks_etc_passwd(self):
-        err = validate_path("/etc/passwd")
-        assert err is not None
-
-    def test_allowed_root(self):
-        assert validate_path("/home/user/test.txt", allowed_root="/home/user") is None
-
-    def test_outside_allowed_root(self):
-        err = validate_path("/etc/hosts", allowed_root="/home/user")
-        assert err is not None
-        assert "outside" in err.lower()
 
 
 def _is_blocked(cmd: str) -> bool:

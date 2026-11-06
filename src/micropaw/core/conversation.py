@@ -67,10 +67,6 @@ class ConversationManager:
             return self.prefix + self._global_override
         return self.prefix + _DM_CONV_ID
 
-    def current_shared_id(self) -> str:
-        """Return the current shared DM conversation ID."""
-        return self.prefix + (self._global_override or _DM_CONV_ID)
-
     async def load_history(
         self, conversation_id: str, platform: str, user_id: str, include_local: bool = True,
     ) -> list[Message]:

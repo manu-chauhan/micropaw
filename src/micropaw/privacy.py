@@ -593,13 +593,6 @@ def owner_command_gate(what: str, hosts: tuple[str, ...] = ()) -> str | None:
     return None
 
 
-def child_isolation() -> str:
-    """How shell and MCP children are cut off from the network here: 'bwrap', or 'none' (with the reason in
-    sandbox.describe())."""
-    from micropaw.tools import sandbox
-    return "bwrap" if sandbox.isolation_ok() else "none"
-
-
 # ---------------------------------------------------------------------------
 # Config check: every refusal at once
 # ---------------------------------------------------------------------------
