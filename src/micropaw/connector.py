@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import secrets
 
 import httpx
@@ -37,23 +38,30 @@ def _send(method: str, url: str, timeout: float, **kwargs) -> httpx.Response:
         return client.request(method, url, **kwargs)
 
 
+def _guarded(check):
+    """A token check that turns a network error into (False, reason)."""
+    @functools.wraps(check)
+    def run(*args):
+        try:
+            return check(*args)
+        except httpx.ConnectError:
+            return False, "connection failed (network issue)"
+        except Exception as e:
+            return False, str(e)
+    return run
+
+
+@_guarded
 def validate_telegram_token(token: str) -> tuple[bool, str]:
     """Validate Telegram bot token via getMe. Returns (ok, detail)."""
-    try:
-        resp = _send("GET", f"https://api.telegram.org/bot{token}/getMe", timeout=10)
-        data = resp.json()
-        if data.get("ok"):
-            username = data["result"].get("username", "unknown")
-            return True, f"@{username}"
-        return False, data.get("description", "invalid token")
-    except httpx.ConnectError:
-        return False, "connection failed (network issue)"
-    except Exception as e:
-        return False, str(e)
+    data = _send("GET", f"https://api.telegram.org/bot{token}/getMe", timeout=10).json()
+    if data.get("ok"):
+        return True, f"@{data['result'].get('username', 'unknown')}"
+    return False, data.get("description", "invalid token")
 
 
-def validate_discord_token(token: str) -> tuple[bool, str]:
-    """Validate Discord bot token via /users/@me. Returns (ok, detail)."""
+def _discord_me(token: str) -> tuple[bool, str, str]:
+    """Check a Discord bot token via /users/@me. Returns (ok, detail, application id)."""
     try:
         resp = _send(
             "GET", "https://discord.com/api/v10/users/@me",
@@ -62,31 +70,15 @@ def validate_discord_token(token: str) -> tuple[bool, str]:
         )
         if resp.status_code == 200:
             data = resp.json()
-            username = data.get("username", "unknown")
             app_id = data.get("id", "")
-            return True, f"{username} (id: {app_id})"
+            return True, f"{data.get('username', 'unknown')} (id: {app_id})", app_id
         if resp.status_code == 401:
-            return False, "invalid token (401 Unauthorized)"
-        return False, f"HTTP {resp.status_code}"
+            return False, "invalid token (401 Unauthorized)", ""
+        return False, f"HTTP {resp.status_code}", ""
     except httpx.ConnectError:
-        return False, "connection failed (network issue)"
+        return False, "connection failed (network issue)", ""
     except Exception as e:
-        return False, str(e)
-
-
-def _get_discord_app_id(token: str) -> str | None:
-    """Get the Discord application ID from a bot token."""
-    try:
-        resp = _send(
-            "GET", "https://discord.com/api/v10/users/@me",
-            headers={"Authorization": f"Bot {token}"},
-            timeout=10,
-        )
-        if resp.status_code == 200:
-            return resp.json().get("id")
-    except Exception:
-        pass
-    return None
+        return False, str(e), ""
 
 
 def discord_invite_url(app_id: str) -> str:
@@ -96,24 +88,17 @@ def discord_invite_url(app_id: str) -> str:
     return f"https://discord.com/oauth2/authorize?client_id={app_id}&permissions={permissions}&scope=bot"
 
 
+@_guarded
 def validate_slack_token(bot_token: str) -> tuple[bool, str]:
     """Validate Slack bot token via auth.test. Returns (ok, detail)."""
-    try:
-        resp = _send(
-            "POST", "https://slack.com/api/auth.test",
-            headers={"Authorization": f"Bearer {bot_token}"},
-            timeout=10,
-        )
-        data = resp.json()
-        if data.get("ok"):
-            team = data.get("team", "unknown")
-            user = data.get("user", "unknown")
-            return True, f"{user} in {team}"
-        return False, data.get("error", "invalid token")
-    except httpx.ConnectError:
-        return False, "connection failed (network issue)"
-    except Exception as e:
-        return False, str(e)
+    data = _send(
+        "POST", "https://slack.com/api/auth.test",
+        headers={"Authorization": f"Bearer {bot_token}"},
+        timeout=10,
+    ).json()
+    if data.get("ok"):
+        return True, f"{data.get('user', 'unknown')} in {data.get('team', 'unknown')}"
+    return False, data.get("error", "invalid token")
 
 
 def validate_ollama(host: str) -> tuple[bool, str]:
@@ -195,6 +180,17 @@ def validate_provider_key(config: Config) -> tuple[bool, str]:
     return False, f"unknown provider: {provider}"
 
 
+def _accept_token(ok: bool, detail: str, connected: str) -> bool:
+    """Report a token check. When it failed, ask whether to save the token anyway."""
+    import questionary
+
+    if ok:
+        console.print(f"[green]{connected}[/green]")
+        return True
+    console.print(f"[yellow]Validation failed: {detail}[/yellow]")
+    return bool(questionary.confirm("Save anyway?", default=False).ask())
+
+
 def _connect_telegram(config: Config) -> bool:
     """Guide user through Telegram bot setup."""
     import questionary
@@ -215,13 +211,8 @@ def _connect_telegram(config: Config) -> bool:
 
     console.print("[dim]Validating token...[/dim]")
     ok, detail = validate_telegram_token(token)
-    if ok:
-        console.print(f"[green]Connected to bot {detail}[/green]")
-    else:
-        console.print(f"[yellow]Validation failed: {detail}[/yellow]")
-        proceed = questionary.confirm("Save anyway?", default=False).ask()
-        if not proceed:
-            return False
+    if not _accept_token(ok, detail, f"Connected to bot {detail}"):
+        return False
 
     config.channels.telegram.enabled = True
     config.channels.telegram.token = token
@@ -253,27 +244,19 @@ def _connect_discord(config: Config) -> bool:
     token = token.strip()
 
     console.print("[dim]Validating token...[/dim]")
-    ok, detail = validate_discord_token(token)
-    app_id = None
-    if ok:
-        console.print(f"[green]Connected to bot {detail}[/green]")
-        app_id = _get_discord_app_id(token)
-        if app_id:
-            invite = discord_invite_url(app_id)
-            console.print()
-            console.print(Panel(
-                f"[bold]Invite your bot to a server:[/bold]\n\n"
-                f"[cyan]{invite}[/cyan]\n\n"
-                f"Open this link in your browser, select a server, and authorize.",
-                border_style="green",
-                padding=(1, 2),
-            ))
-            console.print()
-    else:
-        console.print(f"[yellow]Validation failed: {detail}[/yellow]")
-        proceed = questionary.confirm("Save anyway?", default=False).ask()
-        if not proceed:
-            return False
+    ok, detail, app_id = _discord_me(token)
+    if not _accept_token(ok, detail, f"Connected to bot {detail}"):
+        return False
+    if app_id:
+        console.print()
+        console.print(Panel(
+            f"[bold]Invite your bot to a server:[/bold]\n\n"
+            f"[cyan]{discord_invite_url(app_id)}[/cyan]\n\n"
+            f"Open this link in your browser, select a server, and authorize.",
+            border_style="green",
+            padding=(1, 2),
+        ))
+        console.print()
 
     config.channels.discord.enabled = True
     config.channels.discord.token = token
@@ -317,13 +300,8 @@ def _connect_slack(config: Config) -> bool:
 
     console.print("[dim]Validating bot token...[/dim]")
     ok, detail = validate_slack_token(bot_token)
-    if ok:
-        console.print(f"[green]Connected to Slack: {detail}[/green]")
-    else:
-        console.print(f"[yellow]Validation failed: {detail}[/yellow]")
-        proceed = questionary.confirm("Save anyway?", default=False).ask()
-        if not proceed:
-            return False
+    if not _accept_token(ok, detail, f"Connected to Slack: {detail}"):
+        return False
 
     config.channels.slack.enabled = True
     config.channels.slack.bot_token = bot_token
@@ -474,11 +452,9 @@ def test_channels(config: Config) -> None:
     dc = config.channels.discord
     if dc.enabled and dc.token:
         console.print("[dim]Testing Discord...[/dim]")
-        dc_ok, dc_detail = validate_discord_token(dc.token)
-        status = ok_s if dc_ok else fail_s
-        table.add_row("Discord", status, dc_detail)
+        dc_ok, dc_detail, app_id = _discord_me(dc.token)
+        table.add_row("Discord", ok_s if dc_ok else fail_s, dc_detail)
         if dc_ok:
-            app_id = _get_discord_app_id(dc.token)
             if app_id:
                 table.add_row("  invite URL", "[dim]--[/dim]", discord_invite_url(app_id))
             table.add_row(
