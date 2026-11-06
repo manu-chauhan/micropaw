@@ -71,6 +71,19 @@ def is_paw(pid: int) -> bool:
     return any(k in name.lower() for k in keys)
 
 
+def db_problem(db: Path) -> str | None:
+    """None when the database opens read-only, else the reason."""
+    try:
+        con = sqlite3.connect(f"{db.as_uri()}?mode=ro", uri=True, timeout=3)
+        try:
+            con.execute("SELECT count(*) FROM sqlite_master").fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error as e:
+        return f"database does not open: {e}"
+    return None
+
+
 def check() -> tuple[bool, str]:
     """True when the gateway process is alive (and is ours) and the database opens."""
     folder = home()
@@ -80,14 +93,8 @@ def check() -> tuple[bool, str]:
         pid = 0
     if not pid or not pid_alive(pid) or not is_paw(pid):
         return False, "gateway is not running"
-    try:
-        con = sqlite3.connect(f"{(folder / 'data.db').as_uri()}?mode=ro", uri=True, timeout=3)
-        try:
-            con.execute("SELECT count(*) FROM sqlite_master").fetchone()
-        finally:
-            con.close()
-    except sqlite3.Error as e:
-        return False, f"database does not open: {e}"
+    if problem := db_problem(folder / "data.db"):
+        return False, problem
     return True, f"running, PID {pid}"
 
 

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,8 @@ class Channel(ABC):
     """Abstract base class for messaging channels."""
 
     name: str
+    _task: asyncio.Task | None = None     # the connection, for a channel that keeps one in the background
+    _watcher: asyncio.Task | None = None  # restarts it after a crash
 
     def __init__(self) -> None:
         self._handler: MessageHandler | None = None
@@ -74,6 +77,36 @@ class Channel(ABC):
     def check_access(self, user_id: str) -> str | None:
         """None if this sender may use the assistant, else the reply to send them ("" = silent)."""
         return self._access(self.name, str(user_id)) if self._access else None
+
+    def _supervise(self, relaunch: Callable[[], Awaitable[Coroutine]]) -> None:
+        """Watch self._task. After a crash, wait 5 s, then run the coroutine that relaunch() builds."""
+        async def watch() -> None:
+            while True:
+                try:
+                    await self._task
+                    return
+                except asyncio.CancelledError:
+                    return
+                except Exception as e:
+                    logging.getLogger(f"micropaw.channels.{self.name}").error(
+                        "%s task crashed: %s — restarting in 5s", self.name.capitalize(), e)
+                    await asyncio.sleep(5)
+                    self._task = asyncio.create_task(await relaunch())
+
+        self._watcher = asyncio.create_task(watch())
+
+    async def _stop_task(self, close: Awaitable | None) -> None:
+        """Stop the watcher, close the connection (`close` is its close() call, if there is one), cancel the task."""
+        if self._watcher and not self._watcher.done():
+            self._watcher.cancel()
+        if close:
+            await close
+        if self._task and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
 
     @abstractmethod
     async def start(self) -> None: ...

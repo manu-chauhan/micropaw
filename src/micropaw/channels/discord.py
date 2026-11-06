@@ -22,8 +22,6 @@ class DiscordChannel(Channel):
         super().__init__()
         self.token = token
         self._client: Any = None
-        self._task: asyncio.Task | None = None
-        self._watcher: asyncio.Task | None = None
 
     def _create_client(self):
         """Create a fresh discord.py client with event handlers."""
@@ -135,7 +133,7 @@ class DiscordChannel(Channel):
             ready_event.set()
 
         self._task = asyncio.create_task(self._client.start(self.token))
-        self._watcher = asyncio.create_task(self._watch_task())
+        self._supervise(self._relaunch)
 
         try:
             await asyncio.wait_for(ready_event.wait(), timeout=30.0)
@@ -143,35 +141,17 @@ class DiscordChannel(Channel):
             self._task.cancel()
             raise RuntimeError("Discord bot failed to connect within 30 seconds")
 
-    async def _watch_task(self) -> None:
-        """Monitor the background task; log and restart on crash with a fresh client."""
-        while True:
-            try:
-                await self._task
-                return
-            except asyncio.CancelledError:
-                return
-            except Exception as e:
-                logger.error("Discord task crashed: %s — restarting in 5s", e)
-                await asyncio.sleep(5)
-                try:
-                    await self._client.close()
-                except Exception:
-                    pass
-                self._client = self._create_client()
-                self._task = asyncio.create_task(self._client.start(self.token))
+    async def _relaunch(self):
+        """A fresh client for the watcher; the coroutine that runs it."""
+        try:
+            await self._client.close()
+        except Exception:
+            pass
+        self._client = self._create_client()
+        return self._client.start(self.token)
 
     async def stop(self) -> None:
-        if self._watcher and not self._watcher.done():
-            self._watcher.cancel()
-        if self._client:
-            await self._client.close()
-        if self._task and not self._task.done():
-            self._task.cancel()
-            try:
-                await self._task
-            except (asyncio.CancelledError, Exception):
-                pass
+        await self._stop_task(self._client.close() if self._client else None)
         logger.info("Discord channel stopped.")
 
     async def _target(self, chat_id: str) -> Any:

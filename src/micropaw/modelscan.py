@@ -20,7 +20,15 @@ import httpx
 
 from micropaw import net, privacy
 from micropaw.config import SCHEMA_VERSION, Config, server_url
-from micropaw.providers.registry import BUILTIN, LOCAL_SERVERS, PRESETS, LocalModel, LocalServer, Registry, parse_spec
+from micropaw.providers.registry import (
+    BUILTIN,
+    LOCAL_SERVERS,
+    PRESETS,
+    LocalServer,
+    Registry,
+    list_models,
+    parse_spec,
+)
 
 # `paw models scan` also looks here: the llama.cpp README now says 9931, older builds use 8080. The preset
 # stays on 8080, so a server found here is added by address (`paw models add`), not used by preset name.
@@ -61,33 +69,13 @@ async def _list_models(client: httpx.AsyncClient, name: str, kind: str, url: str
     """List the models on one server. None when nothing answered. `client` carries any key and the timeouts."""
     import time
 
-    from micropaw.providers.ollama import fetch_show
     start = time.monotonic()
 
     def took() -> int:
         return int((time.monotonic() - start) * 1000)
 
     try:
-        if kind == "ollama":
-            resp = await client.get(f"{url}/api/tags")
-            resp.raise_for_status()
-            raw = resp.json().get("models") or []
-            infos = await asyncio.gather(*(fetch_show(client, url, m.get("name", "")) for m in raw)) \
-                if details else [None] * len(raw)
-            models = []
-            for m, info in zip(raw, infos):
-                caps = info.caps if info else None
-                models.append(LocalModel(
-                    m.get("name", ""), int(m.get("size") or 0),
-                    tools=info.tools if info else True,
-                    vision=info.vision if info else False,
-                    embedding=("embedding" in caps) if caps else "embed" in m.get("name", ""),
-                ))
-        else:
-            resp = await client.get(f"{url}/v1/models")
-            resp.raise_for_status()
-            models = [LocalModel(m["id"], embedding="embed" in m["id"]) for m in resp.json().get("data") or []
-                      if m.get("id")]
+        models = await list_models(client, kind, url, details)
     except httpx.HTTPStatusError as e:
         return Server(name, url, [], "key" if e.response.status_code in (401, 403) else "other", took())
     except (ValueError, KeyError, TypeError, AttributeError):
@@ -168,10 +156,6 @@ def stored_url(url: str, kind: str) -> str:
     return url if native or urlparse(url).path.rstrip("/") else f"{url}/v1"
 
 
-# ---------------------------------------------------------------------------
-# One host, one address
-# ---------------------------------------------------------------------------
-
 async def probe_host(host: str, key: str = "", details: bool = True) -> list[Server]:
     """Try every known model port on one host at once (1.5 s to connect). Returns the ones that answered."""
     async def one(port: int, label: str, kind: str) -> Server | None:
@@ -191,10 +175,6 @@ async def detect(url: str, kind: str, key: str = "", details: bool = True) -> tu
             return k, found
     return order[0], None
 
-
-# ---------------------------------------------------------------------------
-# paw models add / remove
-# ---------------------------------------------------------------------------
 
 def check_name(name: str) -> str | None:
     from micropaw.config import _AGENT_NAME
@@ -297,10 +277,6 @@ def _no_problem(config: Config, name: str) -> None:
         raise ValueError(problems[0])
 
 
-# ---------------------------------------------------------------------------
-# paw models scan
-# ---------------------------------------------------------------------------
-
 @dataclass
 class Target:
     name: str          # key given to scan_local, and the spec prefix when the registry can use it
@@ -376,10 +352,6 @@ def usable_spec(config: Config, target: Target, server: Server) -> str:
 def suggested_name(url: str) -> str:
     return ("lan-" + re.sub(r"[^a-z0-9]+", "-", _hostport(url)[0]).strip("-"))[:32].rstrip("-")
 
-
-# ---------------------------------------------------------------------------
-# paw models scan --lan / --range
-# ---------------------------------------------------------------------------
 
 def own_ip() -> str | None:
     """This computer's address on the default route. A UDP connect sends no packet."""
@@ -473,10 +445,6 @@ async def scan_lan(hosts: list[str], *, timeout: float = SCAN_CONNECT_TIMEOUT, l
     out.unfinished, out.attempts = len(pending), len(tasks)
     return out
 
-
-# ---------------------------------------------------------------------------
-# paw doctor: one row per model server in use
-# ---------------------------------------------------------------------------
 
 @dataclass
 class Endpoint:

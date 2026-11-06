@@ -226,11 +226,6 @@ class LocalEmbedding(EmbeddingProvider):
                 pass
         return self._model
 
-    async def warmup(self) -> None:
-        """Load the model now (used by `paw models fetch embeddings`, not at start)."""
-        import asyncio
-        await asyncio.get_running_loop().run_in_executor(None, self._load)
-
     async def embed(self, text: str) -> list[float]:
         import asyncio
         if self._failed:

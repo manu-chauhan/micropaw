@@ -95,10 +95,6 @@ def _is_name(host: str) -> bool:
     return False
 
 
-# ---------------------------------------------------------------------------
-# Specs and local detection
-# ---------------------------------------------------------------------------
-
 def parse_spec(spec: str) -> tuple[str, str]:
     """"ollama:qwen3.6:27b" -> ("ollama", "qwen3.6:27b"). A bare "claude" has an empty model."""
     name, _, model = spec.partition(":")
@@ -199,9 +195,7 @@ def is_local_url(url: str) -> bool:
         return (scheme == "http" or host.endswith(".ts.net")) and _resolves_private(host)
 
 
-# ---------------------------------------------------------------------------
 # Wrapper: concurrency limit, context-length retry, plain errors for local servers
-# ---------------------------------------------------------------------------
 
 class _Gate(AIProvider):
     """Thin wrapper around one provider. `local` is the preset name for a local server, else None.
@@ -348,10 +342,6 @@ class _Gate(AIProvider):
     async def close(self) -> None:
         await self._inner.close()
 
-
-# ---------------------------------------------------------------------------
-# Registry
-# ---------------------------------------------------------------------------
 
 @dataclass
 class Endpoint:
@@ -557,10 +547,6 @@ class Registry:
                 logger.error("Error closing provider: %s", e)
 
 
-# ---------------------------------------------------------------------------
-# Local servers: scan, size-aware defaults
-# ---------------------------------------------------------------------------
-
 # name -> (kind, URL). "ollama" lists /api/tags, the others list /v1/models.
 LOCAL_SERVERS: dict[str, tuple[str, str]] = {
     "ollama": ("ollama", "http://127.0.0.1:11434"),
@@ -588,31 +574,35 @@ class LocalServer:
     models: list[LocalModel]
 
 
-async def _probe(client: httpx.AsyncClient, name: str, kind: str, url: str) -> LocalServer | None:
+async def list_models(client: httpx.AsyncClient, kind: str, url: str, details: bool = True) -> list[LocalModel]:
+    """The models one server lists. A bad answer raises: the callers decide what that means."""
     from micropaw.providers.ollama import fetch_show
+    if kind == "ollama":
+        resp = await client.get(f"{url}/api/tags")
+        resp.raise_for_status()
+        raw = resp.json().get("models") or []
+        infos = await asyncio.gather(*(fetch_show(client, url, m.get("name", "")) for m in raw)) \
+            if details else [None] * len(raw)
+        models = []
+        for m, info in zip(raw, infos):
+            caps = info.caps if info else None
+            models.append(LocalModel(
+                m.get("name", ""), int(m.get("size") or 0),
+                tools=info.tools if info else True,
+                vision=info.vision if info else False,
+                embedding=("embedding" in caps) if caps else "embed" in m.get("name", ""),
+            ))
+        return models
+    resp = await client.get(f"{url}/v1/models")
+    resp.raise_for_status()
+    return [LocalModel(m["id"], embedding="embed" in m["id"]) for m in resp.json().get("data") or [] if m.get("id")]
+
+
+async def _probe(client: httpx.AsyncClient, name: str, kind: str, url: str) -> LocalServer | None:
     try:
-        if kind == "ollama":
-            resp = await client.get(f"{url}/api/tags")
-            resp.raise_for_status()
-            raw = resp.json().get("models") or []
-            infos = await asyncio.gather(*(fetch_show(client, url, m.get("name", "")) for m in raw))
-            models = []
-            for m, info in zip(raw, infos):
-                caps = info.caps if info else None
-                models.append(LocalModel(
-                    m.get("name", ""), int(m.get("size") or 0),
-                    tools=info.tools if info else True,
-                    vision=info.vision if info else False,
-                    embedding=("embedding" in caps) if caps else "embed" in m.get("name", ""),
-                ))
-        else:
-            resp = await client.get(f"{url}/v1/models")
-            resp.raise_for_status()
-            models = [LocalModel(m["id"], embedding="embed" in m["id"]) for m in resp.json().get("data") or []
-                      if m.get("id")]
+        return LocalServer(name, url, await list_models(client, kind, url))
     except (httpx.HTTPError, ValueError, KeyError, TypeError):
         return None
-    return LocalServer(name, url, models)
 
 
 async def scan_local(targets: dict[str, tuple[str, str]] | None = None) -> list[LocalServer]:

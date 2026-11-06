@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import json
 import os
 import shutil
 import sys
+from collections.abc import AsyncIterator
 from datetime import UTC
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import click
@@ -46,6 +48,21 @@ console = _LazyConsole()
 def Table(*args, **kwargs):  # noqa: N802 (stands in for rich.table.Table, imported when a table is built)
     from rich.table import Table as RichTable
     return RichTable(*args, **kwargs)
+
+
+@contextlib.asynccontextmanager
+async def _opened(resource: Any) -> AsyncIterator[Any]:
+    """A MemoryStore or Scheduler, initialised, and closed when the block ends."""
+    await resource.init()
+    try:
+        yield resource
+    finally:
+        await resource.close()
+
+
+def _jobs() -> contextlib.AbstractAsyncContextManager[Any]:
+    from micropaw.scheduler import Scheduler
+    return _opened(Scheduler(str(DB_FILE), handler=None, bus=None, channels=[]))
 
 
 def _privacy_upgrade_notice() -> None:
@@ -136,10 +153,6 @@ def _create_channels(config: Config) -> list:
 
     return channels
 
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 class PawGroup(click.Group):
     """A bad config value is one plain line, not a traceback."""
@@ -438,9 +451,7 @@ def export(conversation_id, fmt, output_file):
     """Export conversation history."""
     async def _export():
         from micropaw.memory.store import MemoryStore
-        store = MemoryStore(DB_FILE)
-        await store.init()
-        try:
+        async with _opened(MemoryStore(DB_FILE)) as store:
             if not conversation_id:
                 convos = await store.list_conversations()
                 if not convos:
@@ -479,8 +490,6 @@ def export(conversation_id, fmt, output_file):
                 console.print(f"[green]Exported {len(messages)} messages to {output_file}[/green]")
             else:
                 click.echo(text)
-        finally:
-            await store.close()
 
     asyncio.run(_export())
 
@@ -516,12 +525,8 @@ def forget(everything, older, yes):
 
     async def sweep():
         from micropaw.memory.store import MemoryStore
-        store = MemoryStore(DB_FILE)
-        await store.init()
-        try:
+        async with _opened(MemoryStore(DB_FILE)) as store:
             return await store.purge_older_than(days)
-        finally:
-            await store.close()
 
     counts = asyncio.run(sweep())
     counts["log lines and files"] = storage.purge_old_files(CONFIG_DIR, days)
@@ -538,10 +543,6 @@ def reset():
     else:
         console.print("[dim]Nothing to reset.[/dim]")
 
-
-# ---------------------------------------------------------------------------
-# Background service, update, extras, headless start
-# ---------------------------------------------------------------------------
 
 def _interactive() -> bool:
     return sys.stdin is not None and sys.stdin.isatty()  # None under pythonw
@@ -839,10 +840,6 @@ def _on_wsl() -> bool:
         return False
 
 
-# ---------------------------------------------------------------------------
-# Cron subcommands
-# ---------------------------------------------------------------------------
-
 def _parse_interval(s: str) -> int:
     """Parse '6h', '45m', '30s', '1d' → seconds."""
     units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -889,10 +886,6 @@ def show_log(count):
         table.add_row(e["ts"][5:16].replace("T", " "), e["tool"], e["outcome"], details[:120])
     console.print(table)
 
-
-# ---------------------------------------------------------------------------
-# MCP subcommands
-# ---------------------------------------------------------------------------
 
 @main.group()
 def mcp():
@@ -1026,14 +1019,10 @@ def usage(days):
     async def _usage():
         from micropaw.memory.ledger import Ledger
         from micropaw.memory.store import MemoryStore
-        store = MemoryStore(DB_FILE)
-        await store.init()
-        try:
+        async with _opened(MemoryStore(DB_FILE)) as store:
             ledger = Ledger(store.db)
             await ledger.init()
             rows = await ledger.breakdown(days)
-        finally:
-            await store.close()
         if not rows:
             console.print("[dim]No model calls recorded yet.[/dim]")
             return
@@ -1094,23 +1083,19 @@ def add(description, interval, once_delay, on_email, from_address, subject_conta
         seconds = _parse_interval(once_delay if one_shot else interval)  # type: ignore[arg-type]
 
     async def _add():
-        from micropaw.scheduler import Scheduler
-        sched = Scheduler(str(DB_FILE), handler=None, bus=None, channels=[])
-        await sched.init()
-        try:
-            job_id = await sched.add_job(description, seconds, one_shot=one_shot, match=rule, agent=agent_name)
-            if rule:
-                console.print(f"[green]Created email job #{job_id}: \"{description}\" for mail from "
-                              f"{rule['from']}[/green]")
-                console.print("It runs unattended: it reads the email, summarizes it and reports to you. "
-                              "Anything that would change something is refused.")
-            else:
-                kind = "one-shot" if one_shot else "recurring"
-                console.print(f"[green]Created {kind} job #{job_id}: \"{description}\"[/green]")
-        except ValueError as e:
-            console.print(f"[red]{e}[/red]")
-        finally:
-            await sched.close()
+        async with _jobs() as sched:
+            try:
+                job_id = await sched.add_job(description, seconds, one_shot=one_shot, match=rule, agent=agent_name)
+                if rule:
+                    console.print(f"[green]Created email job #{job_id}: \"{description}\" for mail from "
+                                  f"{rule['from']}[/green]")
+                    console.print("It runs unattended: it reads the email, summarizes it and reports to you. "
+                                  "Anything that would change something is refused.")
+                else:
+                    kind = "one-shot" if one_shot else "recurring"
+                    console.print(f"[green]Created {kind} job #{job_id}: \"{description}\"[/green]")
+            except ValueError as e:
+                console.print(f"[red]{e}[/red]")
 
     asyncio.run(_add())
 
@@ -1121,10 +1106,7 @@ def list_jobs():
     from datetime import datetime
 
     async def _list():
-        from micropaw.scheduler import Scheduler
-        sched = Scheduler(str(DB_FILE), handler=None, bus=None, channels=[])
-        await sched.init()
-        try:
+        async with _jobs() as sched:
             jobs = await sched.list_jobs()
             if not jobs:
                 console.print("[dim]No scheduled tasks.[/dim]")
@@ -1145,8 +1127,6 @@ def list_jobs():
                 state = "on" if j["enabled"] else f"paused (paw cron enable {j['id']})"
                 table.add_row(str(j["id"]), j["description"], kind, next_dt, state, j["agent"])
             console.print(table)
-        finally:
-            await sched.close()
 
     asyncio.run(_list())
 
@@ -1157,18 +1137,13 @@ def list_jobs():
 def enable(job_id, off):
     """Turn on a task the assistant scheduled (they start paused)."""
     async def _enable():
-        from micropaw.scheduler import Scheduler
-        sched = Scheduler(str(DB_FILE), handler=None, bus=None, channels=[])
-        await sched.init()
-        try:
+        async with _jobs() as sched:
             job = await sched.set_enabled(job_id, not off)
             if job:
                 state = "paused" if off else "enabled"
                 console.print(f"[green]Job #{job_id} {state}: \"{job['description']}\"[/green]")
             else:
                 console.print(f"[red]Job #{job_id} not found.[/red]")
-        finally:
-            await sched.close()
 
     asyncio.run(_enable())
 
@@ -1178,17 +1153,12 @@ def enable(job_id, off):
 def remove(job_id):
     """Remove a scheduled task by ID."""
     async def _remove():
-        from micropaw.scheduler import Scheduler
-        sched = Scheduler(str(DB_FILE), handler=None, bus=None, channels=[])
-        await sched.init()
-        try:
+        async with _jobs() as sched:
             removed = await sched.remove_job(job_id)
             if removed:
                 console.print(f"[green]Removed job #{job_id}.[/green]")
             else:
                 console.print(f"[red]Job #{job_id} not found.[/red]")
-        finally:
-            await sched.close()
 
     asyncio.run(_remove())
 
@@ -1197,10 +1167,6 @@ def _fmt(seconds: int) -> str:
     from micropaw.tools.cron_tool import _fmt_interval
     return _fmt_interval(seconds)
 
-
-# ---------------------------------------------------------------------------
-# Models and agents
-# ---------------------------------------------------------------------------
 
 @main.group()
 def models():
@@ -1502,11 +1468,9 @@ def docs_add(folder):
     quiet_console()
 
     async def run() -> tuple[int, int, list[str]]:
-        store = MemoryStore(DB_FILE)  # no embedder: nothing is sent anywhere
-        await store.init()
         files = chunks = 0
         notes: list[str] = []
-        try:
+        async with _opened(MemoryStore(DB_FILE)) as store:  # no embedder: nothing is sent anywhere
             for path in await asyncio.to_thread(docsearch.find_files, Path(folder)):
                 if path.stat().st_size > docsearch.MAX_FILE_BYTES:
                     notes.append(f"{path} is too big (over 10 MB), skipped")
@@ -1521,8 +1485,6 @@ def docs_add(folder):
                     continue
                 if n := await store.ingest_document(str(path.resolve()), text):  # one source per file
                     files, chunks = files + 1, chunks + n
-        finally:
-            await store.close()
         return files, chunks, notes
 
     files, chunks, notes = asyncio.run(run())

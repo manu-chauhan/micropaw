@@ -4,6 +4,12 @@ All entries in reverse chronological order. LOC = source lines (excluding tests/
 
 ---
 
+### 2026-11-05: smaller source, no behaviour change
+
+Removed names that nothing in the package used and that were importable before: `connector.validate_discord_token`, `bus.InboundMessage`, `MessageBus.publish_inbound` and `consume_inbound`, `security.validate_path` and `safe_workspace_path`, `privacy.child_isolation`, `net.permit`, `ConversationManager.save_message`, `LocalEmbedding.warmup`. A script that imported one of them needs a small change.
+
+---
+
 ### 2026-11-05: v0.4.0 privacy modes, models on any computer, agents, goals, a Raspberry Pi guide
 
 Upgrade note: nothing to do. `privacy.mode` is `normal` unless you change it, as before. Three changes you will notice. Each reply now ends with a line such as `[via claude (api.anthropic.com)]` (`display.show_provider` turns it off). A configured search provider no longer falls back to another service by itself, and once a chat has read outside content, a search asks first. Your first run after the upgrade prints a one-time note about `privacy.mode`.

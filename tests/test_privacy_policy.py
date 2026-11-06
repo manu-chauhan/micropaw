@@ -506,18 +506,13 @@ def test_unknown_allow_entries_are_reported():
     assert any('"telegramm"' in n for n in privacy.check_config(c).notices)
 
 
-def test_describe_and_child_isolation_for_status_screens(monkeypatch):
+def test_describe_for_status_screens():
     set_mode("normal")
     assert privacy.describe() == "Privacy: normal"
     set_mode("local")
     assert privacy.describe() == "Privacy: local (LAN allowed)"
     set_mode("airgapped", allow_lan=False)
     assert privacy.describe() == "Privacy: airgapped (this machine only)"
-    from micropaw.tools import sandbox
-    monkeypatch.setattr(sandbox, "isolation_ok", lambda: True)
-    assert privacy.child_isolation() == "bwrap"
-    monkeypatch.setattr(sandbox, "isolation_ok", lambda: False)
-    assert privacy.child_isolation() == "none"
 
 
 async def test_scan_goes_around_environment_proxies(monkeypatch):

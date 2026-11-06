@@ -836,8 +836,8 @@ src/micropaw/          ~9,200 LOC source + ~5,150 LOC tests
  connector.py           Guided channel setup + live validation
  gateway.py             Central coordinator + rate limiter + bus + scheduler
  scheduler.py           Cron jobs + HEARTBEAT.md proactive mode
- bus.py                 Async message bus (bounded queues)
- security.py            SSRF + path security + DNS checks
+ bus.py                 Async message bus (one bounded outbound queue)
+ security.py            SSRF + DNS checks
  core/
    agent.py             Agent loop (streaming, tools, caching, persona files)
    subagent.py          Sub-agent loop (tools minus delegate, configurable cap)

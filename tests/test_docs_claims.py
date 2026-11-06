@@ -120,3 +120,8 @@ def test_docs_do_not_blame_a_dependency_the_project_dropped(name):
     assert "pydantic" not in (ROOT / name).read_text(encoding="utf-8")
     core = (ROOT / "pyproject.toml").read_text(encoding="utf-8").split("[project.optional-dependencies]")[0]
     assert "pydantic" not in core
+
+
+@pytest.mark.parametrize("stale", ["path security", "(bounded queues)"])
+def test_the_architecture_block_does_not_claim_what_was_removed(stale):
+    assert stale not in (ROOT / "README.md").read_text(encoding="utf-8")

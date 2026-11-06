@@ -122,13 +122,6 @@ class TestConversationManager:
         # Telegram is on same conversation — no divergence
         assert mgr.get_conversation_id("telegram", "user123") == "dm:owner:global"
 
-    def test_current_shared_id(self):
-        store = MagicMock()
-        mgr = ConversationManager(store)
-        assert mgr.current_shared_id() == _DM_CONV_ID
-        mgr.new_all_sessions("dm:owner:fresh")
-        assert mgr.current_shared_id() == "dm:owner:fresh"
-
     @pytest.mark.asyncio
     async def test_load_history(self):
         store = MagicMock()
@@ -141,15 +134,6 @@ class TestConversationManager:
         history = await mgr.load_history("conv1", "terminal", "user1")
         assert len(history) == 2
         store.get_messages.assert_called_once_with("conv1", MAX_HISTORY)
-
-    @pytest.mark.asyncio
-    async def test_save_message(self):
-        store = MagicMock()
-        store.save_message = AsyncMock()
-        mgr = ConversationManager(store)
-        msg = Message(role="user", content="Test")
-        await mgr.save_message("conv1", msg)
-        store.save_message.assert_called_once_with("conv1", msg)
 
 
 # ---------------------------------------------------------------------------

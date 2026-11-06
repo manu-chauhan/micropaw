@@ -28,9 +28,7 @@ _COOKIE = "micropaw_chat"
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 
-# ---------------------------------------------------------------------------
 # WebSocket frame codec (from NanoClaw, RFC 6455)
-# ---------------------------------------------------------------------------
 
 def _ws_accept_key(ws_key: str) -> str:
     combined = ws_key.strip() + _WS_GUID
@@ -91,9 +89,7 @@ def _ws_pong(payload: bytes) -> bytes:
     return _ws_encode_frame(0xA, payload)
 
 
-# ---------------------------------------------------------------------------
 # HTTP request parser (minimal, for WebSocket upgrade)
-# ---------------------------------------------------------------------------
 
 async def _read_http_request(reader: asyncio.StreamReader) -> dict[str, str] | None:
     """Read an HTTP request and return headers as a dict."""
@@ -117,10 +113,6 @@ async def _read_http_request(reader: asyncio.StreamReader) -> dict[str, str] | N
         count += 1
     return headers
 
-
-# ---------------------------------------------------------------------------
-# What the browser may do with the page
-# ---------------------------------------------------------------------------
 
 _HOST_OK = re.compile(r"^[A-Za-z0-9.\-:\[\]]{1,255}$")
 _LAN_WARNING = (
@@ -149,10 +141,6 @@ def _page_headers(html: str, host: str) -> str:
     return (f"Content-Security-Policy: {csp}\r\nReferrer-Policy: no-referrer\r\n"
             "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n")
 
-
-# ---------------------------------------------------------------------------
-# Channel
-# ---------------------------------------------------------------------------
 
 class WebChatChannel(Channel):
     """WebSocket web chat channel with embedded UI."""
@@ -400,10 +388,6 @@ class WebChatChannel(Channel):
             except ConnectionError:
                 pass
 
-
-# ---------------------------------------------------------------------------
-# Embedded chat UI
-# ---------------------------------------------------------------------------
 
 CHAT_HTML = """<!DOCTYPE html>
 <html lang="en" translate="no">

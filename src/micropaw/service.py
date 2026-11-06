@@ -14,7 +14,6 @@ import plistlib
 import shlex
 import shutil
 import signal
-import sqlite3
 import subprocess
 import sys
 import time
@@ -24,7 +23,7 @@ from pathlib import Path
 from xml.sax.saxutils import escape
 
 from micropaw import config
-from micropaw.health import pid_alive, process_name
+from micropaw.health import db_problem, is_paw, pid_alive
 
 logger = logging.getLogger(__name__)
 
@@ -49,10 +48,6 @@ class ServiceError(RuntimeError):
     """A problem the user can act on; the message is printed as is."""
 
 
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
-
 def pid_file() -> Path:
     return config.CONFIG_DIR / "micropaw.pid"
 
@@ -73,9 +68,7 @@ def plist_path() -> Path:
     return Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
 
 
-# ---------------------------------------------------------------------------
 # Service definitions (pure functions: they return text or argv)
-# ---------------------------------------------------------------------------
 
 def service_argv() -> list[str]:
     """The command a service manager runs: the console script next to this Python, or python -m."""
@@ -192,10 +185,6 @@ def schtasks_argv(action: str, xml_path: str = "") -> list[str]:
 def cron_line(argv: list[str]) -> str:
     return f"@reboot {shlex.join(argv)} >> ~/.micropaw/logs/service.log 2>&1"
 
-
-# ---------------------------------------------------------------------------
-# Talking to the service manager
-# ---------------------------------------------------------------------------
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     try:
@@ -363,10 +352,6 @@ def tail_lines(path: Path, count: int) -> list[str]:
         return []
 
 
-# ---------------------------------------------------------------------------
-# PID file, stop file, health
-# ---------------------------------------------------------------------------
-
 def read_pid() -> int | None:
     try:
         return int(pid_file().read_text().strip())
@@ -374,21 +359,9 @@ def read_pid() -> int | None:
         return None
 
 
-def _process_name(pid: int) -> str | None:
-    return process_name(pid)
-
-
-def _is_paw(pid: int) -> bool:
-    name = _process_name(pid)
-    if not name:
-        return True  # can't tell: assume yes, so two gateways never run by mistake
-    keys = ("paw", "python") if os.name == "nt" else ("paw",)
-    return any(k in name.lower() for k in keys)
-
-
 def running_gateway() -> int | None:
     pid = read_pid()
-    if pid and pid != os.getpid() and pid_alive(pid) and _is_paw(pid):
+    if pid and pid != os.getpid() and pid_alive(pid) and is_paw(pid):
         return pid
     return None
 
@@ -427,20 +400,10 @@ def healthy() -> tuple[bool, str]:
     pid = running_gateway()
     if not pid:
         return False, "gateway is not running"
-    try:
-        con = sqlite3.connect(f"{config.DB_FILE.as_uri()}?mode=ro", uri=True, timeout=3)
-        try:
-            con.execute("SELECT count(*) FROM sqlite_master").fetchone()
-        finally:
-            con.close()
-    except sqlite3.Error as e:
-        return False, f"database does not open: {e}"
+    if problem := db_problem(config.DB_FILE):
+        return False, problem
     return True, f"running, PID {pid}"
 
-
-# ---------------------------------------------------------------------------
-# Supervisor
-# ---------------------------------------------------------------------------
 
 async def _attempt(make_gateway: Callable) -> None:
     gw = make_gateway()
@@ -540,10 +503,6 @@ def run_headless(make_gateway: Callable) -> int:
     finally:
         release_pid()
 
-
-# ---------------------------------------------------------------------------
-# How MicroPaw was installed: update and extras
-# ---------------------------------------------------------------------------
 
 def install_method() -> str:
     """docker, uv, pipx, editable, or pip."""
