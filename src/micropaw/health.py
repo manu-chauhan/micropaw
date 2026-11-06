@@ -92,7 +92,7 @@ def check() -> tuple[bool, str]:
     except (OSError, ValueError):
         pid = 0
     if not pid or not pid_alive(pid) or not is_paw(pid):
-        return False, "gateway is not running"
+        return False, "not running"
     if problem := db_problem(folder / "data.db"):
         return False, problem
     return True, f"running, PID {pid}"

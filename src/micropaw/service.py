@@ -402,7 +402,7 @@ def healthy() -> tuple[bool, str]:
     """True when the gateway process is alive and the database opens. Used by Docker and doctor."""
     pid = running_gateway()
     if not pid:
-        return False, "gateway is not running"
+        return False, "not running"
     if problem := db_problem(config.DB_FILE):
         return False, problem
     return True, f"running, PID {pid}"
