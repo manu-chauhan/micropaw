@@ -64,3 +64,24 @@ async def test_stop_closes_the_connection_and_cancels_both_tasks():
 
 async def test_stop_without_a_connection_is_fine():
     await _Chan()._stop_task(None)
+
+
+async def test_the_crash_is_logged_under_the_channel_own_logger(monkeypatch, caplog):
+    async def no_sleep(n):
+        pass
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    ch = _Chan()
+
+    async def crash():
+        raise RuntimeError("socket gone")
+
+    async def ok():
+        pass
+
+    async def relaunch():
+        return ok()
+
+    ch._task = asyncio.create_task(crash())
+    ch._supervise(relaunch)
+    await ch._watcher
+    assert [r.name for r in caplog.records if "crashed" in r.getMessage()] == ["micropaw.channels.demo"]

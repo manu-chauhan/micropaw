@@ -9,8 +9,9 @@ import json
 import os
 import shutil
 import sys
+from collections.abc import AsyncIterator
 from datetime import UTC
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import click
@@ -50,7 +51,7 @@ def Table(*args, **kwargs):  # noqa: N802 (stands in for rich.table.Table, impor
 
 
 @contextlib.asynccontextmanager
-async def _opened(resource):
+async def _opened(resource: Any) -> AsyncIterator[Any]:
     """A MemoryStore or Scheduler, initialised, and closed when the block ends."""
     await resource.init()
     try:
@@ -59,7 +60,7 @@ async def _opened(resource):
         await resource.close()
 
 
-def _jobs():
+def _jobs() -> contextlib.AbstractAsyncContextManager[Any]:
     from micropaw.scheduler import Scheduler
     return _opened(Scheduler(str(DB_FILE), handler=None, bus=None, channels=[]))
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import secrets
+from collections.abc import Callable
 
 import httpx
 from rich.console import Console
@@ -38,7 +39,7 @@ def _send(method: str, url: str, timeout: float, **kwargs) -> httpx.Response:
         return client.request(method, url, **kwargs)
 
 
-def _guarded(check):
+def _guarded(check: Callable[..., tuple[bool, str]]) -> Callable[..., tuple[bool, str]]:
     """A token check that turns a network error into (False, reason)."""
     @functools.wraps(check)
     def run(*args):

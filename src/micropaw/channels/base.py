@@ -88,7 +88,8 @@ class Channel(ABC):
                 except asyncio.CancelledError:
                     return
                 except Exception as e:
-                    logger.error("%s task crashed: %s — restarting in 5s", self.name.capitalize(), e)
+                    logging.getLogger(f"micropaw.channels.{self.name}").error(
+                        "%s task crashed: %s — restarting in 5s", self.name.capitalize(), e)
                     await asyncio.sleep(5)
                     self._task = asyncio.create_task(await relaunch())
 
