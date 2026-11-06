@@ -108,15 +108,15 @@ def test_the_docs_explain_how_to_loosen_a_held_setting_and_what_share_history_sh
 
 def test_ci_builds_images_only_for_platforms_the_uv_image_ships():
     # The Dockerfile copies uv from ghcr.io/astral-sh/uv, which has linux/amd64 and linux/arm64 only.
-    assert "COPY --from=ghcr.io/astral-sh/uv:" in (ROOT / "Dockerfile").read_text()
-    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    assert "COPY --from=ghcr.io/astral-sh/uv:" in (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     platforms = set(re.findall(r"platform: (linux/\S+)", ci))
     assert platforms == {"linux/arm64"}
-    assert "linux/arm/v7" not in (ROOT / "CHANGELOG.md").read_text()
+    assert "linux/arm/v7" not in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("name", ["README.md", "PYPI_README.md"])
 def test_docs_do_not_blame_a_dependency_the_project_dropped(name):
-    assert "pydantic" not in (ROOT / name).read_text()
-    core = (ROOT / "pyproject.toml").read_text().split("[project.optional-dependencies]")[0]
+    assert "pydantic" not in (ROOT / name).read_text(encoding="utf-8")
+    core = (ROOT / "pyproject.toml").read_text(encoding="utf-8").split("[project.optional-dependencies]")[0]
     assert "pydantic" not in core

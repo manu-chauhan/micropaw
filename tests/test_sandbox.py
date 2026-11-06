@@ -235,6 +235,8 @@ def test_careful_warning_kept(monkeypatch):
 def test_skip_rules(monkeypatch):
     tool = shell.ShellTool()
     skip = {"confirm_dangerous": False}
+    # the rules below are for a Linux or macOS host
+    monkeypatch.setattr(shell, "os", SimpleNamespace(**{**vars(os), "name": "posix"}))
     monkeypatch.setattr(sandbox, "resolve", lambda: Sandbox("bwrap"))
     assert tool.needs_approval({"command": "ls"}, _ctx(**skip)) is None
     assert tool.needs_approval({"command": "ls"}, _ctx(marked=True, **skip))
@@ -244,7 +246,7 @@ def test_skip_rules(monkeypatch):
     # not os.name itself: pathlib would build WindowsPath
     monkeypatch.setattr(shell, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
     assert tool.needs_approval({"command": "ls"}, _ctx(**skip))  # Windows host: always asks
-    monkeypatch.setattr(shell, "os", os)
+    monkeypatch.setattr(shell, "os", SimpleNamespace(**{**vars(os), "name": "posix"}))
     assert tool.needs_approval({"command": "ls"}, _ctx(**skip)) is None
 
 
@@ -464,7 +466,7 @@ def test_auto_without_a_sandbox_always_asks_on_posix(monkeypatch):
     _cfg(sandbox="auto")
     sb = sandbox.resolve()
     assert sb.kind == "none" and sb.host_asks and not sb.error
-    monkeypatch.setattr(shell, "os", os)
+    monkeypatch.setattr(shell, "os", SimpleNamespace(**{**vars(os), "name": "posix"}))
     assert shell.ShellTool().needs_approval({"command": "ls"}, _ctx(confirm_dangerous=False))
     _cfg(sandbox="off")  # the owner chose "off": the old rule still applies
     assert shell.ShellTool().needs_approval({"command": "ls"}, _ctx(confirm_dangerous=False)) is None

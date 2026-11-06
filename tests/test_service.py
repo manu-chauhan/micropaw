@@ -438,6 +438,6 @@ def test_doctor_sandbox_row_is_a_warning_on_windows_and_the_report_does_not_fail
     row = next(line for line in out.output.splitlines() if "Shell sandbox" in line)
     assert "warn" in row and "FAIL" not in row
     assert out.exit_code == 0
-    monkeypatch.setattr(cli, "os", os)
+    monkeypatch.setattr(cli, "os", SimpleNamespace(**{**vars(os), "name": "posix"}))
     row = next(line for line in CliRunner().invoke(cli.main, ["doctor"]).output.splitlines() if "Shell sandbox" in line)
     assert "FAIL" in row
