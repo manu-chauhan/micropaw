@@ -50,6 +50,15 @@ def env_mode() -> str:
     return parse_mode(os.environ.get("MICROPAW_PRIVACY", ""), "MICROPAW_PRIVACY")
 
 
+def env_ignored(config_mode: str) -> str:
+    """A note when MICROPAW_PRIVACY asks for a looser mode than the config, which is then ignored. Else ''."""
+    env = env_mode()
+    if env and _ORDER[env] < _ORDER[config_mode]:
+        return (f"MICROPAW_PRIVACY={env} ignored: the config says {config_mode} and the environment can only "
+                "make it stricter.")
+    return ""
+
+
 def freeze(config_mode: str) -> str:
     """Set the mode for this process once. The MICROPAW_PRIVACY env var can only tighten it."""
     global _mode

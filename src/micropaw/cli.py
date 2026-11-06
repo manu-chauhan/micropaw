@@ -109,6 +109,26 @@ def _create_registry(config: Config):
     return build_registry(config)
 
 
+def _save_webchat_token() -> str:
+    """A new web chat token, kept in config.json so the link stays the same across restarts."""
+    import secrets
+
+    from micropaw.config import update_config_file
+    token = secrets.token_urlsafe(32)
+    if config_exists():
+        with contextlib.suppress(OSError, ValueError):
+            update_config_file(lambda raw: raw.setdefault("channels", {}).setdefault("webchat", {}).update(
+                auth_token=token))
+    return token
+
+
+def _show_webchat_link(config: Config) -> None:
+    web = config.channels.webchat
+    if web.enabled and sys.stdout is not None and sys.stdout.isatty():  # a service log is not the place for a token
+        from micropaw.channels.webchat import link
+        console.print("WebChat: " + link(web.host, web.port, web.auth_token), markup=False, soft_wrap=True)
+
+
 def _create_channels(config: Config) -> list:
     """Create enabled channel instances."""
     channels = []
@@ -144,6 +164,8 @@ def _create_channels(config: Config) -> list:
 
     if config.channels.webchat.enabled:
         from micropaw.channels.webchat import WebChatChannel
+        if not config.channels.webchat.auth_token:
+            config.channels.webchat.auth_token = _save_webchat_token()
         channels.append(WebChatChannel(
             host=config.channels.webchat.host,
             port=config.channels.webchat.port,
@@ -187,6 +209,9 @@ def main():
 @click.option("--reset", is_flag=True, help="Start from default settings. The old file is kept as config.json.bak.")
 def setup(reset):
     """Run the interactive setup wizard."""
+    if not _has_terminal():
+        _fail(click.ClickException("paw setup needs a terminal. Run it in an interactive shell "
+                                   "(in Docker: docker run -it ...)."))
     from micropaw.setup_wizard import run_setup
     run_setup(reset=reset)
 
@@ -264,6 +289,7 @@ def start(headless):
         console.print("[red]No channels enabled. Run 'paw setup' to configure.[/red]")
         sys.exit(1)
 
+    _show_webchat_link(config)
     _run_single(_make_gateway(config, registry, channels))
 
 
@@ -569,6 +595,10 @@ def reset():
         console.print("[dim]Nothing to reset.[/dim]")
 
 
+def _has_terminal() -> bool:
+    return _interactive() and sys.stdout is not None and sys.stdout.isatty()
+
+
 def _interactive() -> bool:
     return sys.stdin is not None and sys.stdin.isatty()  # None under pythonw
 
@@ -594,9 +624,11 @@ def _start_headless() -> int:
         return _make_gateway(config, _create_registry(config), channels)
 
     try:
-        if not _headless_channels()[1]:
+        config, channels = _headless_channels()
+        if not channels:
             console.print(NO_BACKGROUND_CHANNEL, markup=False)
             return 1
+        _show_webchat_link(config)
         return svc.run_headless(make)
     except svc.ServiceError as e:
         console.print(f"[red]{e}[/red]")
@@ -1396,6 +1428,7 @@ def models_add(name, address, key_env, kind, use, yes):
 @click.argument("name")
 def models_remove(name):
     """Forget a model server added with `paw models add`."""
+    import micropaw.config as config_mod
     from micropaw import modelscan
     from micropaw.config import update_config_file
     name = name.lower()
@@ -1403,7 +1436,9 @@ def models_remove(name):
     if name not in (raw.get("providers") or {}):
         raise click.ClickException(f"There is no server named '{name}' in your config.")
     if used := modelscan.uses_of(raw, name):
-        raise click.ClickException(f"'{name}' is still used by {', '.join(used)}. Change those first.")
+        raise click.ClickException(
+            f"'{name}' is still used by {', '.join(used)}. Point those at another model first, for example "
+            f"'paw models add <name> <address> --use main', or edit them in {config_mod.CONFIG_FILE}.")
     update_config_file(lambda r: r["providers"].pop(name, None))
     click.echo(f"Removed {name}.")
 

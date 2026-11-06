@@ -236,3 +236,52 @@ def test_output_that_cannot_hold_a_check_mark_or_emoji_is_replaced_not_a_crash(m
     sys.stdout.write("ollama \u2713 caf\u00e9 \U0001f43e")
     sys.stdout.flush()
     assert raw.getvalue().decode("cp1252") == "ollama ? caf\u00e9 ?"
+
+
+def test_setup_without_a_terminal_says_so_in_one_plain_line(home):
+    r = run("setup", input="\n")
+    text = " ".join(r.output.split())
+    assert r.exit_code == 1 and "paw setup needs a terminal" in text and "docker run -it" in text
+    assert "Traceback" not in r.output and "Aborted" not in r.output
+
+
+def test_connect_webchat_prints_the_link_to_open(home, monkeypatch, capsys):
+    import questionary
+
+    import micropaw.connector as conn
+
+    class Answer:
+        def __init__(self, value):
+            self.value = value
+
+        def ask(self):
+            return self.value
+
+    monkeypatch.setattr(questionary, "text", lambda msg, default="": Answer(default))
+    monkeypatch.setattr(questionary, "confirm", lambda msg, default=True: Answer(True))
+    monkeypatch.setattr(conn, "save_config", lambda config: None)
+    config = config_mod.Config()
+    conn._connect_webchat(config)
+    out = capsys.readouterr().out.replace("\n", "")
+    assert f"http://127.0.0.1:8765/?token={config.channels.webchat.auth_token}" in out and "paw start" in out
+
+
+def test_a_webchat_without_a_token_gets_one_that_is_kept_across_restarts(home):
+    write(home, {"channels": {"webchat": {"enabled": True, "port": 1}}})
+    first = cli._create_channels(config_mod.load_config())[-1].auth_token
+    assert first and json.loads(home.read_text())["channels"]["webchat"]["auth_token"] == first
+    assert cli._create_channels(config_mod.load_config())[-1].auth_token == first
+
+
+def test_the_webchat_link_names_the_address_a_browser_can_open():
+    from micropaw.channels.webchat import link
+    assert link("0.0.0.0", 8765, "a b") == "http://127.0.0.1:8765/?token=a%20b"
+    assert link("192.168.1.5", 80, "t") == "http://192.168.1.5:80/?token=t"
+
+
+def test_models_remove_in_use_says_how_to_change_it(home):
+    write(home, FAKE)
+    r = run("models", "remove", "fakeoai")
+    text = " ".join(r.output.split())
+    assert r.exit_code == 1 and "agents.main.model" in text
+    assert "paw models add <name> <address> --use main" in text and "Change those first" not in text

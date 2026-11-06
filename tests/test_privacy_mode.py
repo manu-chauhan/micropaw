@@ -272,3 +272,11 @@ def test_boot_does_not_obey_a_config_that_listed_everything_as_local(tmp_path):
     assert out.stdout.split()[0] == "airgapped"
     assert "8.8.8.8 EgressBlocked" in out.stdout, out.stdout + out.stderr
     assert "looser than the last run" in out.stderr and "lan_hosts" in out.stderr
+
+
+def test_a_looser_env_value_than_the_config_is_ignored_with_a_note(tmp_path):
+    out = _run_boot(tmp_path, {"privacy": {"mode": "local"}}, env={"MICROPAW_PRIVACY": "normal"})
+    assert out.stdout.startswith("local ")
+    assert "MICROPAW_PRIVACY=normal ignored: the config says local" in out.stderr
+    stricter = _run_boot(tmp_path, {"privacy": {"mode": "local"}}, env={"MICROPAW_PRIVACY": "airgapped"})
+    assert "ignored" not in stricter.stderr
