@@ -142,6 +142,12 @@ def _page_headers(html: str, host: str) -> str:
             "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n")
 
 
+def link(host: str, port: int, token: str) -> str:
+    """The address that opens the chat page, with the token that lets it in."""
+    shown = "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
+    return f"http://{shown}:{port}/?token={quote(token, safe='')}"
+
+
 class WebChatChannel(Channel):
     """WebSocket web chat channel with embedded UI."""
 
@@ -208,7 +214,7 @@ class WebChatChannel(Channel):
     async def _serve_ui(self, writer: asyncio.StreamWriter, path: str, host: str = "", cookie: str = "") -> None:
         by_address = self._check_token(path)
         if not (by_address or self._check_cookie(cookie)):
-            body = b"Access denied. Open the link MicroPaw printed, which ends in ?token=..."
+            body = b"Access denied. Open the link that 'paw start' or 'paw connect webchat' printed, which ends in ?token=..."
             writer.write(f"HTTP/1.1 401 Unauthorized\r\nCache-Control: no-store\r\nContent-Length: {len(body)}\r\n\r\n"
                          .encode() + body)
         else:

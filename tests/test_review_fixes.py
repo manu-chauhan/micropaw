@@ -76,6 +76,7 @@ def test_a_good_ollama_host_is_saved_as_a_full_address(monkeypatch):
 
 
 def test_a_bad_config_file_is_one_plain_line_and_setup_reset_recovers(lan_home, monkeypatch):
+    monkeypatch.setattr("micropaw.cli._has_terminal", lambda: True)  # CliRunner has no terminal
     lan_home.write_text(json.dumps({"provider_config": {"ollama": {"host": "foo bar"}}}))
     for args in (["status"], ["models", "scan"], ["setup"]):
         r = CliRunner().invoke(main, args, input="\n")

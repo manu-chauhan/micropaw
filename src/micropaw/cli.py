@@ -109,6 +109,26 @@ def _create_registry(config: Config):
     return build_registry(config)
 
 
+def _save_webchat_token() -> str:
+    """A new web chat token, kept in config.json so the link stays the same across restarts."""
+    import secrets
+
+    from micropaw.config import update_config_file
+    token = secrets.token_urlsafe(32)
+    if config_exists():
+        with contextlib.suppress(OSError, ValueError):
+            update_config_file(lambda raw: raw.setdefault("channels", {}).setdefault("webchat", {}).update(
+                auth_token=token))
+    return token
+
+
+def _show_webchat_link(config: Config) -> None:
+    web = config.channels.webchat
+    if web.enabled and sys.stdout is not None and sys.stdout.isatty():  # a service log is not the place for a token
+        from micropaw.channels.webchat import link
+        console.print("WebChat: " + link(web.host, web.port, web.auth_token), markup=False, soft_wrap=True)
+
+
 def _create_channels(config: Config) -> list:
     """Create enabled channel instances."""
     channels = []
@@ -144,6 +164,8 @@ def _create_channels(config: Config) -> list:
 
     if config.channels.webchat.enabled:
         from micropaw.channels.webchat import WebChatChannel
+        if not config.channels.webchat.auth_token:
+            config.channels.webchat.auth_token = _save_webchat_token()
         channels.append(WebChatChannel(
             host=config.channels.webchat.host,
             port=config.channels.webchat.port,
@@ -167,10 +189,18 @@ class PawGroup(click.Group):
             raise click.ClickException(str(e)) from None
 
 
+def _safe_streams() -> None:
+    """A Windows pipe is cp1252: a check mark or an emoji in the output must become '?', not a crash."""
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(AttributeError, OSError, ValueError):  # None under pythonw
+            stream.reconfigure(errors="replace")
+
+
 @click.group(cls=PawGroup)
 @click.version_option(version=__version__, prog_name="MicroPaw")
 def main():
     """MicroPaw — Your AI. Your machine. Your keys."""
+    _safe_streams()
     from micropaw.utils.logger import setup_logging
     setup_logging()
 
@@ -179,6 +209,9 @@ def main():
 @click.option("--reset", is_flag=True, help="Start from default settings. The old file is kept as config.json.bak.")
 def setup(reset):
     """Run the interactive setup wizard."""
+    if not _has_terminal():
+        _fail(click.ClickException("paw setup needs a terminal. Run it in an interactive shell "
+                                   "(in Docker: docker run -it ...)."))
     from micropaw.setup_wizard import run_setup
     run_setup(reset=reset)
 
@@ -199,7 +232,7 @@ def chat():
 
     registry = _create_registry(config)
     channels = _create_channels(config)
-    asyncio.run(_make_gateway(config, registry, channels).start())
+    _run_gateway(_make_gateway(config, registry, channels))
 
 
 def _quoted(text: str) -> str:
@@ -237,7 +270,7 @@ def goal(task, check, max_rounds, budget, agent_name):
 @main.command()
 @click.option("--headless", is_flag=True, help="No terminal channel; restart after a crash. For services and Docker.")
 def start(headless):
-    """Start the gateway with all enabled channels."""
+    """Start the gateway with all enabled channels. Stop it with 'paw stop'."""
     from micropaw.utils.logger import quiet_console
     quiet_console()  # suppress INFO logs — details go to ~/.micropaw/logs/
     if headless or not _interactive():
@@ -256,6 +289,7 @@ def start(headless):
         console.print("[red]No channels enabled. Run 'paw setup' to configure.[/red]")
         sys.exit(1)
 
+    _show_webchat_link(config)
     _run_single(_make_gateway(config, registry, channels))
 
 
@@ -284,6 +318,24 @@ def show_config():
     console.print_json(json.dumps(data, indent=2))
 
 
+def _main_model(config: Config) -> str:
+    """The model the main agent really uses, for example 'ollama' or 'box:qwen3'."""
+    return (config.agents["main"].model if "main" in config.agents else "") or config.provider
+
+
+def _key_state(config: Config, model: str) -> bool | None:
+    """Whether the cloud key for this model is set. None when the model needs no key (local or custom server)."""
+    name = model.split(":")[0]
+    return bool(getattr(config.provider_config, name).api_key) if name in ("claude", "openai", "gemini") else None
+
+
+def _sandbox_mark(sb, windows: bool) -> str:
+    """Windows has no sandbox to find, and air-gapped mode there turns shell off on purpose: notes, not failures."""
+    from micropaw import privacy
+    deliberate = windows and not sb.active and (not sb.error or privacy.airgapped())
+    return "[yellow]warn[/yellow]" if deliberate else "[green]pass[/green]" if sb.active else "[red]FAIL[/red]"
+
+
 @main.command()
 def status():
     """Show system status."""
@@ -293,10 +345,12 @@ def status():
     table.add_column("Component", style="cyan")
     table.add_column("Status", style="green")
 
-    # Provider
-    provider = config.provider
-    has_key = provider == "ollama" or bool(getattr(config.provider_config, provider).api_key)
-    table.add_row("AI Provider", f"{provider} {'✓' if has_key else '✗ (no key)'}")
+    from micropaw import service as svc
+    main_model = _main_model(config)
+    key = _key_state(config, main_model)
+    table.add_row("AI Model", f"{main_model} {'✓' if key is not False else '✗ (no key)'}")
+    pid = svc.running_gateway()
+    table.add_row("Gateway", f"running, PID {pid}" if pid else "not running")
 
     # Channels
     for ch_name in ("terminal", "telegram", "discord", "slack", "whatsapp", "webchat"):
@@ -398,22 +452,19 @@ def doctor(quiet, search):
     py_ver = plat.python_version()
     py_ok = tuple(int(x) for x in py_ver.split(".")[:2]) >= (3, 11)
     table.add_row("Python version", ok(py_ok), py_ver)
-    table.add_row("Config file", ok(config_exists()), str(CONFIG_FILE))
-    db_detail = (
-        f"{DB_FILE.stat().st_size / 1024:.0f} KB" if DB_FILE.exists() else "not created"
-    )
-    table.add_row("Database", ok(DB_FILE.exists()), db_detail)
+    have_config = config_exists()
+    table.add_row("Config file", ok(have_config), str(CONFIG_FILE) if have_config else "not found. Run 'paw setup'")
+    table.add_row("Database", "[green]pass[/green]" if DB_FILE.exists() else "[dim]note[/dim]",
+                  f"{DB_FILE.stat().st_size / 1024:.0f} KB" if DB_FILE.exists() else "created on the first chat")
     from micropaw.tools import sandbox
     sandbox.configure(load_config().permissions)
-    sb_line = sandbox.describe()
     sb = sandbox.resolve()
-    # Windows has no sandbox to find: every command asks, so that is a note, not a failure
-    sb_mark = "[yellow]warn[/yellow]" if not sb.active and not sb.error and os.name == "nt" else ok(sb.active)
-    table.add_row("Shell sandbox", sb_mark, sb_line)
+    table.add_row("Shell sandbox", _sandbox_mark(sb, os.name == "nt"), sandbox.describe())
 
-    provider = config.provider
-    has_key = provider == "ollama" or bool(getattr(config.provider_config, provider).api_key)
-    table.add_row(f"Provider ({provider})", ok(has_key), "API key configured" if has_key else "no API key")
+    main_model = _main_model(config)
+    key = _key_state(config, main_model)
+    table.add_row(f"Provider ({main_model})", ok(key is not False),
+                  "no API key needed" if key is None else "API key configured" if key else "no API key")
 
     # Optional dependencies
     optional_deps = [
@@ -544,8 +595,22 @@ def reset():
         console.print("[dim]Nothing to reset.[/dim]")
 
 
+def _has_terminal() -> bool:
+    return _interactive() and sys.stdout is not None and sys.stdout.isatty()
+
+
 def _interactive() -> bool:
     return sys.stdin is not None and sys.stdin.isatty()  # None under pythonw
+
+
+NO_BACKGROUND_CHANNEL = ("Nothing to run in the background: only the terminal chat is on. Add a channel with "
+                         "'paw connect telegram' (or discord, slack, whatsapp, webchat), or use 'paw chat'.")
+
+
+def _headless_channels() -> tuple[Config, list]:
+    config = load_config()
+    config.channels.terminal.enabled = False  # not built at all: it would load rich for nothing
+    return config, _create_channels(config)
 
 
 def _start_headless() -> int:
@@ -553,19 +618,31 @@ def _start_headless() -> int:
     from micropaw import service as svc
 
     def make():
-        config = load_config()
-        config.channels.terminal.enabled = False  # not built at all: it would load rich for nothing
-        channels = _create_channels(config)
+        config, channels = _headless_channels()
         if not channels:
-            console.print("[red]No channels enabled. Run 'paw setup' to configure.[/red]")
-            sys.exit(1)
+            raise svc.ServiceError(NO_BACKGROUND_CHANNEL)
         return _make_gateway(config, _create_registry(config), channels)
 
     try:
+        config, channels = _headless_channels()
+        if not channels:
+            console.print(NO_BACKGROUND_CHANNEL, markup=False)
+            return 1
+        _show_webchat_link(config)
         return svc.run_headless(make)
     except svc.ServiceError as e:
         console.print(f"[red]{e}[/red]")
         return 1
+
+
+def _run_gateway(gw) -> None:
+    from micropaw.core.agent import OutputError
+    try:
+        asyncio.run(gw.start())
+    except (OSError, OutputError) as e:  # for example the output is a closed pipe or a full disk
+        with contextlib.suppress(OSError):
+            click.echo(f"Stopped: {e}", err=True)
+        sys.exit(1)
 
 
 def _run_single(gw) -> None:
@@ -577,7 +654,7 @@ def _run_single(gw) -> None:
         console.print(f"[red]{e}[/red]")
         sys.exit(1)
     try:
-        asyncio.run(gw.start())
+        _run_gateway(gw)
     finally:
         svc.release_pid()
 
@@ -650,11 +727,18 @@ def service_status():
     from micropaw import service as svc
     try:
         console.print(f"Service: {svc.state()}", markup=False)
-    except svc.ServiceError as e:
-        _fail(e)
+    except svc.ServiceError as e:  # air-gapped mode can block the service manager: the gateway line still helps
+        console.print(f"Service: unknown ({e})", markup=False)
     good, detail = svc.healthy()
     console.print(f"Gateway: {detail}", markup=False)
     sys.exit(0 if good else 1)
+
+
+@main.command(name="stop")
+@click.pass_context
+def stop_cmd(ctx):
+    """Stop the gateway. Same as 'paw service stop'."""
+    ctx.invoke(service_stop)
 
 
 @service.command(name="logs")
@@ -699,6 +783,11 @@ def _run_install_command(cmd: list[str]) -> bool:
     return ok
 
 
+def _version_key(version: str) -> tuple[int, ...]:
+    import re
+    return tuple(int(n) for n in re.findall(r"\d+", version)[:3])
+
+
 @main.command()
 @click.option("--yes", "-y", is_flag=True, help="Do not ask before upgrading.")
 def update(yes):
@@ -714,7 +803,7 @@ def update(yes):
                 "editable": "From source: git pull, then pip install -e . in the repo."}
         console.print(hint.get(method, "No update command for this install."), markup=False)
         return
-    if latest and latest == __version__:
+    if latest and _version_key(latest) <= _version_key(__version__):
         console.print("Already up to date.")
         return
     console.print(f"Command: {' '.join(cmd)}", markup=False)
@@ -782,7 +871,7 @@ def _doctor_install_rows(table: Table, config: Config) -> None:
         service_state = svc.state()
     except svc.ServiceError as e:
         service_state = f"unknown ({e})"
-    row("Service", True if service_state not in ("not installed",) else None, service_state)
+    row("Service", None if service_state.startswith(("not installed", "unknown")) else True, service_state)
     if sys.platform == "linux" and svc.unit_path().exists() and shutil.which("loginctl"):
         try:
             linger = svc.linger_enabled()
@@ -1351,6 +1440,7 @@ def models_add(name, address, key_env, kind, use, yes):
 @click.argument("name")
 def models_remove(name):
     """Forget a model server added with `paw models add`."""
+    import micropaw.config as config_mod
     from micropaw import modelscan
     from micropaw.config import update_config_file
     name = name.lower()
@@ -1358,7 +1448,9 @@ def models_remove(name):
     if name not in (raw.get("providers") or {}):
         raise click.ClickException(f"There is no server named '{name}' in your config.")
     if used := modelscan.uses_of(raw, name):
-        raise click.ClickException(f"'{name}' is still used by {', '.join(used)}. Change those first.")
+        raise click.ClickException(
+            f"'{name}' is still used by {', '.join(used)}. Point those at another model first, for example "
+            f"'paw models add <name> <address> --use main', or edit them in {config_mod.CONFIG_FILE}.")
     update_config_file(lambda r: r["providers"].pop(name, None))
     click.echo(f"Removed {name}.")
 

@@ -465,8 +465,10 @@ class Gateway:
 
         if terminal_coro:
             # Terminal blocks — run it as the main loop
-            await terminal_coro[1]
-            await self.stop()
+            try:
+                await terminal_coro[1]
+            finally:
+                await self.stop()  # also when the screen fails: open database threads would keep the process alive
         else:
             # No terminal — wait for shutdown signal
             stop_event = asyncio.Event()
@@ -718,7 +720,7 @@ class Gateway:
                 response = await agent.handle_message(text, user_id, platform, channel_id, media=media)
         self._track_usage(agent)
         logger.debug("[%s] MicroPaw: %s", platform, response[:80], extra={"content": True})
-        if line := self._reply_label(agent, platform, response):
+        if not agent.last_failed and (line := self._reply_label(agent, platform, response)):
             response += line
             if streaming and on_chunk:
                 await _redacting(on_chunk)(line)
@@ -825,7 +827,7 @@ class Gateway:
         # Every message is embedded, so a private (all-local) agent, main included, rules out a cloud embedding service
         cloud_ok = not any(rt.profile.private for rt in self._runtimes.values())
         if not cloud_ok:
-            logger.warning("An agent is private (local models only), so cloud embeddings are off.")
+            logger.debug("An agent is private (local models only), so cloud embeddings are off.")  # openai warns below
         if cfg.base_url:
             self._check_embedding_url(cfg.base_url, cloud_ok)
 

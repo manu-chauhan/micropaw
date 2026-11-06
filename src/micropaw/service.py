@@ -329,7 +329,10 @@ def start() -> None:
 def stop(timeout: float = 30.0) -> bool:
     """Stop the gateway if it runs. Returns True when none is left running."""
     pid = running_gateway()
-    managed = existing_definition() is not None
+    try:
+        managed = existing_definition() is not None
+    except ServiceError:  # air-gapped mode blocks schtasks: a gateway that runs can still be asked to stop
+        managed = False
     if sys.platform == "darwin" and managed:
         _run(["launchctl", "bootout", f"{_uid_domain()}/{LABEL}"])
     elif sys.platform == "linux" and managed and systemd_available():

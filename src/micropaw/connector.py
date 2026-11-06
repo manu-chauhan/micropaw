@@ -419,6 +419,12 @@ def _connect_webchat(config: Config) -> bool:
     config.channels.webchat.auth_token = auth_token
     save_config(config)
     console.print("[green]WebChat channel saved and enabled.[/green]")
+    from micropaw.channels.webchat import link
+    web = config.channels.webchat
+    console.print("Run 'paw start', then open this link in a browser:" if auth_token else
+                  "Run 'paw start'. It makes a token and prints the link to open in a browser.")
+    if auth_token:
+        console.print(link(web.host, web.port, auth_token), markup=False, soft_wrap=True)
     return True
 
 
