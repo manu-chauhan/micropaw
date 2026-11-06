@@ -20,7 +20,15 @@ import httpx
 
 from micropaw import net, privacy
 from micropaw.config import SCHEMA_VERSION, Config, server_url
-from micropaw.providers.registry import BUILTIN, LOCAL_SERVERS, PRESETS, LocalModel, LocalServer, Registry, parse_spec
+from micropaw.providers.registry import (
+    BUILTIN,
+    LOCAL_SERVERS,
+    PRESETS,
+    LocalServer,
+    Registry,
+    list_models,
+    parse_spec,
+)
 
 # `paw models scan` also looks here: the llama.cpp README now says 9931, older builds use 8080. The preset
 # stays on 8080, so a server found here is added by address (`paw models add`), not used by preset name.
@@ -61,33 +69,13 @@ async def _list_models(client: httpx.AsyncClient, name: str, kind: str, url: str
     """List the models on one server. None when nothing answered. `client` carries any key and the timeouts."""
     import time
 
-    from micropaw.providers.ollama import fetch_show
     start = time.monotonic()
 
     def took() -> int:
         return int((time.monotonic() - start) * 1000)
 
     try:
-        if kind == "ollama":
-            resp = await client.get(f"{url}/api/tags")
-            resp.raise_for_status()
-            raw = resp.json().get("models") or []
-            infos = await asyncio.gather(*(fetch_show(client, url, m.get("name", "")) for m in raw)) \
-                if details else [None] * len(raw)
-            models = []
-            for m, info in zip(raw, infos):
-                caps = info.caps if info else None
-                models.append(LocalModel(
-                    m.get("name", ""), int(m.get("size") or 0),
-                    tools=info.tools if info else True,
-                    vision=info.vision if info else False,
-                    embedding=("embedding" in caps) if caps else "embed" in m.get("name", ""),
-                ))
-        else:
-            resp = await client.get(f"{url}/v1/models")
-            resp.raise_for_status()
-            models = [LocalModel(m["id"], embedding="embed" in m["id"]) for m in resp.json().get("data") or []
-                      if m.get("id")]
+        models = await list_models(client, kind, url, details)
     except httpx.HTTPStatusError as e:
         return Server(name, url, [], "key" if e.response.status_code in (401, 403) else "other", took())
     except (ValueError, KeyError, TypeError, AttributeError):
