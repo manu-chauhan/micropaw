@@ -423,12 +423,9 @@ class Scheduler:
                     response = await self._handler(
                         f"[Heartbeat task] {task}", "heartbeat", "heartbeat", "system",
                     )
-                    await self._deliver_heartbeat(f"[Heartbeat] {response}")
+                    await self._deliver("terminal", "", f"[Heartbeat] {response}")
                 except Exception as e:
                     logger.error("Heartbeat task failed: %s", e)
-
-    async def _deliver_heartbeat(self, content: str) -> None:
-        await self._deliver("terminal", "", content)
 
     # -- CRUD (used by both CLI and LLM tool) --
 

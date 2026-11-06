@@ -57,8 +57,3 @@ def sync_client(url: str = "", *, timeout: float | httpx.Timeout = 30.0, local: 
     hooks = kwargs.pop("event_hooks", None) or {}
     hooks.setdefault("request", []).insert(0, _check_sync)
     return httpx.Client(timeout=timeout, event_hooks=hooks, **_options(url, local, kwargs))
-
-
-def permit(host: str, ttl: float = 120.0, ips: tuple[str, ...] = ()) -> str | None:
-    """Allow one host for a short time after the owner approved a search or a fetch. A refusal text or None."""
-    return privacy.permit(host, ttl, ips)

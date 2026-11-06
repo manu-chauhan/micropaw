@@ -21,7 +21,7 @@ async def test_headless_heartbeat_goes_to_last_used_chat():
     s, publish = _sched("telegram", "discord")
     s.record_activity("telegram", "111")
     s.record_activity("discord", "222")
-    await s._deliver_heartbeat("hello")
+    await s._deliver("terminal", "", "hello")
     msg = publish.call_args.args[0]
     assert (msg.channel, msg.chat_id, msg.content) == ("discord", "222", "hello")
 

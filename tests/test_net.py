@@ -94,12 +94,12 @@ def test_strict_modes_refuse_an_outside_host_before_any_lookup(mode, word):
 def test_a_permit_opens_one_host_for_a_short_time(monkeypatch):
     set_mode("local")
     monkeypatch.setattr(privacy.socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))])
-    assert net.permit("search.example") is None
+    assert privacy.permit("search.example") is None
     assert asyncio.run(get("https://search.example/q")) == "through"
     with pytest.raises(privacy.EgressBlocked):
         asyncio.run(get("https://other.example/q"))
     set_mode("airgapped")
-    assert net.permit("search.example")  # a refusal text
+    assert privacy.permit("search.example")  # a refusal text
 
 
 def test_sync_client_has_the_same_rules():

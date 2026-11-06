@@ -74,9 +74,6 @@ class ConversationManager:
         extra = {} if include_local else {"include_local": False}
         return sanitize_history(await self.store.get_messages(conversation_id, MAX_HISTORY, **extra))
 
-    async def save_message(self, conversation_id: str, message: Message) -> None:
-        await self.store.save_message(conversation_id, message)
-
     async def save_messages(self, conversation_id: str, messages: list[Message], local: bool = False) -> None:
         await self.store.save_messages(conversation_id, messages, local)
 
