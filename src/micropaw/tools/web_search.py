@@ -18,10 +18,8 @@ from micropaw.tools.base import Tool, ToolContext
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
 # Public SearXNG instances (shuffled on each search for load balancing)
 # These all support /search?q=...&format=json
-# ---------------------------------------------------------------------------
 
 _SEARXNG_INSTANCES = [
     "https://search.sapti.me",
@@ -57,10 +55,6 @@ def set_search_config(config: Any, privacy_config: Any = None, store: Any = None
     _store = store
     webfetch.set_privacy_config(privacy_config, getattr(config, "proxy", ""))
 
-
-# ---------------------------------------------------------------------------
-# Which backends may answer, by mode
-# ---------------------------------------------------------------------------
 
 @dataclass
 class Plan:
@@ -132,10 +126,6 @@ def _proxy_label(proxy: str) -> str:
 def _host(url: str) -> str:
     return urlparse(url).netloc.rpartition("@")[2]
 
-
-# ---------------------------------------------------------------------------
-# Online backends
-# ---------------------------------------------------------------------------
 
 def _format_searx(query: str, data: dict, max_results: int, via: str) -> str | None:
     results = []
@@ -232,10 +222,6 @@ async def _search_duckduckgo(query: str, max_results: int) -> str:
     except Exception as e:
         return f"Search error: {e}"
 
-
-# ---------------------------------------------------------------------------
-# Offline backends: Kiwix and your own documents
-# ---------------------------------------------------------------------------
 
 def book_label(book: str) -> tuple[str, str]:
     """("Wikipedia", "2026-06") from "wikipedia_en_all_nopic_2026-06". The date is "" when there is none."""
@@ -376,10 +362,6 @@ async def _open_article(rid: str, context: ToolContext) -> str:
     return f"Article from Kiwix ({urlparse(final).path.split('/content/', 1)[-1]}):\n\n" \
            + webfetch.html_to_text(body.decode(resp.encoding or "utf-8", errors="replace"), OPEN_LIMIT)
 
-
-# ---------------------------------------------------------------------------
-# Tool
-# ---------------------------------------------------------------------------
 
 class WebSearchTool(Tool):
     name = "web_search"

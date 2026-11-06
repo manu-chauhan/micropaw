@@ -49,10 +49,6 @@ class ServiceError(RuntimeError):
     """A problem the user can act on; the message is printed as is."""
 
 
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
-
 def pid_file() -> Path:
     return config.CONFIG_DIR / "micropaw.pid"
 
@@ -73,9 +69,7 @@ def plist_path() -> Path:
     return Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
 
 
-# ---------------------------------------------------------------------------
 # Service definitions (pure functions: they return text or argv)
-# ---------------------------------------------------------------------------
 
 def service_argv() -> list[str]:
     """The command a service manager runs: the console script next to this Python, or python -m."""
@@ -192,10 +186,6 @@ def schtasks_argv(action: str, xml_path: str = "") -> list[str]:
 def cron_line(argv: list[str]) -> str:
     return f"@reboot {shlex.join(argv)} >> ~/.micropaw/logs/service.log 2>&1"
 
-
-# ---------------------------------------------------------------------------
-# Talking to the service manager
-# ---------------------------------------------------------------------------
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     try:
@@ -363,10 +353,6 @@ def tail_lines(path: Path, count: int) -> list[str]:
         return []
 
 
-# ---------------------------------------------------------------------------
-# PID file, stop file, health
-# ---------------------------------------------------------------------------
-
 def read_pid() -> int | None:
     try:
         return int(pid_file().read_text().strip())
@@ -437,10 +423,6 @@ def healthy() -> tuple[bool, str]:
         return False, f"database does not open: {e}"
     return True, f"running, PID {pid}"
 
-
-# ---------------------------------------------------------------------------
-# Supervisor
-# ---------------------------------------------------------------------------
 
 async def _attempt(make_gateway: Callable) -> None:
     gw = make_gateway()
@@ -540,10 +522,6 @@ def run_headless(make_gateway: Callable) -> int:
     finally:
         release_pid()
 
-
-# ---------------------------------------------------------------------------
-# How MicroPaw was installed: update and extras
-# ---------------------------------------------------------------------------
 
 def install_method() -> str:
     """docker, uv, pipx, editable, or pip."""

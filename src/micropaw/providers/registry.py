@@ -95,10 +95,6 @@ def _is_name(host: str) -> bool:
     return False
 
 
-# ---------------------------------------------------------------------------
-# Specs and local detection
-# ---------------------------------------------------------------------------
-
 def parse_spec(spec: str) -> tuple[str, str]:
     """"ollama:qwen3.6:27b" -> ("ollama", "qwen3.6:27b"). A bare "claude" has an empty model."""
     name, _, model = spec.partition(":")
@@ -199,9 +195,7 @@ def is_local_url(url: str) -> bool:
         return (scheme == "http" or host.endswith(".ts.net")) and _resolves_private(host)
 
 
-# ---------------------------------------------------------------------------
 # Wrapper: concurrency limit, context-length retry, plain errors for local servers
-# ---------------------------------------------------------------------------
 
 class _Gate(AIProvider):
     """Thin wrapper around one provider. `local` is the preset name for a local server, else None.
@@ -348,10 +342,6 @@ class _Gate(AIProvider):
     async def close(self) -> None:
         await self._inner.close()
 
-
-# ---------------------------------------------------------------------------
-# Registry
-# ---------------------------------------------------------------------------
 
 @dataclass
 class Endpoint:
@@ -556,10 +546,6 @@ class Registry:
             except Exception as e:
                 logger.error("Error closing provider: %s", e)
 
-
-# ---------------------------------------------------------------------------
-# Local servers: scan, size-aware defaults
-# ---------------------------------------------------------------------------
 
 # name -> (kind, URL). "ollama" lists /api/tags, the others list /v1/models.
 LOCAL_SERVERS: dict[str, tuple[str, str]] = {

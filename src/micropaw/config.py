@@ -27,10 +27,6 @@ class ConfigError(ValueError):
     """The config file or an environment override holds a value that cannot be used. The text is for the user."""
 
 
-# ---------------------------------------------------------------------------
-# Typed server addresses
-# ---------------------------------------------------------------------------
-
 OLLAMA_PORT = 11434
 
 
@@ -70,9 +66,7 @@ def server_url(text: str, kind: str = "openai") -> str:
     return f"{parsed.scheme}://{netloc}{path}"
 
 
-# ---------------------------------------------------------------------------
 # Model base: reads a JSON-style dict into typed fields, with the checks the config has always had
-# ---------------------------------------------------------------------------
 
 class ConfigValueError(ValueError):
     """A value in a config dict cannot be used. loc is the dotted path to it, why is in plain words."""
@@ -237,10 +231,6 @@ def _dict() -> Any:
     return field(default_factory=dict)
 
 
-# ---------------------------------------------------------------------------
-# Provider configs
-# ---------------------------------------------------------------------------
-
 @dataclass
 class ClaudeConfig(_Model):
     api_key: str = ""
@@ -369,10 +359,6 @@ class ProviderConfig(_Model):
     gemini: GeminiConfig = _sub(GeminiConfig)
 
 
-# ---------------------------------------------------------------------------
-# Channel configs
-# ---------------------------------------------------------------------------
-
 @dataclass
 class TerminalChannelConfig(_Model):
     enabled: bool = True
@@ -429,10 +415,6 @@ class ChannelsConfig(_Model):
     whatsapp: WhatsAppChannelConfig = _sub(WhatsAppChannelConfig)
     webchat: WebChatChannelConfig = _sub(WebChatChannelConfig)
 
-
-# ---------------------------------------------------------------------------
-# Other configs
-# ---------------------------------------------------------------------------
 
 @dataclass
 class PermissionsConfig(_Model):
@@ -592,10 +574,6 @@ class BudgetConfig(_Model):
     warn_at: float = 0.8            # one-line heads-up when this share of the cap is used
 
 
-# ---------------------------------------------------------------------------
-# Root config
-# ---------------------------------------------------------------------------
-
 _AGENT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
 
@@ -652,10 +630,6 @@ class Config(_Model):
             if target != "main" and target not in self.agents:
                 raise ValueError(f"Route '{key}' points to agent '{target}', which is not in agents.")
 
-
-# ---------------------------------------------------------------------------
-# Env var mapping
-# ---------------------------------------------------------------------------
 
 _ENV_OVERRIDES: list[tuple[str, list[str]]] = [
     # Primary provider selection
@@ -720,10 +694,6 @@ def _apply_env_overrides(raw: dict) -> dict:
         d[path[-1]] = value
     return raw
 
-
-# ---------------------------------------------------------------------------
-# Load / save / display
-# ---------------------------------------------------------------------------
 
 def config_exists() -> bool:
     return CONFIG_FILE.exists()

@@ -225,9 +225,7 @@ def local_only() -> bool:
     return _ORDER[mode()] >= 1
 
 
-# ---------------------------------------------------------------------------
 # Settings: the owner's lists, read once from config.privacy
-# ---------------------------------------------------------------------------
 
 # Ranges that count as "my network" when allow_lan is on. 100.64/10 is Tailscale (and some carriers' CGNAT).
 LAN_NETS = tuple(ipaddress.ip_network(n) for n in
@@ -341,9 +339,7 @@ def _reset_for_tests() -> None:
     _mode = _settings = _config = _guard = _registry = _floor = None
 
 
-# ---------------------------------------------------------------------------
 # Locality: what counts as this side of the line
-# ---------------------------------------------------------------------------
 
 def is_lan_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     ip = egress.parse_ip(str(ip)) or ip
@@ -409,10 +405,6 @@ def check_role(spec: str, role: str) -> str | None:
     """A plain refusal when this model spec is not allowed for the role in the current mode, else None."""
     return _reg().refusal(spec, role) if spec else None
 
-
-# ---------------------------------------------------------------------------
-# The guard
-# ---------------------------------------------------------------------------
 
 def build_guard() -> Guard:
     s = settings()
@@ -536,10 +528,6 @@ def blocked(exc: BaseException | None) -> EgressBlocked | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Tools, owner commands and children by mode
-# ---------------------------------------------------------------------------
-
 def disabled_tools() -> set[str]:
     """Tool names that are not registered in the current mode (the gateway removes them at start)."""
     if not local_only():
@@ -592,10 +580,6 @@ def owner_command_gate(what: str, hosts: tuple[str, ...] = ()) -> str | None:
                 return why
     return None
 
-
-# ---------------------------------------------------------------------------
-# Config check: every refusal at once
-# ---------------------------------------------------------------------------
 
 @dataclass
 class Report:

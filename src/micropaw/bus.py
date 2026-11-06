@@ -17,10 +17,6 @@ _DEFAULT_TIMEOUT = 1.0
 _CLASS_TIMEOUT: Any = object()  # "use the bus's own timeout"; None means wait without one
 
 
-# ---------------------------------------------------------------------------
-# Message types
-# ---------------------------------------------------------------------------
-
 @dataclass(slots=True)
 class OutboundMessage:
     """A message from the agent to be delivered via a channel."""
@@ -28,10 +24,6 @@ class OutboundMessage:
     chat_id: str
     content: str
 
-
-# ---------------------------------------------------------------------------
-# Bus
-# ---------------------------------------------------------------------------
 
 class MessageBus:
     """Async message bus with a bounded queue and backpressure.

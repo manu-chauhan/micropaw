@@ -137,10 +137,6 @@ def _create_channels(config: Config) -> list:
     return channels
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
 class PawGroup(click.Group):
     """A bad config value is one plain line, not a traceback."""
 
@@ -539,10 +535,6 @@ def reset():
         console.print("[dim]Nothing to reset.[/dim]")
 
 
-# ---------------------------------------------------------------------------
-# Background service, update, extras, headless start
-# ---------------------------------------------------------------------------
-
 def _interactive() -> bool:
     return sys.stdin is not None and sys.stdin.isatty()  # None under pythonw
 
@@ -839,10 +831,6 @@ def _on_wsl() -> bool:
         return False
 
 
-# ---------------------------------------------------------------------------
-# Cron subcommands
-# ---------------------------------------------------------------------------
-
 def _parse_interval(s: str) -> int:
     """Parse '6h', '45m', '30s', '1d' → seconds."""
     units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -889,10 +877,6 @@ def show_log(count):
         table.add_row(e["ts"][5:16].replace("T", " "), e["tool"], e["outcome"], details[:120])
     console.print(table)
 
-
-# ---------------------------------------------------------------------------
-# MCP subcommands
-# ---------------------------------------------------------------------------
 
 @main.group()
 def mcp():
@@ -1197,10 +1181,6 @@ def _fmt(seconds: int) -> str:
     from micropaw.tools.cron_tool import _fmt_interval
     return _fmt_interval(seconds)
 
-
-# ---------------------------------------------------------------------------
-# Models and agents
-# ---------------------------------------------------------------------------
 
 @main.group()
 def models():

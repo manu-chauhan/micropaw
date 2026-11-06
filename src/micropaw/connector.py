@@ -16,9 +16,7 @@ console = Console()
 VENDOR_NAMES = {"telegram": "Telegram", "discord": "Discord", "slack": "Slack", "whatsapp": "WhatsApp (Meta)"}
 
 
-# ---------------------------------------------------------------------------
 # Validation helpers (also used by `micropaw test`)
-# ---------------------------------------------------------------------------
 
 
 def _ask_owner_ids(platform: str, current: list[str]) -> list[str]:
@@ -196,10 +194,6 @@ def validate_provider_key(config: Config) -> tuple[bool, str]:
             return False, str(e)
     return False, f"unknown provider: {provider}"
 
-
-# ---------------------------------------------------------------------------
-# Per-channel connect flows
-# ---------------------------------------------------------------------------
 
 def _connect_telegram(config: Config) -> bool:
     """Guide user through Telegram bot setup."""
@@ -449,10 +443,6 @@ def _connect_webchat(config: Config) -> bool:
     return True
 
 
-# ---------------------------------------------------------------------------
-# Test all configured channels
-# ---------------------------------------------------------------------------
-
 def test_channels(config: Config) -> None:
     """Validate all configured channels and provider without starting the gateway."""
     from rich.table import Table
@@ -533,9 +523,7 @@ def test_channels(config: Config) -> None:
     console.print(table)
 
 
-# ---------------------------------------------------------------------------
 # Main connect flow (used by both `connect` command and setup wizard)
-# ---------------------------------------------------------------------------
 
 CHANNEL_CHOICES = [
     ("Telegram", "telegram"),

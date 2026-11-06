@@ -168,10 +168,6 @@ def stored_url(url: str, kind: str) -> str:
     return url if native or urlparse(url).path.rstrip("/") else f"{url}/v1"
 
 
-# ---------------------------------------------------------------------------
-# One host, one address
-# ---------------------------------------------------------------------------
-
 async def probe_host(host: str, key: str = "", details: bool = True) -> list[Server]:
     """Try every known model port on one host at once (1.5 s to connect). Returns the ones that answered."""
     async def one(port: int, label: str, kind: str) -> Server | None:
@@ -191,10 +187,6 @@ async def detect(url: str, kind: str, key: str = "", details: bool = True) -> tu
             return k, found
     return order[0], None
 
-
-# ---------------------------------------------------------------------------
-# paw models add / remove
-# ---------------------------------------------------------------------------
 
 def check_name(name: str) -> str | None:
     from micropaw.config import _AGENT_NAME
@@ -297,10 +289,6 @@ def _no_problem(config: Config, name: str) -> None:
         raise ValueError(problems[0])
 
 
-# ---------------------------------------------------------------------------
-# paw models scan
-# ---------------------------------------------------------------------------
-
 @dataclass
 class Target:
     name: str          # key given to scan_local, and the spec prefix when the registry can use it
@@ -376,10 +364,6 @@ def usable_spec(config: Config, target: Target, server: Server) -> str:
 def suggested_name(url: str) -> str:
     return ("lan-" + re.sub(r"[^a-z0-9]+", "-", _hostport(url)[0]).strip("-"))[:32].rstrip("-")
 
-
-# ---------------------------------------------------------------------------
-# paw models scan --lan / --range
-# ---------------------------------------------------------------------------
 
 def own_ip() -> str | None:
     """This computer's address on the default route. A UDP connect sends no packet."""
@@ -473,10 +457,6 @@ async def scan_lan(hosts: list[str], *, timeout: float = SCAN_CONNECT_TIMEOUT, l
     out.unfinished, out.attempts = len(pending), len(tasks)
     return out
 
-
-# ---------------------------------------------------------------------------
-# paw doctor: one row per model server in use
-# ---------------------------------------------------------------------------
 
 @dataclass
 class Endpoint:
